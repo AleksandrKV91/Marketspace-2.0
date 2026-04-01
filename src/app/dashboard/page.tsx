@@ -4,6 +4,10 @@ import { useState } from 'react'
 import UpdateTab from '@/components/tabs/UpdateTab'
 import OverviewTab from '@/components/tabs/OverviewTab'
 import SkuTableTab from '@/components/tabs/SkuTableTab'
+import PriceTab from '@/components/tabs/PriceTab'
+import AnalyticsTab from '@/components/tabs/AnalyticsTab'
+import NicheTab from '@/components/tabs/NicheTab'
+import OrderTab from '@/components/tabs/OrderTab'
 
 type Tab = 'overview' | 'sku' | 'price' | 'analytics' | 'niche' | 'orders' | 'update'
 
@@ -50,13 +54,11 @@ export default function DashboardPage() {
       <main className="py-6">
         {activeTab === 'overview' && <OverviewTab />}
         {activeTab === 'sku' && <SkuTableTab />}
+        {activeTab === 'price' && <PriceTab />}
+        {activeTab === 'analytics' && <AnalyticsTab />}
+        {activeTab === 'niche' && <NicheTab />}
+        {activeTab === 'orders' && <OrderTab />}
         {activeTab === 'update' && <UpdateTab />}
-        {(activeTab === 'price' || activeTab === 'analytics' || activeTab === 'niche' || activeTab === 'orders') && (
-          <div className="max-w-2xl mx-auto px-4 py-20 text-center text-gray-400 dark:text-gray-600">
-            <p className="text-4xl mb-3">🚧</p>
-            <p className="text-lg font-medium">Вкладка в разработке</p>
-          </div>
-        )}
       </main>
     </div>
   )
