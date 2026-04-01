@@ -1,4 +1,4 @@
-import { readWorkbook, sheetToRows, norm, toNum, excelToISO } from './utils'
+import { readWorkbook, sheetToRows, norm, toNum, excelToISO, parseDateVal } from './utils'
 
 export interface StockSnapshotRow {
   sku_wb: number
@@ -54,7 +54,6 @@ export function parseStock(
 
   // Найти колонки по заголовку
   const skuWbCol = 2 // по spec: col 2
-  const shelfDateCol = headerRow.findIndex(h => norm(h).includes('дата появления') || norm(h).includes('дата полки'))
   const supplyQtyCol = headerRow.findIndex(h => norm(h).includes('кол-во в поставке') || norm(h).includes('поставк') && norm(h).includes('кол'))
   const supplyDateCol = headerRow.findIndex(h => norm(h).includes('дата прихода') || norm(h).includes('приход'))
   const priceCol = headerRow.findIndex(h => norm(h).includes('цена утром') || (norm(h) === 'цена'))
@@ -75,10 +74,9 @@ export function parseStock(
         seenPriceDates.add(dateISO)
         priceChangeCols.push({ col: ci, date: dateISO })
       }
-    } else if (typeof v === 'string' && /\d{2}\.\d{2}\.\d{4}/.test(v)) {
-      const [d, m, y] = v.split('.')
-      const dateISO = `${y}-${m}-${d}`
-      if (!seenPriceDates.has(dateISO)) {
+    } else if (typeof v === 'string') {
+      const dateISO = parseDateVal(v)
+      if (dateISO && !seenPriceDates.has(dateISO)) {
         seenPriceDates.add(dateISO)
         priceChangeCols.push({ col: ci, date: dateISO })
       }
@@ -139,11 +137,7 @@ export function parseStock(
       price: priceCol >= 0 ? toNum(row[priceCol]) : null,
       margin_pct: marginCol >= 0 ? toNum(row[marginCol]) : null,
       supply_qty: supplyQtyCol >= 0 ? toNum(row[supplyQtyCol]) : null,
-      supply_date: supplyDateCol >= 0 ? (
-        typeof row[supplyDateCol] === 'number'
-          ? excelToISO(row[supplyDateCol] as number)
-          : String(row[supplyDateCol] ?? '').trim() || null
-      ) : null,
+      supply_date: supplyDateCol >= 0 ? parseDateVal(row[supplyDateCol]) : null,
     })
 
     // Изменения цен

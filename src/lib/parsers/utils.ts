@@ -41,6 +41,19 @@ export function toBool(v: unknown): boolean | null {
   return null
 }
 
+/** Конвертировать строку DD.MM.YYYY или Excel serial в ISO YYYY-MM-DD */
+export function parseDateVal(v: unknown): string | null {
+  if (!v) return null
+  if (typeof v === 'number') return excelToISO(v) || null
+  const s = String(v).trim()
+  // DD.MM.YYYY
+  const m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})$/)
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`
+  // уже ISO
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  return null
+}
+
 /** Найти индекс колонки по подстроке в заголовке */
 export function findCol(headers: unknown[], query: string): number {
   return headers.findIndex(h => norm(h).includes(norm(query)))
