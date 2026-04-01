@@ -126,7 +126,7 @@ export async function GET(req: NextRequest) {
 
     const fbo = snap?.fbo_wb ?? 0
     const fbs = (snap?.fbs_pushkino ?? 0) + (snap?.fbs_smolensk ?? 0)
-    const totalStock = fbo + fbs || stockSnap?.total_stock ?? 0
+    const totalStock = (fbo + fbs) || (stockSnap?.total_stock ?? 0)
 
     return {
       sku_ms: sku.sku_ms,

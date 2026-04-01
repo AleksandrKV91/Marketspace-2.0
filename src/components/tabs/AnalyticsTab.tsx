@@ -75,7 +75,7 @@ export default function AnalyticsTab() {
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" strokeOpacity={0.4} horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={v => fmt(v)} />
               <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={120} />
-              <Tooltip formatter={(v: number) => fmt(v) + ' руб.'} />
+              <Tooltip formatter={(v) => fmt(Number(v)) + ' руб.'} />
               <Bar dataKey="revenue" fill="#E63946" name="Выручка" radius={[0, 4, 4, 0]} />
               <Bar dataKey="ad_spend" fill="#3B82F6" name="Реклама" radius={[0, 4, 4, 0]} />
             </BarChart>

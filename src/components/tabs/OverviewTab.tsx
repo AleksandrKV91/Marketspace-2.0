@@ -132,7 +132,7 @@ export default function OverviewTab() {
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" strokeOpacity={0.5} />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} width={60} tickFormatter={v => fmt(v)} />
-              <Tooltip formatter={(v: number) => fmt(v) + ' руб.'} />
+              <Tooltip formatter={(v) => fmt(Number(v)) + ' руб.'} />
               <Line type="monotone" dataKey="revenue" stroke="#E63946" strokeWidth={2} dot={false} name="Выручка" />
               <Line type="monotone" dataKey="ad_spend" stroke="#3B82F6" strokeWidth={2} dot={false} name="Реклама" />
             </LineChart>

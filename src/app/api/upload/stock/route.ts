@@ -46,11 +46,20 @@ export async function POST(req: NextRequest) {
 
   const uploadId = upload.id
 
-  for (const batch of chunk(parsed.snapshots.map(r => ({ ...r, upload_id: uploadId })), 500)) {
-    const { error } = await supabase.from('fact_stock_snapshot').upsert(batch, { onConflict: 'sku_wb,upload_id' })
-    if (error) {
-      await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+  // Пишем снапшот только если в файле есть данные об остатках (не все нули)
+  // Если файл "обрезанный" (только новые продажи), остатки будут все нули — пропускаем
+  const hasStockData = parsed.snapshots.some(r =>
+    (r.fbo_wb ?? 0) > 0 || (r.fbs_pushkino ?? 0) > 0 || (r.fbs_smolensk ?? 0) > 0 || (r.total_stock ?? 0) > 0
+  )
+  const skipSnapshot = !hasStockData
+
+  if (!skipSnapshot) {
+    for (const batch of chunk(parsed.snapshots.map(r => ({ ...r, upload_id: uploadId })), 500)) {
+      const { error } = await supabase.from('fact_stock_snapshot').upsert(batch, { onConflict: 'sku_wb,upload_id' })
+      if (error) {
+        await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
     }
   }
 
@@ -70,5 +79,5 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, upload_id: uploadId, rows_parsed: parsed.rows_parsed, rows_skipped: parsed.rows_skipped, daily_rows: parsed.daily.length, price_change_rows: parsed.price_changes.length })
+  return NextResponse.json({ ok: true, upload_id: uploadId, rows_parsed: parsed.rows_parsed, rows_skipped: parsed.rows_skipped, daily_rows: parsed.daily.length, price_change_rows: parsed.price_changes.length, snapshot_skipped: skipSnapshot })
 }
