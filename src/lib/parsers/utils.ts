@@ -3,7 +3,8 @@ import * as XLSX from 'xlsx'
 // ── Базовые утилиты парсеров ──────────────────────────────────────────────────
 
 export function readWorkbook(buffer: ArrayBuffer) {
-  return XLSX.read(buffer, { cellDates: false, raw: true })
+  const data = new Uint8Array(buffer)
+  return XLSX.read(data, { cellDates: false, raw: true, type: 'array' })
 }
 
 export function sheetToRows(wb: XLSX.WorkBook, sheetName: string): unknown[][] {
