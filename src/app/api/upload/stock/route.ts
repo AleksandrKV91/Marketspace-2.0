@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
   try {
     parsed = parseStock(buffer, skuMap)
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 422 })
+    return NextResponse.json({ error: String(e), buffer_size: buffer.byteLength }, { status: 422 })
   }
 
   const { data: upload, error: uploadErr } = await supabase

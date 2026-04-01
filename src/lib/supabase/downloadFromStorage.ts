@@ -11,10 +11,13 @@ export async function downloadFromStorage(
 
   if (error) throw new Error(`Storage download: ${error.message}`)
 
-  // Удалить файл из Storage (он нам больше не нужен)
+  // Удалить файл из Storage
   await supabase.storage.from('uploads').remove([storageKey])
 
-  // Blob → ArrayBuffer через Buffer (надёжнее на Node.js)
-  const nodeBuffer = Buffer.from(await data.arrayBuffer())
-  return nodeBuffer.buffer.slice(nodeBuffer.byteOffset, nodeBuffer.byteOffset + nodeBuffer.byteLength)
+  // Blob → Uint8Array → ArrayBuffer (надёжнее на Node.js/Edge)
+  const ab = await data.arrayBuffer()
+  // Создать новый ArrayBuffer из копии данных (избегаем detached buffer)
+  const copy = new Uint8Array(ab.byteLength)
+  copy.set(new Uint8Array(ab))
+  return copy.buffer
 }
