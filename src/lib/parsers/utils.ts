@@ -2,7 +2,10 @@ import * as XLSX from 'xlsx'
 
 // ── Базовые утилиты парсеров ──────────────────────────────────────────────────
 
-export function readWorkbook(buffer: ArrayBuffer) {
+export function readWorkbook(buffer: ArrayBuffer | Buffer) {
+  if (Buffer.isBuffer(buffer)) {
+    return XLSX.read(buffer, { cellDates: false, raw: true, type: 'buffer' })
+  }
   const data = new Uint8Array(buffer)
   return XLSX.read(data, { cellDates: false, raw: true, type: 'array' })
 }

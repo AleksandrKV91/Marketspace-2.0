@@ -14,5 +14,7 @@ export async function downloadFromStorage(
   // Удалить файл из Storage (он нам больше не нужен)
   await supabase.storage.from('uploads').remove([storageKey])
 
-  return data.arrayBuffer()
+  // Blob → ArrayBuffer через Buffer (надёжнее на Node.js)
+  const nodeBuffer = Buffer.from(await data.arrayBuffer())
+  return nodeBuffer.buffer.slice(nodeBuffer.byteOffset, nodeBuffer.byteOffset + nodeBuffer.byteLength)
 }
