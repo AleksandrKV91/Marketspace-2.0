@@ -35,8 +35,11 @@ export async function POST(req: NextRequest) {
 
   if (uploadErr) return NextResponse.json({ error: uploadErr.message }, { status: 500 })
 
+  // Дедуплицировать по sku_ms (берём последнее вхождение)
+  const deduped = [...new Map(parsed.rows.map(r => [r.sku_ms, r])).values()]
+
   // UPSERT батчами по 500
-  for (const batch of chunk(parsed.rows, 500)) {
+  for (const batch of chunk(deduped, 500)) {
     const { error } = await supabase
       .from('dim_sku')
       .upsert(batch, { onConflict: 'sku_ms' })

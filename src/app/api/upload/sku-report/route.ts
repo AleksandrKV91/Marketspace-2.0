@@ -44,7 +44,8 @@ export async function POST(req: NextRequest) {
   const uploadId = upload.id
 
   // UPSERT fact_sku_daily
-  const dailyWithUpload = parsed.daily.map(r => ({ ...r, upload_id: uploadId }))
+  const dedupedDaily = [...new Map(parsed.daily.map(r => [`${r.sku_ms}|${r.metric_date}`, r])).values()]
+  const dailyWithUpload = dedupedDaily.map(r => ({ ...r, upload_id: uploadId }))
   for (const batch of chunk(dailyWithUpload, 500)) {
     const { error } = await supabase
       .from('fact_sku_daily')
@@ -56,7 +57,8 @@ export async function POST(req: NextRequest) {
   }
 
   // UPSERT fact_sku_snapshot (не затираем novelty_status если новое значение пустое)
-  const snapshotsWithUpload = parsed.snapshots.map(r => {
+  const dedupedSnaps = [...new Map(parsed.snapshots.map(r => [r.sku_ms, r])).values()]
+  const snapshotsWithUpload = dedupedSnaps.map(r => {
     const snap = { ...r, upload_id: uploadId }
     if (!snap.novelty_status) delete (snap as Record<string, unknown>).novelty_status
     return snap

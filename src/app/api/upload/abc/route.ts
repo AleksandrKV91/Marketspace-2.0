@@ -37,7 +37,8 @@ export async function POST(req: NextRequest) {
 
   const uploadId = upload.id
 
-  const rowsWithUpload = parsed.rows.map(r => ({ ...r, upload_id: uploadId }))
+  const deduped = [...new Map(parsed.rows.map(r => [r.sku_ms, r])).values()]
+  const rowsWithUpload = deduped.map(r => ({ ...r, upload_id: uploadId }))
   for (const batch of chunk(rowsWithUpload, 500)) {
     const { error } = await supabase
       .from('fact_abc')
