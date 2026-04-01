@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { parseSkuReport } from '@/lib/parsers/parseSkuReport'
 import { createServiceClient } from '@/lib/supabase/server'
+import { loadKnownSkus } from '@/lib/supabase/loadKnownSkus'
 import { chunk } from '@/lib/parsers/utils'
 
 export const maxDuration = 60
@@ -43,8 +44,14 @@ export async function POST(req: NextRequest) {
 
   const uploadId = upload.id
 
+  const knownSkus = await loadKnownSkus(supabase)
+
   // UPSERT fact_sku_daily
-  const dedupedDaily = [...new Map(parsed.daily.map(r => [`${r.sku_ms}|${r.metric_date}`, r])).values()]
+  const dedupedDaily = [...new Map(
+    parsed.daily
+      .filter(r => knownSkus.has(r.sku_ms))
+      .map(r => [`${r.sku_ms}|${r.metric_date}`, r])
+  ).values()]
   const dailyWithUpload = dedupedDaily.map(r => ({ ...r, upload_id: uploadId }))
   for (const batch of chunk(dailyWithUpload, 500)) {
     const { error } = await supabase
@@ -57,7 +64,11 @@ export async function POST(req: NextRequest) {
   }
 
   // UPSERT fact_sku_snapshot (не затираем novelty_status если новое значение пустое)
-  const dedupedSnaps = [...new Map(parsed.snapshots.map(r => [r.sku_ms, r])).values()]
+  const dedupedSnaps = [...new Map(
+    parsed.snapshots
+      .filter(r => knownSkus.has(r.sku_ms))
+      .map(r => [r.sku_ms, r])
+  ).values()]
   const snapshotsWithUpload = dedupedSnaps.map(r => {
     const snap = { ...r, upload_id: uploadId }
     if (!snap.novelty_status) delete (snap as Record<string, unknown>).novelty_status

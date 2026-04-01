@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { parseABC } from '@/lib/parsers/parseABC'
 import { createServiceClient } from '@/lib/supabase/server'
+import { loadKnownSkus } from '@/lib/supabase/loadKnownSkus'
 import { chunk } from '@/lib/parsers/utils'
 
 export const maxDuration = 60
@@ -21,12 +22,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(e) }, { status: 422 })
   }
 
+  const knownSkus = await loadKnownSkus(supabase)
+
+  // Дедупликация + фильтрация только известных SKU
+  const deduped = [...new Map(parsed.rows.map(r => [r.sku_ms, r])).values()]
+  const filtered = deduped.filter(r => knownSkus.has(r.sku_ms))
+  const skipped_unknown = deduped.length - filtered.length
+
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')
     .insert({
       file_type: 'abc',
       filename: file.name,
-      rows_count: parsed.rows_parsed,
+      rows_count: filtered.length,
       period_start: parsed.period_month,
       status: 'ok',
     })
@@ -37,8 +45,7 @@ export async function POST(req: NextRequest) {
 
   const uploadId = upload.id
 
-  const deduped = [...new Map(parsed.rows.map(r => [r.sku_ms, r])).values()]
-  const rowsWithUpload = deduped.map(r => ({ ...r, upload_id: uploadId }))
+  const rowsWithUpload = filtered.map(r => ({ ...r, upload_id: uploadId }))
   for (const batch of chunk(rowsWithUpload, 500)) {
     const { error } = await supabase
       .from('fact_abc')
@@ -53,7 +60,8 @@ export async function POST(req: NextRequest) {
     ok: true,
     upload_id: uploadId,
     period_month: parsed.period_month,
-    rows_parsed: parsed.rows_parsed,
-    rows_skipped: parsed.rows_skipped,
+    rows_parsed: filtered.length,
+    rows_skipped: parsed.rows_skipped + skipped_unknown,
+    skipped_unknown,
   })
 }
