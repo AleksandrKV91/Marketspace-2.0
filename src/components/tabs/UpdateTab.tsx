@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef } from 'react'
+import { createBrowserClient } from '@/lib/supabase/client'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,50 @@ const FILE_CONFIGS: Array<{
   { type: 'sku-report', label: 'Отчёт по SKU', hint: 'Отчет_по_SKU_*.xlsb', accept: '.xlsb,.xlsx', order: 5 },
 ]
 
+// ── Загрузка через Supabase Storage → API parse ───────────────────────────────
+
+async function uploadViaStorage(
+  type: FileType,
+  file: File,
+  onProgress: (pct: number) => void
+): Promise<{ ok: boolean; rows_parsed?: number; error?: string }> {
+  const supabase = createBrowserClient()
+
+  // Уникальное имя файла чтобы избежать коллизий
+  const ext = file.name.split('.').pop()
+  const storageKey = `${type}/${Date.now()}.${ext}`
+
+  onProgress(15)
+
+  // 1. Загрузить в Supabase Storage
+  const { error: storageErr } = await supabase.storage
+    .from('uploads')
+    .upload(storageKey, file, { upsert: true })
+
+  if (storageErr) {
+    return { ok: false, error: `Storage: ${storageErr.message}` }
+  }
+
+  onProgress(50)
+
+  // 2. Передать путь в API для парсинга
+  try {
+    const res = await fetch(`/api/upload/${type}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storageKey, filename: file.name }),
+    })
+    onProgress(90)
+    const json = await res.json()
+    if (res.ok && json.ok) {
+      return { ok: true, rows_parsed: json.rows_parsed }
+    }
+    return { ok: false, error: json.error ?? 'Ошибка парсинга' }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+}
+
 // ── Компонент одной карточки загрузки ─────────────────────────────────────────
 
 function UploadCard({
@@ -78,7 +123,6 @@ function UploadCard({
 
   return (
     <div className="rounded-xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5 p-5">
-      {/* Заголовок */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-gray-400 dark:text-gray-500">
@@ -93,7 +137,6 @@ function UploadCard({
         </span>
       </div>
 
-      {/* Drop zone */}
       <div
         onDragOver={e => { e.preventDefault(); setDragging(true) }}
         onDragLeave={() => setDragging(false)}
@@ -121,7 +164,6 @@ function UploadCard({
         <p className="text-xs text-gray-300 dark:text-gray-600 mt-1">{config.hint}</p>
       </div>
 
-      {/* Прогресс-бар */}
       {state.status === 'uploading' && (
         <div className="mt-3 h-1.5 rounded-full bg-gray-100 dark:bg-white/10 overflow-hidden">
           <div
@@ -131,7 +173,6 @@ function UploadCard({
         </div>
       )}
 
-      {/* Детали результата */}
       {(state.status === 'ok' || state.status === 'error') && (
         <div className="mt-3 text-xs text-gray-400 dark:text-gray-500 flex gap-4">
           {state.lastAt && <span>{state.lastAt}</span>}
@@ -171,63 +212,40 @@ export default function UpdateTab() {
         const data = await res.json()
         setHistory(data.uploads ?? [])
       }
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
     setHistoryLoaded(true)
   }
 
-  const setState = (type: FileType, patch: Partial<UploadState>) => {
+  const patchState = (type: FileType, patch: Partial<UploadState>) => {
     setStates(prev => ({ ...prev, [type]: { ...prev[type], ...patch } }))
   }
 
   const handleFile = async (type: FileType, file: File) => {
-    setState(type, { status: 'uploading', progress: 10, message: 'Загрузка...', detail: undefined })
+    patchState(type, { status: 'uploading', progress: 10, message: 'Загрузка...', detail: undefined })
 
-    const formData = new FormData()
-    formData.append('file', file)
+    const result = await uploadViaStorage(type, file, pct => {
+      patchState(type, { progress: pct })
+    })
 
-    // Имитация прогресса (fetch не даёт реального прогресса загрузки)
-    const progressTimer = setInterval(() => {
-      setStates(prev => {
-        const cur = prev[type]
-        if (cur.status !== 'uploading') { clearInterval(progressTimer); return prev }
-        return { ...prev, [type]: { ...cur, progress: Math.min(cur.progress + 10, 85) } }
+    if (result.ok) {
+      const now = new Date().toLocaleString('ru-RU', {
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
       })
-    }, 400)
-
-    try {
-      const res = await fetch(`/api/upload/${type}`, { method: 'POST', body: formData })
-      clearInterval(progressTimer)
-      const json = await res.json()
-
-      if (res.ok && json.ok) {
-        const now = new Date().toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-        setState(type, {
-          status: 'ok',
-          progress: 100,
-          message: 'Загружено',
-          lastAt: now,
-          rowsCount: json.rows_parsed,
-          detail: undefined,
-        })
-        // Обновить историю
-        if (historyLoaded) loadHistory()
-      } else {
-        setState(type, {
-          status: 'error',
-          progress: 0,
-          message: 'Ошибка',
-          detail: json.error ?? 'Неизвестная ошибка',
-        })
-      }
-    } catch (e) {
-      clearInterval(progressTimer)
-      setState(type, {
+      patchState(type, {
+        status: 'ok',
+        progress: 100,
+        message: 'Загружено',
+        lastAt: now,
+        rowsCount: result.rows_parsed,
+        detail: undefined,
+      })
+      if (historyLoaded) loadHistory()
+    } else {
+      patchState(type, {
         status: 'error',
         progress: 0,
-        message: 'Ошибка сети',
-        detail: String(e),
+        message: 'Ошибка',
+        detail: result.error,
       })
     }
   }
@@ -251,7 +269,6 @@ export default function UpdateTab() {
         </p>
       </div>
 
-      {/* Карточки загрузки */}
       <div className="space-y-3">
         {FILE_CONFIGS.map(config => (
           <UploadCard
@@ -263,7 +280,6 @@ export default function UpdateTab() {
         ))}
       </div>
 
-      {/* История загрузок */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-[#1A1A2E] dark:text-white">
@@ -305,7 +321,7 @@ export default function UpdateTab() {
                   <tr key={rec.id} className="border-b border-gray-50 dark:border-white/5 last:border-0">
                     <td className="px-4 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                       {new Date(rec.uploaded_at).toLocaleString('ru-RU', {
-                        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+                        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
                       })}
                     </td>
                     <td className="px-4 py-2 text-gray-700 dark:text-gray-300 max-w-[160px] truncate" title={rec.filename}>
@@ -321,10 +337,7 @@ export default function UpdateTab() {
                       {rec.status === 'ok' ? (
                         <span className="text-green-500 font-medium">✓</span>
                       ) : (
-                        <span
-                          className="text-red-400 font-medium cursor-help"
-                          title={rec.error_msg ?? ''}
-                        >
+                        <span className="text-red-400 font-medium cursor-help" title={rec.error_msg ?? ''}>
                           ✗
                         </span>
                       )}

@@ -1,0 +1,19 @@
+{
+  "functions": {
+    "src/app/api/upload/stock/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/upload/sku-report/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/upload/catalog/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/upload/abc/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/upload/china/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

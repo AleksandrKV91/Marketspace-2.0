@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { parseSkuReport } from '@/lib/parsers/parseSkuReport'
 import { createServiceClient } from '@/lib/supabase/server'
+import { downloadFromStorage } from '@/lib/supabase/downloadFromStorage'
 import { loadKnownSkus } from '@/lib/supabase/loadKnownSkus'
 import { chunk } from '@/lib/parsers/utils'
 
@@ -8,12 +9,15 @@ export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
+  const { storageKey, filename } = await req.json()
+  if (!storageKey) return NextResponse.json({ error: 'storageKey не передан' }, { status: 400 })
 
-  const formData = await req.formData()
-  const file = formData.get('file') as File | null
-  if (!file) return NextResponse.json({ error: 'Файл не передан' }, { status: 400 })
-
-  const buffer = await file.arrayBuffer()
+  let buffer: ArrayBuffer
+  try {
+    buffer = await downloadFromStorage(supabase, storageKey)
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 })
+  }
 
   let parsed
   try {
@@ -22,21 +26,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(e) }, { status: 422 })
   }
 
-  // Определить period_start/end из датированных метрик
   const dates = [...new Set(parsed.daily.map(d => d.metric_date))].sort()
-  const periodStart = dates[0] ?? null
-  const periodEnd = dates[dates.length - 1] ?? null
+  const knownSkus = await loadKnownSkus(supabase)
 
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')
-    .insert({
-      file_type: 'sku_report',
-      filename: file.name,
-      rows_count: parsed.rows_parsed,
-      period_start: periodStart,
-      period_end: periodEnd,
-      status: 'ok',
-    })
+    .insert({ file_type: 'sku_report', filename, rows_count: parsed.rows_parsed, period_start: dates[0] ?? null, period_end: dates[dates.length - 1] ?? null, status: 'ok' })
     .select('id')
     .single()
 
@@ -44,52 +39,35 @@ export async function POST(req: NextRequest) {
 
   const uploadId = upload.id
 
-  const knownSkus = await loadKnownSkus(supabase)
-
-  // UPSERT fact_sku_daily
   const dedupedDaily = [...new Map(
-    parsed.daily
-      .filter(r => knownSkus.has(r.sku_ms))
-      .map(r => [`${r.sku_ms}|${r.metric_date}`, r])
+    parsed.daily.filter(r => knownSkus.has(r.sku_ms)).map(r => [`${r.sku_ms}|${r.metric_date}`, r])
   ).values()]
-  const dailyWithUpload = dedupedDaily.map(r => ({ ...r, upload_id: uploadId }))
-  for (const batch of chunk(dailyWithUpload, 500)) {
-    const { error } = await supabase
-      .from('fact_sku_daily')
-      .upsert(batch, { onConflict: 'sku_ms,metric_date' })
+
+  for (const batch of chunk(dedupedDaily.map(r => ({ ...r, upload_id: uploadId })), 500)) {
+    const { error } = await supabase.from('fact_sku_daily').upsert(batch, { onConflict: 'sku_ms,metric_date' })
     if (error) {
       await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
   }
 
-  // UPSERT fact_sku_snapshot (не затираем novelty_status если новое значение пустое)
   const dedupedSnaps = [...new Map(
-    parsed.snapshots
-      .filter(r => knownSkus.has(r.sku_ms))
-      .map(r => [r.sku_ms, r])
+    parsed.snapshots.filter(r => knownSkus.has(r.sku_ms)).map(r => [r.sku_ms, r])
   ).values()]
-  const snapshotsWithUpload = dedupedSnaps.map(r => {
+
+  const snapsWithUpload = dedupedSnaps.map(r => {
     const snap = { ...r, upload_id: uploadId }
     if (!snap.novelty_status) delete (snap as Record<string, unknown>).novelty_status
     return snap
   })
-  for (const batch of chunk(snapshotsWithUpload, 500)) {
-    const { error } = await supabase
-      .from('fact_sku_snapshot')
-      .upsert(batch, { onConflict: 'sku_ms,upload_id' })
+
+  for (const batch of chunk(snapsWithUpload, 500)) {
+    const { error } = await supabase.from('fact_sku_snapshot').upsert(batch, { onConflict: 'sku_ms,upload_id' })
     if (error) {
       await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
   }
 
-  return NextResponse.json({
-    ok: true,
-    upload_id: uploadId,
-    rows_parsed: parsed.rows_parsed,
-    rows_skipped: parsed.rows_skipped,
-    skipped_skus: parsed.skipped_skus,
-    diag: parsed.daily[0] ?? null,
-  })
+  return NextResponse.json({ ok: true, upload_id: uploadId, rows_parsed: parsed.rows_parsed, rows_skipped: parsed.rows_skipped, diag: parsed.daily[0] ?? null })
 }
