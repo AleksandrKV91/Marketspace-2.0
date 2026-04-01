@@ -1,4 +1,4 @@
-import { readWorkbook, sheetToRows, norm, toNum, excelToISO } from './utils'
+import { readWorkbook, sheetToRows, norm, toNum, excelToISO, parseDateVal } from './utils'
 
 export interface SkuDailyRow {
   sku_ms: string
@@ -211,18 +211,10 @@ export function parseSkuReport(buffer: ArrayBuffer): ParseSkuReportResult {
       chmd_5d: chmd5dCol >= 0 ? toNum(row[chmd5dCol]) : null,
       spend_plan: spendPlanCol >= 0 ? toNum(row[spendPlanCol]) : null,
       drr_plan: drrPlanCol >= 0 ? toNum(row[drrPlanCol]) : null,
-      supply_date: supplyDateCol >= 0 ? (
-        typeof row[supplyDateCol] === 'number'
-          ? excelToISO(row[supplyDateCol] as number)
-          : String(row[supplyDateCol] ?? '').trim() || null
-      ) : null,
+      supply_date: supplyDateCol >= 0 ? parseDateVal(row[supplyDateCol]) : null,
       supply_qty: supplyQtyCol >= 0 ? toNum(row[supplyQtyCol]) : null,
       price: priceCol >= 0 ? toNum(row[priceCol]) : null,
-      shelf_date: shelfDateCol >= 0 ? (
-        typeof row[shelfDateCol] === 'number'
-          ? excelToISO(row[shelfDateCol] as number)
-          : String(row[shelfDateCol] ?? '').trim() || null
-      ) : null,
+      shelf_date: shelfDateCol >= 0 ? parseDateVal(row[shelfDateCol]) : null,
       manager: managerCol >= 0 ? String(row[managerCol] ?? '').trim() || null : null,
       novelty_status: rawNovelty || null,
     })

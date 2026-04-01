@@ -2,6 +2,8 @@
 
 import { useState } from 'react'
 import UpdateTab from '@/components/tabs/UpdateTab'
+import OverviewTab from '@/components/tabs/OverviewTab'
+import SkuTableTab from '@/components/tabs/SkuTableTab'
 
 type Tab = 'overview' | 'sku' | 'price' | 'analytics' | 'niche' | 'orders' | 'update'
 
@@ -16,7 +18,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
 ]
 
 export default function DashboardPage() {
-  const [activeTab, setActiveTab] = useState<Tab>('update')
+  const [activeTab, setActiveTab] = useState<Tab>('overview')
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] dark:bg-[#0D1117]">
@@ -46,12 +48,13 @@ export default function DashboardPage() {
 
       {/* Content */}
       <main className="py-6">
+        {activeTab === 'overview' && <OverviewTab />}
+        {activeTab === 'sku' && <SkuTableTab />}
         {activeTab === 'update' && <UpdateTab />}
-        {activeTab !== 'update' && (
+        {(activeTab === 'price' || activeTab === 'analytics' || activeTab === 'niche' || activeTab === 'orders') && (
           <div className="max-w-2xl mx-auto px-4 py-20 text-center text-gray-400 dark:text-gray-600">
             <p className="text-4xl mb-3">🚧</p>
             <p className="text-lg font-medium">Вкладка в разработке</p>
-            <p className="text-sm mt-1">Начните с загрузки данных во вкладке «Обновление»</p>
           </div>
         )}
       </main>

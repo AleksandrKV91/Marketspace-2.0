@@ -101,8 +101,9 @@ export function parseStock(
   salesCols.sort((a, b) => a.col - b.col)
 
   // Определить snap_date = последняя дата из priceChangeCols или salesCols
+  // Фильтруем только ISO даты (YYYY-MM-DD) чтобы не передать DD.MM.YYYY в Supabase
   const allDates = [...priceChangeCols.map(p => p.date), ...salesCols.map(s => s.date)]
-    .filter(Boolean)
+    .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
     .sort()
   const snapDate = allDates.length ? allDates[allDates.length - 1] : new Date().toISOString().split('T')[0]
 
