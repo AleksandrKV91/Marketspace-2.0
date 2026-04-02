@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { parseSkuReport } from '@/lib/parsers/parseSkuReport'
 import { createServiceClient } from '@/lib/supabase/server'
 import { downloadFromStorage } from '@/lib/supabase/downloadFromStorage'
-import { loadKnownSkus } from '@/lib/supabase/loadKnownSkus'
 import { chunk } from '@/lib/parsers/utils'
 
 export const maxDuration = 60
@@ -27,7 +26,6 @@ export async function POST(req: NextRequest) {
   }
 
   const dates = [...new Set(parsed.daily.map(d => d.metric_date))].sort()
-  const knownSkus = await loadKnownSkus(supabase)
 
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')
@@ -40,7 +38,7 @@ export async function POST(req: NextRequest) {
   const uploadId = upload.id
 
   const dedupedDaily = [...new Map(
-    parsed.daily.filter(r => knownSkus.has(r.sku_ms)).map(r => [`${r.sku_ms}|${r.metric_date}`, r])
+    parsed.daily.map(r => [`${r.sku_ms}|${r.metric_date}`, r])
   ).values()]
 
   for (const batch of chunk(dedupedDaily.map(r => ({ ...r, upload_id: uploadId })), 500)) {
@@ -52,7 +50,7 @@ export async function POST(req: NextRequest) {
   }
 
   const dedupedSnaps = [...new Map(
-    parsed.snapshots.filter(r => knownSkus.has(r.sku_ms)).map(r => [r.sku_ms, r])
+    parsed.snapshots.map(r => [r.sku_ms, r])
   ).values()]
 
   const snapsWithUpload = dedupedSnaps.map(r => {

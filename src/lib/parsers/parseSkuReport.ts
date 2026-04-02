@@ -100,7 +100,14 @@ export function parseSkuReport(buffer: ArrayBuffer): ParseSkuReportResult {
   const shelfDateCol = headerRow.findIndex(h => norm(h).includes('дата появления') || norm(h).includes('дата полки') || norm(h).includes('появления на полке'))
   const managerCol = headerRow.findIndex(h => norm(h) === 'менеджер')
   const noveltyCol = headerRow.findIndex(h => norm(h).includes('статус новинки') || norm(h).includes('новинка'))
-  const skuMsCol = headerRow.findIndex(h => norm(h).includes('артикул мс') || norm(h) === 'артикул')
+  let skuMsCol = headerRow.findIndex(h =>
+    norm(h).includes('артикул мс') ||
+    norm(h) === 'артикул' ||
+    norm(h).includes('номенклатура') ||
+    norm(h).includes('артикул склада') ||
+    norm(h) === 'sku'
+  )
+  if (skuMsCol === -1) skuMsCol = 1 // fallback: второй столбец
 
   // Колонки снапшота (по заголовкам)
   const fboWbCol = headerRow.findIndex(h => norm(h).includes('остаток на вб фбо') || (norm(h).includes('остаток') && norm(h).includes('фбо')))
