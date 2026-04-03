@@ -1,188 +1,226 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState } from 'react'
+import { motion } from 'framer-motion'
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
+  BarChart, Bar
+} from 'recharts'
+import { GlassCard } from '@/components/ui/GlassCard'
+import { StatCard } from '@/components/ui/StatCard'
+import { MousePointerClick, ShoppingCart, ArrowRight, DollarSign, Megaphone, Percent } from 'lucide-react'
 
-interface PriceChange {
-  sku_wb: number
-  sku_ms: string | null
-  name: string | null
-  brand: string | null
-  subject_wb: string | null
-  price_date: string
-  price_after: number | null
-  price_before: number | null
-  delta_pct: number | null
+interface PriceData {
+  funnel: {
+    ctr: number
+    cr_basket: number
+    cr_order: number
+    cpc: number
+    cpm: number
+    ad_order_share: number
+  }
+  daily: Array<{
+    date: string
+    ctr: number
+    cr_basket: number
+    cr_order: number
+    ad_revenue: number
+    organic_revenue: number
+  }>
+  price_changes: Array<{
+    sku: string
+    name: string
+    manager: string
+    date: string
+    price_before: number
+    price_after: number
+    delta_pct: number
+    delta_ctr?: number
+    delta_cr_basket?: number
+    delta_cr_order?: number
+    cpo?: number
+    delta_cpm?: number
+    delta_cpc?: number
+  }>
 }
 
-type SortKey = 'price_date' | 'delta_pct' | 'price_after' | 'price_before' | 'sku_ms'
-type SortDir = 'asc' | 'desc'
-
-function fmt(n: number | null | undefined, digits = 0): string {
-  if (n === null || n === undefined) return '—'
-  return n.toFixed(digits)
+function fmt(n: number | null | undefined) {
+  if (n == null) return '—'
+  if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'М'
+  if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(0) + 'К'
+  return n.toFixed(0)
+}
+function fmtDate(iso: string) {
+  const d = new Date(iso)
+  return `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}`
 }
 
-function fmtDate(iso: string): string {
-  return iso.split('-').reverse().join('.')
+const stagger = { hidden: {}, show: { transition: { staggerChildren: 0.06 } } }
+const fadeUp = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transition: { duration: 0.3 } } }
+
+function ChartTip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="glass p-3 text-xs min-w-[130px]" style={{ color: 'var(--text)' }}>
+      <p className="font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>{label}</p>
+      {payload.map(p => (
+        <div key={p.name} className="flex items-center gap-2 mb-1">
+          <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
+          <span style={{ color: 'var(--text-muted)' }}>{p.name}:</span>
+          <span className="font-bold ml-auto">{fmt(p.value)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function DeltaCell({ v }: { v?: number }) {
+  if (v == null) return <span style={{ color: 'var(--text-subtle)' }}>—</span>
+  const up = v > 0
+  return (
+    <span className="text-xs font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>
+      {up ? '+' : ''}{v.toFixed(2)}
+    </span>
+  )
 }
 
 export default function PriceTab() {
-  const [changes, setChanges] = useState<PriceChange[]>([])
+  const [data, setData] = useState<PriceData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [sortKey, setSortKey] = useState<SortKey>('price_date')
-  const [sortDir, setSortDir] = useState<SortDir>('desc')
-  const [filterDir, setFilterDir] = useState<'' | 'up' | 'down'>('')
 
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(search), 400)
-    return () => clearTimeout(t)
-  }, [search])
-
-  useEffect(() => {
-    setLoading(true)
-    const params = debouncedSearch ? `?search=${encodeURIComponent(debouncedSearch)}` : ''
-    fetch(`/api/dashboard/prices${params}`)
+    fetch('/api/dashboard/prices')
       .then(r => r.json())
-      .then(d => { setChanges(d.changes ?? []); setLoading(false) })
-      .catch(e => { setError(String(e)); setLoading(false) })
-  }, [debouncedSearch])
+      .then((d: PriceData) => { setData(d); setLoading(false) })
+      .catch((e: unknown) => { setError(String(e)); setLoading(false) })
+  }, [])
 
-  const sorted = useMemo(() => {
-    let result = [...changes]
-    if (filterDir === 'up') result = result.filter(r => (r.delta_pct ?? 0) > 0)
-    if (filterDir === 'down') result = result.filter(r => (r.delta_pct ?? 0) < 0)
-    result.sort((a, b) => {
-      const av = a[sortKey]
-      const bv = b[sortKey]
-      if (av === null || av === undefined) return 1
-      if (bv === null || bv === undefined) return -1
-      const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true })
-      return sortDir === 'asc' ? cmp : -cmp
-    })
-    return result
-  }, [changes, sortKey, sortDir, filterDir])
+  if (loading) return (
+    <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <GlassCard key={i}><div className="space-y-3"><div className="skeleton h-9 w-9 rounded-full" /><div className="skeleton h-4 w-20" /><div className="skeleton h-7 w-28" /></div></GlassCard>
+        ))}
+      </div>
+    </div>
+  )
+  if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
+  if (!data) return null
 
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    else { setSortKey(key); setSortDir('desc') }
-  }
-
-  function SortBtn({ col, label }: { col: SortKey; label: string }) {
-    const active = sortKey === col
-    return (
-      <button
-        onClick={() => toggleSort(col)}
-        className={`flex items-center gap-0.5 whitespace-nowrap ${active ? 'text-[#E63946]' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
-      >
-        {label}
-        <span className="text-xs">{active ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
-      </button>
-    )
-  }
+  const f = data.funnel
+  const dailyFmt = (data.daily ?? []).map(d => ({
+    date: fmtDate(d.date),
+    'CTR': +(d.ctr * 100).toFixed(2),
+    'CR корзина': +(d.cr_basket * 100).toFixed(2),
+    'CR заказ': +(d.cr_order * 100).toFixed(2),
+    'Рекламные': d.ad_revenue,
+    'Органические': d.organic_revenue,
+  }))
 
   return (
-    <div className="max-w-full px-4">
-      <div className="flex flex-wrap gap-2 mb-4 items-center">
-        <input
-          type="text"
-          placeholder="Поиск по артикулу..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="border border-gray-200 dark:border-white/10 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-white/5 text-gray-800 dark:text-white placeholder:text-gray-400 w-56 focus:outline-none focus:ring-1 focus:ring-[#E63946]"
-        />
-        <div className="flex gap-1">
-          {[
-            { v: '' as const, label: 'Все' },
-            { v: 'up' as const, label: '↑ Рост' },
-            { v: 'down' as const, label: '↓ Снижение' },
-          ].map(opt => (
-            <button
-              key={opt.v}
-              onClick={() => setFilterDir(opt.v)}
-              className={`px-2.5 py-1 rounded-lg text-sm font-medium transition-colors ${
-                filterDir === opt.v
-                  ? 'bg-[#E63946] text-white'
-                  : 'bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-300'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-        <span className="text-xs text-gray-400 ml-2">{sorted.length} изменений</span>
+    <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
+
+      {/* KPI — 6 карточек воронки */}
+      <motion.div variants={stagger} initial="hidden" animate="show"
+        className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3"
+      >
+        {[
+          { label: 'CTR',                value: f.ctr != null ? (f.ctr * 100).toFixed(2) + '%' : '—',                        icon: <MousePointerClick size={16} />, iconColor: 'var(--info)' },
+          { label: 'CR в корзину',       value: f.cr_basket != null ? (f.cr_basket * 100).toFixed(2) + '%' : '—',            icon: <ShoppingCart size={16} />,      iconColor: 'var(--warning)' },
+          { label: 'CR в заказ',         value: f.cr_order != null ? (f.cr_order * 100).toFixed(2) + '%' : '—',              icon: <ArrowRight size={16} />,        iconColor: 'var(--success)' },
+          { label: 'CPC',                value: f.cpc != null ? fmt(f.cpc) + ' ₽' : '—',                                    icon: <DollarSign size={16} />,        iconColor: 'var(--accent)' },
+          { label: 'CPM',                value: f.cpm != null ? fmt(f.cpm) + ' ₽' : '—',                                    icon: <Megaphone size={16} />,         iconColor: 'var(--danger)' },
+          { label: 'Доля рекл. заказов', value: f.ad_order_share != null ? (f.ad_order_share * 100).toFixed(1) + '%' : '—', icon: <Percent size={16} />,           iconColor: 'var(--info)' },
+        ].map((card, i) => (
+          <motion.div key={i} variants={fadeUp}><StatCard {...card} /></motion.div>
+        ))}
+      </motion.div>
+
+      {/* Charts */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <GlassCard padding="lg">
+          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Воронка конверсий по дням</p>
+          {dailyFmt.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={dailyFmt} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => `${v}%`} />
+                <Tooltip content={<ChartTip />} />
+                <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+                <Line type="monotone" dataKey="CTR" stroke="var(--info)" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="CR корзина" stroke="var(--warning)" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="CR заказ" stroke="var(--success)" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : <div className="flex items-center justify-center h-56 text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных</div>}
+        </GlassCard>
+
+        <GlassCard padding="lg">
+          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Рекламные vs Органические продажи</p>
+          {dailyFmt.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={dailyFmt} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} />
+                <Tooltip content={<ChartTip />} />
+                <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="Рекламные" fill="var(--accent)" radius={[4,4,0,0]} />
+                <Bar dataKey="Органические" fill="var(--info)" radius={[4,4,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <div className="flex items-center justify-center h-56 text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных</div>}
+        </GlassCard>
       </div>
 
-      {loading && (
-        <div className="flex items-center justify-center py-20 text-gray-400">
-          <div className="animate-spin w-5 h-5 border-2 border-[#E63946] border-t-transparent rounded-full mr-2" />
-          Загрузка...
-        </div>
-      )}
-      {error && <p className="text-red-500 py-8 text-center">{error}</p>}
-
-      {!loading && !error && (
-        <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-white/10">
+      {/* Таблица изменений цен */}
+      <GlassCard padding="lg">
+        <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Изменения цен и влияние на метрики</p>
+        <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 dark:bg-white/5">
-              <tr className="text-left">
-                <th className="px-3 py-2 font-medium"><SortBtn col="price_date" label="Дата" /></th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="sku_ms" label="Артикул МС" /></th>
-                <th className="px-3 py-2 font-medium text-gray-500 max-w-[200px]">Название</th>
-                <th className="px-3 py-2 font-medium text-gray-500">Категория</th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="price_before" label="Цена до" /></th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="price_after" label="Цена после" /></th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="delta_pct" label="Изм. %" /></th>
+            <thead>
+              <tr className="text-xs" style={{ color: 'var(--text-subtle)' }}>
+                <th className="text-left pb-3 font-medium">SKU</th>
+                <th className="text-left pb-3 font-medium">Название</th>
+                <th className="text-left pb-3 font-medium">Менеджер</th>
+                <th className="text-right pb-3 font-medium">Дата</th>
+                <th className="text-right pb-3 font-medium">Было</th>
+                <th className="text-right pb-3 font-medium">Стало</th>
+                <th className="text-right pb-3 font-medium">Δ%</th>
+                <th className="text-right pb-3 font-medium">Δ CTR</th>
+                <th className="text-right pb-3 font-medium">Δ CR корз.</th>
+                <th className="text-right pb-3 font-medium">Δ CR заказ</th>
+                <th className="text-right pb-3 font-medium">CPO</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-white/5">
-              {sorted.map((row, i) => {
-                const delta = row.delta_pct
-                const up = delta !== null && delta > 0
-                const down = delta !== null && delta < 0
+            <tbody>
+              {(data.price_changes ?? []).map((row, i) => {
+                const up = row.delta_pct > 0
                 return (
-                  <tr key={i} className="hover:bg-gray-50 dark:hover:bg-white/5">
-                    <td className="px-3 py-2 text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                      {fmtDate(row.price_date)}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs text-gray-600 dark:text-gray-300">
-                      <div>{row.sku_ms ?? '—'}</div>
-                      <div className="text-gray-400">{row.sku_wb}</div>
-                    </td>
-                    <td className="px-3 py-2 max-w-[200px]">
-                      <div className="truncate text-gray-800 dark:text-gray-200" title={row.name ?? ''}>
-                        {row.name ?? '—'}
-                      </div>
-                      {row.brand && <div className="text-xs text-gray-400 truncate">{row.brand}</div>}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">{row.subject_wb ?? '—'}</td>
-                    <td className="px-3 py-2 text-gray-600 dark:text-gray-400">
-                      {row.price_before !== null ? fmt(row.price_before) + ' ₽' : '—'}
-                    </td>
-                    <td className="px-3 py-2 font-medium text-gray-800 dark:text-gray-200">
-                      {row.price_after !== null ? fmt(row.price_after) + ' ₽' : '—'}
-                    </td>
-                    <td className="px-3 py-2">
-                      {delta !== null ? (
-                        <span className={`font-medium ${up ? 'text-green-600 dark:text-green-400' : down ? 'text-red-500' : 'text-gray-500'}`}>
-                          {up ? '+' : ''}{(delta * 100).toFixed(1)}%
-                        </span>
-                      ) : '—'}
-                    </td>
+                  <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
+                    <td className="py-2 pr-2 font-mono text-xs" style={{ color: 'var(--text-muted)' }}>{row.sku}</td>
+                    <td className="py-2 pr-4 max-w-[160px] truncate" style={{ color: 'var(--text)' }}>{row.name}</td>
+                    <td className="py-2 pr-4" style={{ color: 'var(--text-muted)' }}>{row.manager}</td>
+                    <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmtDate(row.date)}</td>
+                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(row.price_before)} ₽</td>
+                    <td className="py-2 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmt(row.price_after)} ₽</td>
+                    <td className="py-2 text-right"><span className="text-xs font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>{up ? '+' : ''}{row.delta_pct.toFixed(1)}%</span></td>
+                    <td className="py-2 text-right"><DeltaCell v={row.delta_ctr} /></td>
+                    <td className="py-2 text-right"><DeltaCell v={row.delta_cr_basket} /></td>
+                    <td className="py-2 text-right"><DeltaCell v={row.delta_cr_order} /></td>
+                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.cpo != null ? fmt(row.cpo) + ' ₽' : '—'}</td>
                   </tr>
                 )
               })}
-              {sorted.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-gray-400">Нет данных</td>
-                </tr>
+              {(data.price_changes ?? []).length === 0 && (
+                <tr><td colSpan={11} className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>Нет изменений цен за выбранный период</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      )}
+      </GlassCard>
     </div>
   )
 }

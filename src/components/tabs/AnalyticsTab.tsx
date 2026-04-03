@@ -1,130 +1,221 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { motion } from 'framer-motion'
+import {
+  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  LineChart, Line, Legend
+} from 'recharts'
+import { GlassCard } from '@/components/ui/GlassCard'
+import { StatCard } from '@/components/ui/StatCard'
+import { ShoppingBag, TrendingDown, Percent, BarChart2, Target, TrendingUp } from 'lucide-react'
 
-interface CategoryRow {
-  category: string
-  sku_count: number
-  revenue: number
-  ad_spend: number
-  drr: number
-  chmd: number
-  avg_margin_rub: number
+interface AnalyticsData {
+  summary: {
+    revenue: number
+    revenue_prev: number
+    chmd: number
+    chmd_prev: number
+    margin_pct: number
+    margin_prev: number
+    drr: number
+    drr_prev: number
+    cpo?: number
+    delta_revenue_pct?: number
+  }
+  daily: Array<{ date: string; revenue: number; chmd: number; expenses: number; margin_pct: number; drr: number }>
+  by_category: Array<{ category: string; revenue: number; delta_pct: number; chmd: number; margin_pct: number; drr: number; stock_rub: number; sku_count: number }>
+  by_manager: Array<{ manager: string; revenue: number; chmd: number; margin_pct: number; drr: number; oos_count: number; sku_count: number }>
 }
 
-function fmt(n: number | null | undefined, digits = 0): string {
-  if (n === null || n === undefined) return '—'
+function fmt(n: number | null | undefined) {
+  if (n == null) return '—'
   if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'М'
-  if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(1) + 'К'
-  return n.toFixed(digits)
+  if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(0) + 'К'
+  return String(Math.round(n))
+}
+function fmtPct(n: number | null | undefined) {
+  if (n == null) return '—'
+  return (n * 100).toFixed(1) + '%'
+}
+function fmtDate(iso: string) {
+  const d = new Date(iso)
+  return `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}`
+}
+function delta(curr: number, prev: number) {
+  if (!prev) return undefined
+  return ((curr - prev) / prev) * 100
 }
 
-function pct(n: number | null | undefined): string {
-  if (n === null || n === undefined) return '—'
-  return (n * 100).toFixed(1) + '%'
+const stagger = { hidden: {}, show: { transition: { staggerChildren: 0.06 } } }
+const fadeUp = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transition: { duration: 0.3 } } }
+
+function ChartTip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="glass p-3 text-xs min-w-[130px]" style={{ color: 'var(--text)' }}>
+      <p className="font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>{label}</p>
+      {payload.map(p => (
+        <div key={p.name} className="flex items-center gap-2 mb-1">
+          <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
+          <span style={{ color: 'var(--text-muted)' }}>{p.name}:</span>
+          <span className="font-bold ml-auto">{fmt(p.value)}</span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 export default function AnalyticsTab() {
-  const [categories, setCategories] = useState<CategoryRow[]>([])
+  const [data, setData] = useState<AnalyticsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [latestDate, setLatestDate] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/dashboard/analytics')
       .then(r => r.json())
-      .then(d => {
-        setCategories(d.categories ?? [])
-        setLatestDate(d.latest_date ?? null)
-        setLoading(false)
-      })
-      .catch(e => { setError(String(e)); setLoading(false) })
+      .then((d: AnalyticsData) => { setData(d); setLoading(false) })
+      .catch((e: unknown) => { setError(String(e)); setLoading(false) })
   }, [])
 
   if (loading) return (
-    <div className="flex items-center justify-center py-32 text-gray-400">
-      <div className="animate-spin w-6 h-6 border-2 border-[#E63946] border-t-transparent rounded-full mr-3" />
-      Загрузка...
+    <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <GlassCard key={i}><div className="space-y-3"><div className="skeleton h-9 w-9 rounded-full" /><div className="skeleton h-4 w-20" /><div className="skeleton h-7 w-28" /></div></GlassCard>
+        ))}
+      </div>
     </div>
   )
+  if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
+  if (!data) return null
 
-  if (error) return <div className="max-w-xl mx-auto px-4 py-16 text-center text-red-500">{error}</div>
-
-  const top10 = categories.slice(0, 10)
-  const chartData = top10.map(c => ({
-    name: c.category.length > 16 ? c.category.slice(0, 16) + '…' : c.category,
-    revenue: Math.round(c.revenue),
-    ad_spend: Math.round(c.ad_spend),
+  const s = data.summary
+  const dailyFmt = (data.daily ?? []).map(d => ({
+    date: fmtDate(d.date),
+    'Выручка': d.revenue,
+    'ЧМД': d.chmd,
+    'Расходы': d.expenses,
+    'Маржа%': +(d.margin_pct * 100).toFixed(1),
+    'ДРР%': +(d.drr * 100).toFixed(1),
   }))
 
   return (
-    <div className="max-w-6xl mx-auto px-4 space-y-6">
-      {latestDate && (
-        <p className="text-xs text-gray-400">
-          Данные за 5 дней до: {latestDate.split('-').reverse().join('.')}
-        </p>
-      )}
+    <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
 
-      {/* Топ-10 график */}
-      {chartData.length > 0 && (
-        <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-xl p-4">
-          <p className="text-sm font-medium text-[#1A1A2E] dark:text-white mb-4">Выручка по категориям (топ-10)</p>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={chartData} layout="vertical" margin={{ top: 0, right: 40, bottom: 0, left: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" strokeOpacity={0.4} horizontal={false} />
-              <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={v => fmt(v)} />
-              <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={120} />
-              <Tooltip formatter={(v) => fmt(Number(v)) + ' руб.'} />
-              <Bar dataKey="revenue" fill="#E63946" name="Выручка" radius={[0, 4, 4, 0]} />
-              <Bar dataKey="ad_spend" fill="#3B82F6" name="Реклама" radius={[0, 4, 4, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-          <div className="flex gap-4 mt-2 justify-center text-xs text-gray-500">
-            <span className="flex items-center gap-1"><span className="w-3 h-2 bg-[#E63946] inline-block rounded" /> Выручка</span>
-            <span className="flex items-center gap-1"><span className="w-3 h-2 bg-blue-500 inline-block rounded" /> Реклама</span>
-          </div>
-        </div>
-      )}
+      {/* KPI row */}
+      <motion.div variants={stagger} initial="hidden" animate="show"
+        className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3"
+      >
+        {[
+          { label: 'Выручка', value: fmt(s.revenue), icon: <ShoppingBag size={16} />, delta: delta(s.revenue, s.revenue_prev) },
+          { label: 'ЧМД', value: fmt(s.chmd), icon: <TrendingDown size={16} />, iconColor: 'var(--success)', delta: delta(s.chmd, s.chmd_prev) },
+          { label: 'Маржа %', value: fmtPct(s.margin_pct), icon: <Percent size={16} />, delta: s.margin_prev ? (s.margin_pct - s.margin_prev) * 100 : undefined, accent: s.margin_pct < 0.10 },
+          { label: 'ДРР Total', value: fmtPct(s.drr), icon: <BarChart2 size={16} />, iconColor: 'var(--info)', delta: s.drr_prev ? (s.drr_prev - s.drr) * 100 : undefined },
+          { label: 'CPO', value: s.cpo ? fmt(s.cpo) + ' ₽' : '—', icon: <Target size={16} />, iconColor: 'var(--warning)' },
+          { label: 'Δ Выручки', value: s.delta_revenue_pct != null ? (s.delta_revenue_pct > 0 ? '+' : '') + s.delta_revenue_pct.toFixed(1) + '%' : '—', icon: <TrendingUp size={16} />, iconColor: (s.delta_revenue_pct ?? 0) >= 0 ? 'var(--success)' : 'var(--danger)' },
+        ].map((card, i) => (
+          <motion.div key={i} variants={fadeUp}>
+            <StatCard {...card} />
+          </motion.div>
+        ))}
+      </motion.div>
 
-      {/* Таблица по категориям */}
-      <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-white/10">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 dark:bg-white/5">
-            <tr className="text-left">
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Категория</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">SKU</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Выручка 5д</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Реклама 5д</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">ДРР</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">ЧМД</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Маржа ср.</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 dark:divide-white/5">
-            {categories.map((cat, i) => (
-              <tr key={i} className="hover:bg-gray-50 dark:hover:bg-white/5">
-                <td className="px-3 py-2 text-gray-800 dark:text-gray-200 font-medium">{cat.category}</td>
-                <td className="px-3 py-2 text-gray-500">{cat.sku_count}</td>
-                <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{fmt(cat.revenue)}</td>
-                <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{fmt(cat.ad_spend)}</td>
-                <td className="px-3 py-2">
-                  <span className={cat.drr > 0.35 ? 'text-red-500 font-medium' : 'text-gray-700 dark:text-gray-300'}>
-                    {pct(cat.drr)}
-                  </span>
-                </td>
-                <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{fmt(cat.chmd)}</td>
-                <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{fmt(cat.avg_margin_rub)} ₽</td>
-              </tr>
-            ))}
-            {categories.length === 0 && (
-              <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-gray-400">Нет данных</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      {/* Charts */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <GlassCard padding="lg">
+          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Выручка и расходы по дням</p>
+          {dailyFmt.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={dailyFmt} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id="revG" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.25} />
+                    <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="chmdG" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--success)" stopOpacity={0.20} />
+                    <stop offset="95%" stopColor="var(--success)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                <YAxis yAxisId="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} />
+                <Tooltip content={<ChartTip />} />
+                <Area yAxisId="left" type="monotone" dataKey="Выручка" stroke="var(--accent)" strokeWidth={2} fill="url(#revG)" dot={false} />
+                <Area yAxisId="left" type="monotone" dataKey="ЧМД" stroke="var(--success)" strokeWidth={2} fill="url(#chmdG)" dot={false} />
+                <Area yAxisId="left" type="monotone" dataKey="Расходы" stroke="var(--danger)" strokeWidth={1.5} fill="none" dot={false} strokeDasharray="4 2" />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-56 text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных</div>
+          )}
+        </GlassCard>
+
+        <GlassCard padding="lg">
+          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Маржа % vs ДРР % по дням</p>
+          {dailyFmt.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={dailyFmt} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => `${v}%`} />
+                <Tooltip content={<ChartTip />} />
+                <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+                <Line type="monotone" dataKey="Маржа%" stroke="var(--success)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                <Line type="monotone" dataKey="ДРР%" stroke="var(--accent)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} strokeDasharray="4 2" />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-56 text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных</div>
+          )}
+        </GlassCard>
       </div>
+
+      {/* По категориям */}
+      <GlassCard padding="lg">
+        <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>По категориям</p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-xs" style={{ color: 'var(--text-subtle)' }}>
+                <th className="text-left pb-3 font-medium">Категория</th>
+                <th className="text-right pb-3 font-medium">SKU</th>
+                <th className="text-right pb-3 font-medium">Выручка</th>
+                <th className="text-right pb-3 font-medium">Δ%</th>
+                <th className="text-right pb-3 font-medium">ЧМД</th>
+                <th className="text-right pb-3 font-medium">Маржа</th>
+                <th className="text-right pb-3 font-medium">ДРР</th>
+                <th className="text-right pb-3 font-medium">Остаток</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data.by_category ?? []).map((cat, i) => {
+                const isLow = cat.margin_pct < 0.10
+                const dUp = (cat.delta_pct ?? 0) > 0
+                return (
+                  <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
+                    <td className="py-2.5 pr-4 font-medium" style={{ color: 'var(--text)' }}>{cat.category}</td>
+                    <td className="py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{cat.sku_count}</td>
+                    <td className="py-2.5 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmt(cat.revenue)}</td>
+                    <td className="py-2.5 text-right">
+                      <span className="text-xs font-semibold" style={{ color: dUp ? 'var(--success)' : 'var(--danger)' }}>
+                        {cat.delta_pct != null ? (dUp ? '+' : '') + cat.delta_pct.toFixed(1) + '%' : '—'}
+                      </span>
+                    </td>
+                    <td className="py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(cat.chmd)}</td>
+                    <td className="py-2.5 text-right">
+                      <span className="px-2 py-0.5 rounded text-xs font-medium" style={{ background: isLow ? 'var(--danger-bg)' : 'var(--success-bg)', color: isLow ? 'var(--danger)' : 'var(--success)' }}>{fmtPct(cat.margin_pct)}</span>
+                    </td>
+                    <td className="py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(cat.drr)}</td>
+                    <td className="py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(cat.stock_rub)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </GlassCard>
     </div>
   )
 }

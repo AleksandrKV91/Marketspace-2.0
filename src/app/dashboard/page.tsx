@@ -1,19 +1,18 @@
 'use client'
 
-import { useState, lazy, Suspense } from 'react'
+import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, Table2, TrendingUp, BarChart2,
   Globe, ShoppingCart, Upload, Moon, Sun, Monitor
 } from 'lucide-react'
-
-const SvodTab      = lazy(() => import('@/components/tabs/OverviewTab'))
-const SkuTab       = lazy(() => import('@/components/tabs/SkuTableTab'))
-const PriceTab     = lazy(() => import('@/components/tabs/PriceTab'))
-const AnalyticsTab = lazy(() => import('@/components/tabs/AnalyticsTab'))
-const NicheTab     = lazy(() => import('@/components/tabs/NicheTab'))
-const OrderTab     = lazy(() => import('@/components/tabs/OrderTab'))
-const UpdateTab    = lazy(() => import('@/components/tabs/UpdateTab'))
+import SvodTab      from '@/components/tabs/OverviewTab'
+import SkuTab       from '@/components/tabs/SkuTableTab'
+import PriceTab     from '@/components/tabs/PriceTab'
+import AnalyticsTab from '@/components/tabs/AnalyticsTab'
+import NicheTab     from '@/components/tabs/NicheTab'
+import OrderTab     from '@/components/tabs/OrderTab'
+import UpdateTab    from '@/components/tabs/UpdateTab'
 
 type Tab = 'svod' | 'sku' | 'price' | 'analytics' | 'niche' | 'orders' | 'update'
 
@@ -31,17 +30,6 @@ const TABS: TabDef[] = [
 
 const NAV_TABS = TABS.filter(t => t.id !== 'update')
 
-function TabLoader() {
-  return (
-    <div className="flex items-center justify-center py-32" style={{ color: 'var(--text-muted)' }}>
-      <div
-        className="animate-spin w-6 h-6 border-2 rounded-full mr-3"
-        style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }}
-      />
-      Загрузка...
-    </div>
-  )
-}
 
 function ThemeButton() {
   const [theme, setTheme] = useState<'light' | 'dark' | 'auto'>(() => {
@@ -207,7 +195,7 @@ export default function DashboardPage() {
 
       {/* Main content */}
       <main className="max-w-[1440px] mx-auto">
-        <Suspense fallback={<TabLoader />}>
+        <div>
           {activeTab === 'svod'      && <SvodTab />}
           {activeTab === 'sku'       && <SkuTab />}
           {activeTab === 'price'     && <PriceTab />}
@@ -215,7 +203,7 @@ export default function DashboardPage() {
           {activeTab === 'niche'     && <NicheTab />}
           {activeTab === 'orders'    && <OrderTab />}
           {activeTab === 'update'    && <UpdateTab />}
-        </Suspense>
+        </div>
       </main>
     </div>
   )

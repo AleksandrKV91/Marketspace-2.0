@@ -1,337 +1,181 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState } from 'react'
+import { motion } from 'framer-motion'
+import { GlassCard } from '@/components/ui/GlassCard'
+import { StatCard } from '@/components/ui/StatCard'
+import { AlertBox } from '@/components/ui/AlertBox'
+import { Package, AlertTriangle, TrendingDown, DollarSign, ShoppingBag } from 'lucide-react'
 
 interface OrderRow {
-  sku_ms: string
-  sku_wb: number
-  name: string | null
-  brand: string | null
-  subject_wb: string | null
-  total_stock: number
-  fbo_wb: number
-  fbs_pushkino: number
-  fbs_smolensk: number
-  in_transit: number
-  in_production: number
-  already_have: number
-  sales_7d: number
-  sales_14d: number
+  sku_wb: string
+  name: string
+  status: 'critical' | 'warning' | 'ok'
+  abc: string
   sales_31d: number
-  dpd: number
-  days_stock: number
-  log_pleche: number
+  oos_days: number
+  trend: number
+  stock_qty: number
+  stock_days: number
+  lead_time: number
   calc_order: number
-  abc_class: string | null
-  profitability: number | null
-  nearest_arrival: string | null
-  status: 'ok' | 'warning' | 'critical' | 'oos'
+  manager_order: number
+  delta_order: number
+  margin_pct: number
 }
 
-interface Kpi {
-  critical: number
-  warning: number
-  oos: number
-  to_order: number
-}
-
-type SortKey = keyof OrderRow
-type SortDir = 'asc' | 'desc'
-
-function fmtDate(iso: string | null): string {
-  if (!iso) return '—'
-  return iso.split('-').reverse().join('.')
-}
-
-function abcBadge(cls: string | null) {
-  if (!cls) return null
-  const colors: Record<string, string> = {
-    A: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
-    B: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400',
-    C: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400',
+interface OrderData {
+  summary: {
+    critical_count: number
+    warning_count: number
+    oos_with_demand: number
+    to_order_count: number
+    order_sum_rub: number
+    avg_days_to_oos: number
+    total_stock_rub: number
   }
-  const color = colors[cls.toUpperCase()] ?? 'bg-gray-100 text-gray-600'
-  return (
-    <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${color}`}>
-      {cls.toUpperCase()}
-    </span>
-  )
+  rows: OrderRow[]
 }
 
-const STATUS_CONFIG = {
-  oos: { label: 'OOS', color: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400' },
-  critical: { label: '🚨', color: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400' },
-  warning: { label: '⚠️', color: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400' },
-  ok: { label: '✓', color: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400' },
+function fmt(n: number | null | undefined) {
+  if (n == null) return '—'
+  if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'М'
+  if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(0) + 'К'
+  return String(Math.round(n))
 }
+function fmtPct(n: number | null | undefined) {
+  if (n == null) return '—'
+  return (n * 100).toFixed(1) + '%'
+}
+
+const statusCfg = {
+  critical: { label: '🚨 Критический', color: 'var(--danger)',  bg: 'var(--danger-bg)' },
+  warning:  { label: '⚠️ Внимание',   color: 'var(--warning)', bg: 'var(--warning-bg)' },
+  ok:       { label: '✅ Норма',       color: 'var(--success)', bg: 'var(--success-bg)' },
+}
+
+const stagger = { hidden: {}, show: { transition: { staggerChildren: 0.06 } } }
+const fadeUp = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transition: { duration: 0.3 } } }
 
 export default function OrderTab() {
-  const [rows, setRows] = useState<OrderRow[]>([])
-  const [kpi, setKpi] = useState<Kpi | null>(null)
+  const [data, setData] = useState<OrderData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
-  const [filterStatus, setFilterStatus] = useState('')
-  const [filterAbc, setFilterAbc] = useState('')
-  const [onlyToOrder, setOnlyToOrder] = useState(false)
-  const [sortKey, setSortKey] = useState<SortKey>('status')
-  const [sortDir, setSortDir] = useState<SortDir>('asc')
-  const [expanded, setExpanded] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/dashboard/orders')
       .then(r => r.json())
-      .then(d => {
-        setRows(d.rows ?? [])
-        setKpi(d.kpi ?? null)
-        setLoading(false)
-      })
-      .catch(e => { setError(String(e)); setLoading(false) })
+      .then((d: OrderData) => { setData(d); setLoading(false) })
+      .catch((e: unknown) => { setError(String(e)); setLoading(false) })
   }, [])
 
-  const sorted = useMemo(() => {
-    let result = [...rows]
-    if (search) {
-      const q = search.toLowerCase()
-      result = result.filter(r =>
-        r.sku_ms.toLowerCase().includes(q) ||
-        String(r.name ?? '').toLowerCase().includes(q)
-      )
-    }
-    if (filterStatus) result = result.filter(r => r.status === filterStatus)
-    if (filterAbc) result = result.filter(r => (r.abc_class ?? '').toUpperCase() === filterAbc)
-    if (onlyToOrder) result = result.filter(r => r.calc_order > 0)
-    result.sort((a, b) => {
-      const statusOrder = { oos: 0, critical: 1, warning: 2, ok: 3 }
-      if (sortKey === 'status') {
-        const cmp = statusOrder[a.status] - statusOrder[b.status]
-        return sortDir === 'asc' ? cmp : -cmp
-      }
-      const av = a[sortKey]
-      const bv = b[sortKey]
-      if (av === null || av === undefined) return 1
-      if (bv === null || bv === undefined) return -1
-      const cmp = av < bv ? -1 : av > bv ? 1 : 0
-      return sortDir === 'asc' ? cmp : -cmp
-    })
-    return result
-  }, [rows, search, filterStatus, filterAbc, onlyToOrder, sortKey, sortDir])
+  if (loading) return (
+    <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <GlassCard key={i}><div className="space-y-3"><div className="skeleton h-9 w-9 rounded-full" /><div className="skeleton h-4 w-20" /><div className="skeleton h-7 w-28" /></div></GlassCard>
+        ))}
+      </div>
+    </div>
+  )
+  if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
+  if (!data) return null
 
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    else { setSortKey(key); setSortDir('asc') }
-  }
-
-  function SortBtn({ col, label }: { col: SortKey; label: string }) {
-    const active = sortKey === col
-    return (
-      <button
-        onClick={() => toggleSort(col)}
-        className={`flex items-center gap-0.5 whitespace-nowrap ${active ? 'text-[#E63946]' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
-      >
-        {label}
-        <span className="text-xs">{active ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
-      </button>
-    )
-  }
+  const s = data.summary
 
   return (
-    <div className="max-w-full px-4 space-y-4">
-      {/* KPI */}
-      {kpi && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[
-            { label: '🚨 Критично', value: kpi.critical, color: 'text-red-500' },
-            { label: '⚠️ Внимание', value: kpi.warning, color: 'text-yellow-600' },
-            { label: '📭 OOS', value: kpi.oos, color: 'text-orange-500' },
-            { label: '📦 К заказу', value: kpi.to_order, color: 'text-blue-500' },
-          ].map(item => (
-            <div key={item.label} className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-xl p-4">
-              <p className="text-xs text-gray-500 mb-1">{item.label}</p>
-              <p className={`text-2xl font-bold ${item.color}`}>{item.value}</p>
-            </div>
-          ))}
-        </div>
-      )}
+    <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
 
-      {/* Фильтры */}
-      <div className="flex flex-wrap gap-2 items-center">
-        <input
-          type="text"
-          placeholder="Поиск по артикулу..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="border border-gray-200 dark:border-white/10 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-white/5 text-gray-800 dark:text-white placeholder:text-gray-400 w-56 focus:outline-none focus:ring-1 focus:ring-[#E63946]"
-        />
-        <div className="flex gap-1">
-          {[
-            { v: '', label: 'Все' },
-            { v: 'oos', label: 'OOS' },
-            { v: 'critical', label: '🚨 Критично' },
-            { v: 'warning', label: '⚠️ Внимание' },
-          ].map(opt => (
-            <button
-              key={opt.v}
-              onClick={() => setFilterStatus(opt.v)}
-              className={`px-2.5 py-1 rounded-lg text-sm font-medium transition-colors ${
-                filterStatus === opt.v
-                  ? 'bg-[#E63946] text-white'
-                  : 'bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-300'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex gap-1">
-          {['', 'A', 'B', 'C'].map(cls => (
-            <button
-              key={cls}
-              onClick={() => setFilterAbc(cls)}
-              className={`px-2.5 py-1 rounded-lg text-sm font-medium transition-colors ${
-                filterAbc === cls
-                  ? 'bg-[#E63946] text-white'
-                  : 'bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-300'
-              }`}
-            >
-              {cls === '' ? 'ABC: все' : cls}
-            </button>
-          ))}
-        </div>
-        <label className="flex items-center gap-1.5 cursor-pointer select-none text-sm text-gray-600 dark:text-gray-300">
-          <input
-            type="checkbox"
-            checked={onlyToOrder}
-            onChange={e => setOnlyToOrder(e.target.checked)}
-            className="rounded border-gray-300 text-[#E63946] focus:ring-[#E63946]"
-          />
-          Только к заказу
-        </label>
-        <span className="text-xs text-gray-400 ml-2">{sorted.length} артикулов</span>
+      {/* KPI — 5 карточек */}
+      <motion.div variants={stagger} initial="hidden" animate="show"
+        className="grid grid-cols-2 md:grid-cols-5 gap-3"
+      >
+        {[
+          { label: 'Текущий остаток (руб)',  value: fmt(s.total_stock_rub),   icon: <Package size={16} /> },
+          { label: 'Среднее дней до OOS',    value: fmt(s.avg_days_to_oos),   icon: <TrendingDown size={16} />, iconColor: 'var(--warning)', accent: (s.avg_days_to_oos ?? 99) < 14 },
+          { label: 'Расчётный заказ (шт)',   value: fmt(s.to_order_count),    icon: <ShoppingBag size={16} />, iconColor: 'var(--info)' },
+          { label: 'Сумма к заказу',         value: fmt(s.order_sum_rub),     icon: <DollarSign size={16} />, iconColor: 'var(--success)' },
+          { label: 'SKU крит. запас',        value: String(s.critical_count), icon: <AlertTriangle size={16} />, iconColor: 'var(--danger)', accent: s.critical_count > 0 },
+        ].map((card, i) => (
+          <motion.div key={i} variants={fadeUp}><StatCard {...card} /></motion.div>
+        ))}
+      </motion.div>
+
+      {/* Alert row */}
+      <div className="flex gap-3 flex-wrap">
+        <AlertBox icon="🚨" title="Критический запас" count={s.critical_count}  severity="critical" description="Запас < 50% лог. плеча" />
+        <AlertBox icon="⚠️" title="Требует внимания"  count={s.warning_count}   severity="warning"  description="Запас < лог. плеча" />
+        <AlertBox icon="📭" title="OOS с продажами"   count={s.oos_with_demand} severity="critical" description="Нет стока, есть спрос" />
+        <AlertBox icon="📦" title="К заказу"          count={s.to_order_count}  severity="info"     description={`Сумма: ${fmt(s.order_sum_rub)} ₽`} />
       </div>
 
-      {loading && (
-        <div className="flex items-center justify-center py-20 text-gray-400">
-          <div className="animate-spin w-5 h-5 border-2 border-[#E63946] border-t-transparent rounded-full mr-2" />
-          Загрузка...
-        </div>
-      )}
-      {error && <p className="text-red-500 py-8 text-center">{error}</p>}
-
-      {!loading && !error && (
-        <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-white/10">
+      {/* Main table */}
+      <GlassCard padding="lg">
+        <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Таблица запасов и заказов</p>
+        <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 dark:bg-white/5">
-              <tr className="text-left">
-                <th className="px-3 py-2 font-medium"><SortBtn col="status" label="Статус" /></th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="sku_ms" label="Артикул" /></th>
-                <th className="px-3 py-2 font-medium text-gray-500 max-w-[160px]">Название</th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="abc_class" label="ABC" /></th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="total_stock" label="Остаток" /></th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="already_have" label="На руках" /></th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="days_stock" label="Дней" /></th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="dpd" label="Прод/день" /></th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="sales_31d" label="31д прод." /></th>
-                <th className="px-3 py-2 font-medium"><SortBtn col="calc_order" label="К заказу" /></th>
-                <th className="px-3 py-2 font-medium text-gray-500">Приход</th>
+            <thead>
+              <tr className="text-xs" style={{ color: 'var(--text-subtle)' }}>
+                <th className="text-left pb-3 font-medium">SKU WB</th>
+                <th className="text-left pb-3 font-medium">Название</th>
+                <th className="text-center pb-3 font-medium">Статус</th>
+                <th className="text-center pb-3 font-medium">ABC</th>
+                <th className="text-right pb-3 font-medium">Продажи 31д</th>
+                <th className="text-right pb-3 font-medium">OOS дней</th>
+                <th className="text-right pb-3 font-medium">Наличие</th>
+                <th className="text-right pb-3 font-medium">Остаток дней</th>
+                <th className="text-right pb-3 font-medium">Лог. плечо</th>
+                <th className="text-right pb-3 font-medium">Расч. заказ</th>
+                <th className="text-right pb-3 font-medium">Заказ менедж.</th>
+                <th className="text-right pb-3 font-medium">Δ</th>
+                <th className="text-right pb-3 font-medium">Маржа</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-white/5">
-              {sorted.map(row => {
-                const sc = STATUS_CONFIG[row.status]
-                const isExpanded = expanded === row.sku_ms
+            <tbody>
+              {(data.rows ?? []).map((row, i) => {
+                const sc = statusCfg[row.status] ?? statusCfg.ok
+                const isLowMargin = row.margin_pct < 0.10
                 return (
-                  <>
-                    <tr
-                      key={row.sku_ms}
-                      onClick={() => setExpanded(isExpanded ? null : row.sku_ms)}
-                      className="hover:bg-gray-50 dark:hover:bg-white/5 cursor-pointer"
-                    >
-                      <td className="px-3 py-2">
-                        <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${sc.color}`}>
-                          {sc.label}
+                  <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
+                    <td className="py-2 pr-2 font-mono text-xs" style={{ color: 'var(--text-muted)' }}>{row.sku_wb}</td>
+                    <td className="py-2 pr-4 max-w-[180px] truncate" style={{ color: 'var(--text)' }}>{row.name}</td>
+                    <td className="py-2 text-center">
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap" style={{ background: sc.bg, color: sc.color }}>{sc.label}</span>
+                    </td>
+                    <td className="py-2 text-center">
+                      <span className="font-bold text-xs" style={{ color: row.abc === 'A' ? 'var(--success)' : row.abc === 'B' ? 'var(--warning)' : 'var(--danger)' }}>{row.abc}</span>
+                    </td>
+                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(row.sales_31d)}</td>
+                    <td className="py-2 text-right">
+                      {row.oos_days > 0 ? <span className="text-xs font-semibold" style={{ color: 'var(--danger)' }}>{row.oos_days}</span> : <span style={{ color: 'var(--text-subtle)' }}>0</span>}
+                    </td>
+                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(row.stock_qty)}</td>
+                    <td className="py-2 text-right">
+                      <span style={{ color: row.stock_days < row.lead_time ? 'var(--danger)' : 'var(--text-muted)' }}>{row.stock_days}</span>
+                    </td>
+                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.lead_time}</td>
+                    <td className="py-2 text-right font-semibold" style={{ color: row.calc_order > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>{fmt(row.calc_order)}</td>
+                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(row.manager_order)}</td>
+                    <td className="py-2 text-right">
+                      {row.delta_order !== 0 ? (
+                        <span className="text-xs font-semibold" style={{ color: row.delta_order > 0 ? 'var(--warning)' : 'var(--success)' }}>
+                          {row.delta_order > 0 ? '+' : ''}{fmt(row.delta_order)}
                         </span>
-                      </td>
-                      <td className="px-3 py-2 font-mono text-xs text-gray-600 dark:text-gray-300">
-                        {row.sku_ms}
-                      </td>
-                      <td className="px-3 py-2 max-w-[160px]">
-                        <div className="truncate text-gray-800 dark:text-gray-200" title={row.name ?? ''}>
-                          {row.name ?? '—'}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2">{abcBadge(row.abc_class)}</td>
-                      <td className="px-3 py-2 font-medium">
-                        <span className={row.total_stock === 0 ? 'text-red-500' : 'text-gray-800 dark:text-gray-200'}>
-                          {row.total_stock === 0 ? 'OOS' : row.total_stock}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-gray-600 dark:text-gray-400">{row.already_have}</td>
-                      <td className="px-3 py-2">
-                        <span className={
-                          row.days_stock < 30 ? 'text-red-500 font-medium' :
-                          row.days_stock < 60 ? 'text-yellow-600 font-medium' :
-                          'text-gray-700 dark:text-gray-300'
-                        }>
-                          {row.days_stock === 999 ? '∞' : row.days_stock}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-gray-600 dark:text-gray-400">{row.dpd}</td>
-                      <td className="px-3 py-2 text-gray-600 dark:text-gray-400">{row.sales_31d}</td>
-                      <td className="px-3 py-2">
-                        <span className={row.calc_order > 0 ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-400'}>
-                          {row.calc_order > 0 ? row.calc_order : '—'}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-xs text-gray-500">{fmtDate(row.nearest_arrival)}</td>
-                    </tr>
-                    {isExpanded && (
-                      <tr key={row.sku_ms + '_detail'} className="bg-blue-50 dark:bg-blue-900/10">
-                        <td colSpan={11} className="px-4 py-3">
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                            <div>
-                              <p className="text-xs text-gray-500 mb-1 font-medium">Остатки</p>
-                              <p>FBO WB: <span className="font-medium">{row.fbo_wb}</span></p>
-                              <p>FBS Пушкино: <span className="font-medium">{row.fbs_pushkino}</span></p>
-                              <p>FBS Смоленск: <span className="font-medium">{row.fbs_smolensk}</span></p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-gray-500 mb-1 font-medium">В движении</p>
-                              <p>В пути: <span className="font-medium">{row.in_transit}</span></p>
-                              <p>В производстве: <span className="font-medium">{row.in_production}</span></p>
-                              <p>Итого на руках: <span className="font-bold text-blue-600">{row.already_have}</span></p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-gray-500 mb-1 font-medium">Продажи</p>
-                              <p>7 дней: <span className="font-medium">{row.sales_7d}</span></p>
-                              <p>14 дней: <span className="font-medium">{row.sales_14d}</span></p>
-                              <p>31 день: <span className="font-medium">{row.sales_31d}</span></p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-gray-500 mb-1 font-medium">Расчёт заказа</p>
-                              <p>Прод/день: <span className="font-medium">{row.dpd}</span></p>
-                              <p>Дней остатка: <span className={`font-medium ${row.days_stock < 30 ? 'text-red-500' : ''}`}>{row.days_stock === 999 ? '∞' : row.days_stock}</span></p>
-                              <p>Лог.плечо: <span className="font-medium">{row.log_pleche} дн.</span></p>
-                              <p className="mt-1 text-blue-600 dark:text-blue-400 font-bold">
-                                К заказу: {row.calc_order > 0 ? row.calc_order + ' шт.' : '—'}
-                              </p>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </>
+                      ) : <span style={{ color: 'var(--text-subtle)' }}>0</span>}
+                    </td>
+                    <td className="py-2 text-right">
+                      <span className="px-2 py-0.5 rounded text-xs font-medium" style={{ background: isLowMargin ? 'var(--danger-bg)' : 'var(--success-bg)', color: isLowMargin ? 'var(--danger)' : 'var(--success)' }}>{fmtPct(row.margin_pct)}</span>
+                    </td>
+                  </tr>
                 )
               })}
-              {sorted.length === 0 && (
-                <tr>
-                  <td colSpan={11} className="px-4 py-12 text-center text-gray-400">Нет данных</td>
-                </tr>
+              {(data.rows ?? []).length === 0 && (
+                <tr><td colSpan={13} className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных. Загрузите таблицы в разделе «Обновление данных».</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      )}
+      </GlassCard>
     </div>
   )
 }

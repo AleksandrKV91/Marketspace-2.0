@@ -1,178 +1,169 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState } from 'react'
+import { motion } from 'framer-motion'
+import { GlassCard } from '@/components/ui/GlassCard'
+import { StatCard } from '@/components/ui/StatCard'
+import { SeasonalitySparkline } from '@/components/ui/SeasonalitySparkline'
+import { Globe, Star, TrendingUp, BarChart2 } from 'lucide-react'
 
-interface Niche {
-  name: string
-  category?: string
-  rating?: number
-  appeal?: number
-  revenue?: number
-  seasonality?: string
-  season_start?: string
-  top_month?: string
-  availability?: string
-  top_phrase?: string
-  [key: string]: unknown
+interface NicheRow {
+  niche: string
+  category: string
+  rating: number
+  attractiveness: number
+  revenue: number
+  seasonal: boolean
+  season_months: number[]
+  season_start: number
+  season_peak: number
+  availability: number
+  abc_class: string
 }
 
+interface NicheData {
+  summary: {
+    avg_attractiveness: number
+    avg_market_share: number
+    seasonal_count: number
+    avg_abc: string
+  }
+  rows: NicheRow[]
+}
+
+function fmt(n: number | null | undefined) {
+  if (n == null) return '—'
+  if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'М'
+  if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(0) + 'К'
+  return String(Math.round(n))
+}
+
+const MONTHS = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек']
+
+const stagger = { hidden: {}, show: { transition: { staggerChildren: 0.06 } } }
+const fadeUp = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transition: { duration: 0.3 } } }
+
 export default function NicheTab() {
-  const [niches, setNiches] = useState<Niche[]>([])
+  const [data, setData] = useState<NicheData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [filterSeason, setFilterSeason] = useState('')
+  const [filterSeasonal, setFilterSeasonal] = useState<'all' | 'seasonal' | 'no'>('all')
 
   useEffect(() => {
-    fetch('/niches.json')
+    const p = new URLSearchParams()
+    if (search) p.set('search', search)
+    if (filterSeasonal !== 'all') p.set('seasonal', filterSeasonal)
+    fetch('/api/dashboard/niches?' + p.toString())
       .then(r => r.json())
-      .then((d: unknown) => {
-        const arr = Array.isArray(d) ? d : (d as { niches?: Niche[] }).niches ?? []
-        setNiches(arr)
-        setLoading(false)
-      })
-      .catch(() => {
-        setError('niches.json не найден. Добавьте файл в /public/niches.json')
-        setLoading(false)
-      })
-  }, [])
+      .then((d: NicheData) => { setData(d); setLoading(false) })
+      .catch((e: unknown) => { setError(String(e)); setLoading(false) })
+  }, [search, filterSeasonal])
 
-  const filtered = useMemo(() => {
-    let result = [...niches]
-    if (search) {
-      const q = search.toLowerCase()
-      result = result.filter(n =>
-        String(n.name ?? '').toLowerCase().includes(q) ||
-        String(n.category ?? '').toLowerCase().includes(q)
-      )
-    }
-    if (filterSeason === 'seasonal') result = result.filter(n => n.seasonality && n.seasonality !== 'Нет')
-    if (filterSeason === 'nonseasonal') result = result.filter(n => !n.seasonality || n.seasonality === 'Нет')
-    return result
-  }, [niches, search, filterSeason])
-
-  if (loading) return (
-    <div className="flex items-center justify-center py-32 text-gray-400">
-      <div className="animate-spin w-6 h-6 border-2 border-[#E63946] border-t-transparent rounded-full mr-3" />
-      Загрузка...
-    </div>
-  )
-
-  if (error) return (
-    <div className="max-w-xl mx-auto px-4 py-16 text-center">
-      <p className="text-yellow-500 text-lg mb-2">⚠️</p>
-      <p className="text-gray-600 dark:text-gray-400">{error}</p>
-    </div>
-  )
-
-  if (niches.length === 0) return (
-    <div className="max-w-xl mx-auto px-4 py-16 text-center text-gray-400">
-      <p className="text-4xl mb-3">📭</p>
-      <p>Файл niches.json пуст или имеет неверный формат</p>
-    </div>
-  )
+  if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
 
   return (
-    <div className="max-w-6xl mx-auto px-4 space-y-4">
+    <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
+
+      {/* KPI */}
+      <motion.div variants={stagger} initial="hidden" animate="show"
+        className="grid grid-cols-2 md:grid-cols-4 gap-3"
+      >
+        {loading ? Array.from({ length: 4 }).map((_, i) => (
+          <GlassCard key={i}><div className="space-y-3"><div className="skeleton h-9 w-9 rounded-full" /><div className="skeleton h-4 w-20" /><div className="skeleton h-7 w-28" /></div></GlassCard>
+        )) : [
+          { label: 'Ср. привлекательность', value: data?.summary.avg_attractiveness?.toFixed(1) ?? '—', icon: <Star size={16} /> },
+          { label: 'Доля рынка',            value: data?.summary.avg_market_share != null ? (data.summary.avg_market_share * 100).toFixed(1) + '%' : '—', icon: <TrendingUp size={16} />, iconColor: 'var(--info)' },
+          { label: 'Сезонных ниш',          value: String(data?.summary.seasonal_count ?? '—'), icon: <Globe size={16} />, iconColor: 'var(--warning)' },
+          { label: 'Средний ABC-класс',     value: data?.summary.avg_abc ?? '—', icon: <BarChart2 size={16} />, iconColor: 'var(--success)' },
+        ].map((card, i) => (
+          <motion.div key={i} variants={fadeUp}><StatCard {...card} /></motion.div>
+        ))}
+      </motion.div>
+
+      {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
         <input
-          type="text"
-          placeholder="Поиск по нише или категории..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="border border-gray-200 dark:border-white/10 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-white/5 text-gray-800 dark:text-white placeholder:text-gray-400 w-64 focus:outline-none focus:ring-1 focus:ring-[#E63946]"
+          placeholder="Поиск по нише, категории..."
+          className="text-sm px-3 py-2 rounded-xl border outline-none min-w-[240px]"
+          style={{ background: 'var(--surface-solid)', border: '1px solid var(--border)', color: 'var(--text)' }}
         />
-        <div className="flex gap-1">
-          {[
-            { v: '', label: 'Все' },
-            { v: 'seasonal', label: 'Сезонные' },
-            { v: 'nonseasonal', label: 'Несезонные' },
-          ].map(opt => (
-            <button
-              key={opt.v}
-              onClick={() => setFilterSeason(opt.v)}
-              className={`px-2.5 py-1 rounded-lg text-sm font-medium transition-colors ${
-                filterSeason === opt.v
-                  ? 'bg-[#E63946] text-white'
-                  : 'bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-300'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-        <span className="text-xs text-gray-400 ml-2">{filtered.length} ниш</span>
+        {(['all','seasonal','no'] as const).map(v => (
+          <button key={v} onClick={() => setFilterSeasonal(v)}
+            className="text-xs px-3 py-1.5 rounded-xl font-medium"
+            style={{ background: filterSeasonal === v ? 'var(--accent)' : 'var(--border)', color: filterSeasonal === v ? 'white' : 'var(--text-muted)' }}>
+            {v === 'all' ? 'Все' : v === 'seasonal' ? 'Сезонные' : 'Несезонные'}
+          </button>
+        ))}
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-white/10">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 dark:bg-white/5">
-            <tr className="text-left">
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Ниша</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Категория</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Рейтинг</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Привл.</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Выручка</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Сезонность</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Пик</th>
-              <th className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">Доступность</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 dark:divide-white/5">
-            {filtered.slice(0, 200).map((n, i) => (
-              <tr key={i} className="hover:bg-gray-50 dark:hover:bg-white/5">
-                <td className="px-3 py-2">
-                  <div className="font-medium text-gray-800 dark:text-gray-200">{String(n.name ?? '—')}</div>
-                  {n.top_phrase && <div className="text-xs text-gray-400 truncate max-w-[200px]">{String(n.top_phrase)}</div>}
-                </td>
-                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 text-xs">{String(n.category ?? '—')}</td>
-                <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{n.rating !== undefined ? String(n.rating) : '—'}</td>
-                <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{n.appeal !== undefined ? String(n.appeal) : '—'}</td>
-                <td className="px-3 py-2 text-gray-700 dark:text-gray-300">
-                  {n.revenue !== undefined ? (
-                    Number(n.revenue) >= 1_000_000
-                      ? (Number(n.revenue) / 1_000_000).toFixed(1) + 'М'
-                      : Number(n.revenue) >= 1_000
-                        ? (Number(n.revenue) / 1_000).toFixed(0) + 'К'
-                        : String(n.revenue)
-                  ) : '—'}
-                </td>
-                <td className="px-3 py-2 text-xs">
-                  {n.seasonality && n.seasonality !== 'Нет' ? (
-                    <span className="bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded">
-                      {String(n.seasonality)}
-                    </span>
-                  ) : (
-                    <span className="text-gray-400">Нет</span>
-                  )}
-                </td>
-                <td className="px-3 py-2 text-gray-500 text-xs">{String(n.top_month ?? '—')}</td>
-                <td className="px-3 py-2 text-xs">
-                  {n.availability ? (
-                    <span className={`px-1.5 py-0.5 rounded ${
-                      String(n.availability).toLowerCase().includes('высок')
-                        ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'
-                        : String(n.availability).toLowerCase().includes('низк')
-                          ? 'bg-red-100 dark:bg-red-900/40 text-red-500'
-                          : 'bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400'
-                    }`}>
-                      {String(n.availability)}
-                    </span>
-                  ) : '—'}
-                </td>
+      {/* Table */}
+      <GlassCard padding="none">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-xs border-b" style={{ borderColor: 'var(--border)', color: 'var(--text-subtle)' }}>
+                <th className="text-left px-4 py-3 font-medium">Ниша / Категория</th>
+                <th className="text-right px-4 py-3 font-medium">Рейтинг</th>
+                <th className="text-right px-4 py-3 font-medium">Привл.</th>
+                <th className="text-right px-4 py-3 font-medium">Выручка</th>
+                <th className="text-center px-4 py-3 font-medium">Сезонность</th>
+                <th className="text-right px-4 py-3 font-medium">Старт</th>
+                <th className="text-right px-4 py-3 font-medium">Пик</th>
+                <th className="text-right px-4 py-3 font-medium">Доступность</th>
+                <th className="text-right px-4 py-3 font-medium">ABC</th>
               </tr>
-            ))}
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-4 py-12 text-center text-gray-400">Ничего не найдено</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      {filtered.length > 200 && (
-        <p className="text-xs text-gray-400 text-center">Показано 200 из {filtered.length}. Уточните поиск.</p>
-      )}
+            </thead>
+            <tbody>
+              {loading && Array.from({ length: 6 }).map((_, i) => (
+                <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
+                  {Array.from({ length: 9 }).map((__, j) => (
+                    <td key={j} className="px-4 py-3"><div className="skeleton h-4 w-full" /></td>
+                  ))}
+                </tr>
+              ))}
+              {!loading && (data?.rows ?? []).map((row, i) => (
+                <tr key={i} className="border-t transition-colors"
+                  style={{ borderColor: 'var(--border)', cursor: 'pointer' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-hover)' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}
+                >
+                  <td className="px-4 py-2.5">
+                    <p className="font-medium" style={{ color: 'var(--text)' }}>{row.niche}</p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{row.category}</p>
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-bold" style={{ color: 'var(--accent)' }}>{row.rating}</td>
+                  <td className="px-4 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{row.attractiveness?.toFixed(1)}</td>
+                  <td className="px-4 py-2.5 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmt(row.revenue)}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    {row.season_months?.length > 0
+                      ? <SeasonalitySparkline values={row.season_months} />
+                      : <span style={{ color: 'var(--text-subtle)', fontSize: 11 }}>Не сезонный</span>
+                    }
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {row.season_start ? MONTHS[row.season_start - 1] : '—'}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-xs" style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                    {row.season_peak ? MONTHS[row.season_peak - 1] : '—'}
+                  </td>
+                  <td className="px-4 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{row.availability?.toFixed(1)}</td>
+                  <td className="px-4 py-2.5 text-right">
+                    <span className="font-bold text-xs" style={{ color: row.abc_class === 'A' ? 'var(--success)' : row.abc_class === 'B' ? 'var(--warning)' : 'var(--danger)' }}>
+                      {row.abc_class ?? '—'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {!loading && (data?.rows ?? []).length === 0 && (
+                <tr><td colSpan={9} className="px-4 py-12 text-center text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных по нишам</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </GlassCard>
     </div>
   )
 }
