@@ -18,7 +18,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           rel="stylesheet"
         />
       </head>
-      <body className="min-h-full" style={{ fontFamily: "'Lato', sans-serif" }}>
+      <body className="min-h-full">
         <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
