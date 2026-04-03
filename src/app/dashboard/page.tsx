@@ -1,154 +1,222 @@
 'use client'
 
 import { useState, lazy, Suspense } from 'react'
-import { LayoutDashboard, Table2, TrendingUp, BarChart2, Globe, ShoppingCart, Upload, Menu, X } from 'lucide-react'
-import { ThemeToggle } from '@/components/ui/ThemeToggle'
+import { motion, AnimatePresence } from 'framer-motion'
+import {
+  LayoutDashboard, Table2, TrendingUp, BarChart2,
+  Globe, ShoppingCart, Upload, Moon, Sun, Monitor
+} from 'lucide-react'
 
-const OverviewTab   = lazy(() => import('@/components/tabs/OverviewTab'))
-const SkuTableTab   = lazy(() => import('@/components/tabs/SkuTableTab'))
-const PriceTab      = lazy(() => import('@/components/tabs/PriceTab'))
-const AnalyticsTab  = lazy(() => import('@/components/tabs/AnalyticsTab'))
-const NicheTab      = lazy(() => import('@/components/tabs/NicheTab'))
-const OrderTab      = lazy(() => import('@/components/tabs/OrderTab'))
-const UpdateTab     = lazy(() => import('@/components/tabs/UpdateTab'))
+const SvodTab      = lazy(() => import('@/components/tabs/OverviewTab'))
+const SkuTab       = lazy(() => import('@/components/tabs/SkuTableTab'))
+const PriceTab     = lazy(() => import('@/components/tabs/PriceTab'))
+const AnalyticsTab = lazy(() => import('@/components/tabs/AnalyticsTab'))
+const NicheTab     = lazy(() => import('@/components/tabs/NicheTab'))
+const OrderTab     = lazy(() => import('@/components/tabs/OrderTab'))
+const UpdateTab    = lazy(() => import('@/components/tabs/UpdateTab'))
 
-type Tab = 'overview' | 'sku' | 'price' | 'analytics' | 'niche' | 'orders' | 'update'
+type Tab = 'svod' | 'sku' | 'price' | 'analytics' | 'niche' | 'orders' | 'update'
 
-const TABS = [
-  { id: 'overview'   as Tab, label: 'Обзор',        icon: LayoutDashboard },
-  { id: 'sku'        as Tab, label: 'Таблица SKU',  icon: Table2 },
-  { id: 'price'      as Tab, label: 'Цены',         icon: TrendingUp },
-  { id: 'analytics'  as Tab, label: 'Аналитика',    icon: BarChart2 },
-  { id: 'niche'      as Tab, label: 'Ниши',         icon: Globe },
-  { id: 'orders'     as Tab, label: 'Заказы',       icon: ShoppingCart },
-  { id: 'update'     as Tab, label: 'Обновление',   icon: Upload },
+type TabDef = { id: Tab; label: string; icon: React.ComponentType<{ size?: number }> }
+
+const TABS: TabDef[] = [
+  { id: 'svod',      label: 'Свод',                  icon: LayoutDashboard },
+  { id: 'analytics', label: 'Продажи и экономика',   icon: BarChart2 },
+  { id: 'price',     label: 'Реклама и воронка',     icon: TrendingUp },
+  { id: 'orders',    label: 'Логистика и заказы',    icon: ShoppingCart },
+  { id: 'sku',       label: 'Аналитика по SKU',      icon: Table2 },
+  { id: 'niche',     label: 'Анализ ниш и ABC',      icon: Globe },
+  { id: 'update',    label: 'Обновление данных',     icon: Upload },
 ]
+
+const NAV_TABS = TABS.filter(t => t.id !== 'update')
 
 function TabLoader() {
   return (
     <div className="flex items-center justify-center py-32" style={{ color: 'var(--text-muted)' }}>
-      <div className="animate-spin w-6 h-6 border-2 rounded-full mr-3" style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
+      <div
+        className="animate-spin w-6 h-6 border-2 rounded-full mr-3"
+        style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }}
+      />
       Загрузка...
     </div>
   )
 }
 
-export default function DashboardPage() {
-  const [activeTab, setActiveTab] = useState<Tab>('overview')
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+function ThemeButton() {
+  const [theme, setTheme] = useState<'light' | 'dark' | 'auto'>(() => {
+    if (typeof window === 'undefined') return 'light'
+    return (localStorage.getItem('theme') as 'light' | 'dark' | 'auto') ?? 'light'
+  })
 
-  const NavItems = () => (
-    <>
-      {TABS.map(tab => {
-        const Icon = tab.icon
-        const active = activeTab === tab.id
-        return (
-          <button
-            key={tab.id}
-            onClick={() => { setActiveTab(tab.id); setSidebarOpen(false) }}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all text-left"
-            style={{
-              background: active ? 'var(--accent)' : 'transparent',
-              color: active ? 'white' : 'var(--text-muted)',
-            }}
-            onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'var(--surface-hover)' }}
-            onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-          >
-            <Icon size={17} />
-            <span>{tab.label}</span>
-          </button>
-        )
-      })}
-    </>
+  const cycle = () => {
+    const next: Record<string, 'light' | 'dark' | 'auto'> = { light: 'dark', dark: 'auto', auto: 'light' }
+    const newTheme = next[theme]
+    setTheme(newTheme)
+    localStorage.setItem('theme', newTheme)
+    if (newTheme === 'dark') {
+      document.documentElement.dataset.theme = 'dark'
+    } else if (newTheme === 'light') {
+      document.documentElement.dataset.theme = 'light'
+    } else {
+      const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
+    }
+  }
+
+  const Icon = theme === 'dark' ? Moon : theme === 'auto' ? Monitor : Sun
+  return (
+    <button
+      onClick={cycle}
+      className="w-8 h-8 rounded-xl flex items-center justify-center transition-all"
+      style={{ color: 'var(--text-muted)', background: 'var(--border)' }}
+      title={`Тема: ${theme}`}
+    >
+      <Icon size={15} />
+    </button>
   )
+}
+
+export default function DashboardPage() {
+  const [activeTab, setActiveTab] = useState<Tab>('svod')
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   return (
-    <div className="flex min-h-screen" style={{ background: 'var(--bg)' }}>
-      {/* Desktop Sidebar */}
-      <aside className="hidden lg:flex flex-col w-56 shrink-0 h-screen sticky top-0 border-r" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}>
-        <div className="p-4 border-b" style={{ borderColor: 'var(--border)' }}>
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold" style={{ background: 'var(--accent)' }}>M</div>
-            <span className="font-bold text-sm" style={{ color: 'var(--text)' }}>Marketspace 2.0</span>
+    <div className="min-h-screen" style={{ background: 'var(--bg)' }}>
+
+      {/* ── Sticky Top Navigation ── */}
+      <header className="top-nav sticky top-0 z-50 h-[72px] flex items-center px-4 lg:px-6 gap-4">
+
+        {/* Logo */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <div
+            className="w-8 h-8 rounded-xl flex items-center justify-center text-white text-sm font-black shrink-0"
+            style={{ background: 'var(--accent)' }}
+          >
+            M
           </div>
-        </div>
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          <NavItems />
-        </nav>
-        <div className="p-3 border-t" style={{ borderColor: 'var(--border)' }}>
-          <ThemeToggle />
-        </div>
-      </aside>
-
-      {/* Mobile sidebar overlay */}
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setSidebarOpen(false)} />
-          <aside className="absolute left-0 top-0 bottom-0 w-64 flex flex-col" style={{ background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)' }}>
-            <div className="p-4 flex items-center justify-between border-b" style={{ borderColor: 'var(--border)' }}>
-              <span className="font-bold text-sm" style={{ color: 'var(--text)' }}>Marketspace 2.0</span>
-              <button onClick={() => setSidebarOpen(false)} style={{ color: 'var(--text-muted)' }}><X size={18} /></button>
-            </div>
-            <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-              <NavItems />
-            </nav>
-            <div className="p-3 border-t" style={{ borderColor: 'var(--border)' }}>
-              <ThemeToggle />
-            </div>
-          </aside>
-        </div>
-      )}
-
-      {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Mobile header */}
-        <header className="lg:hidden flex items-center gap-3 px-4 py-3 border-b sticky top-0 z-40" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}>
-          <button onClick={() => setSidebarOpen(true)} style={{ color: 'var(--text-muted)' }}><Menu size={20} /></button>
-          <span className="font-bold text-sm flex-1" style={{ color: 'var(--text)' }}>
-            {TABS.find(t => t.id === activeTab)?.label}
+          <span className="font-bold text-sm hidden sm:block" style={{ color: 'var(--text)' }}>
+            Marketspace 2.0
           </span>
-          <ThemeToggle />
-        </header>
-
-        {/* Desktop page header */}
-        <div className="hidden lg:flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
-          <h1 className="text-lg font-bold" style={{ color: 'var(--text)' }}>
-            {TABS.find(t => t.id === activeTab)?.label}
-          </h1>
         </div>
 
-        {/* Tab content */}
-        <main className="flex-1 py-6 overflow-x-hidden">
-          <Suspense fallback={<TabLoader />}>
-            {activeTab === 'overview'  && <OverviewTab />}
-            {activeTab === 'sku'       && <SkuTableTab />}
-            {activeTab === 'price'     && <PriceTab />}
-            {activeTab === 'analytics' && <AnalyticsTab />}
-            {activeTab === 'niche'     && <NicheTab />}
-            {activeTab === 'orders'    && <OrderTab />}
-            {activeTab === 'update'    && <UpdateTab />}
-          </Suspense>
-        </main>
-
-        {/* Mobile bottom nav */}
-        <nav className="lg:hidden fixed bottom-0 left-0 right-0 border-t flex" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
-          {[TABS[0], TABS[1]].map(tab => {
+        {/* Desktop nav */}
+        <nav className="hidden lg:flex items-center gap-0.5 flex-1 overflow-x-auto">
+          {NAV_TABS.map(tab => {
             const Icon = tab.icon
             const active = activeTab === tab.id
             return (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className="flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors"
+                className="relative flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-colors whitespace-nowrap"
                 style={{ color: active ? 'var(--accent)' : 'var(--text-muted)' }}
+                onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.color = 'var(--text)' }}
+                onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)' }}
               >
-                <Icon size={20} />
+                {active && (
+                  <motion.span
+                    layoutId="nav-pill"
+                    className="absolute inset-0 rounded-xl -z-10"
+                    style={{ background: 'var(--accent-glow)' }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                  />
+                )}
+                <Icon size={15} />
                 <span>{tab.label}</span>
               </button>
             )
           })}
         </nav>
-      </div>
+
+        {/* Right actions */}
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => setActiveTab('update')}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+            style={{
+              background: activeTab === 'update' ? 'var(--accent)' : 'var(--border)',
+              color: activeTab === 'update' ? 'white' : 'var(--text-muted)',
+            }}
+          >
+            <Upload size={13} />
+            <span>Загрузить</span>
+          </button>
+
+          <ThemeButton />
+
+          {/* Mobile hamburger */}
+          <button
+            className="lg:hidden w-8 h-8 rounded-xl flex flex-col items-center justify-center gap-1"
+            style={{ background: 'var(--border)', color: 'var(--text-muted)' }}
+            onClick={() => setMobileMenuOpen(v => !v)}
+            aria-label="Меню"
+          >
+            <span className="block w-4 h-0.5 rounded" style={{ background: 'currentColor' }} />
+            <span className="block w-4 h-0.5 rounded" style={{ background: 'currentColor' }} />
+            <span className="block w-3 h-0.5 rounded" style={{ background: 'currentColor' }} />
+          </button>
+        </div>
+      </header>
+
+      {/* Mobile dropdown */}
+      <AnimatePresence>
+        {mobileMenuOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="lg:hidden fixed inset-0 z-40 bg-black/20"
+              onClick={() => setMobileMenuOpen(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.15 }}
+              className="lg:hidden fixed top-[72px] left-0 right-0 z-40 p-3 space-y-1"
+              style={{
+                background: 'var(--bg-secondary)',
+                borderBottom: '1px solid var(--border)',
+                boxShadow: 'var(--shadow-md)',
+              }}
+            >
+              {TABS.map(tab => {
+                const Icon = tab.icon
+                const active = activeTab === tab.id
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => { setActiveTab(tab.id); setMobileMenuOpen(false) }}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-left"
+                    style={{
+                      background: active ? 'var(--accent-glow)' : 'transparent',
+                      color: active ? 'var(--accent)' : 'var(--text-muted)',
+                    }}
+                  >
+                    <Icon size={17} />
+                    {tab.label}
+                  </button>
+                )
+              })}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Main content */}
+      <main className="max-w-[1440px] mx-auto">
+        <Suspense fallback={<TabLoader />}>
+          {activeTab === 'svod'      && <SvodTab />}
+          {activeTab === 'sku'       && <SkuTab />}
+          {activeTab === 'price'     && <PriceTab />}
+          {activeTab === 'analytics' && <AnalyticsTab />}
+          {activeTab === 'niche'     && <NicheTab />}
+          {activeTab === 'orders'    && <OrderTab />}
+          {activeTab === 'update'    && <UpdateTab />}
+        </Suspense>
+      </main>
     </div>
   )
 }
