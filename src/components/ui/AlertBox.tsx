@@ -14,19 +14,6 @@ export function AlertBox({ icon, title, count, description, severity = 'info', o
     <div
       className={`alert-card alert-${severity} px-4 py-3 ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
-      style={{ transition: 'transform 0.15s, box-shadow 0.15s' }}
-      onMouseEnter={e => {
-        if (onClick) {
-          const el = e.currentTarget as HTMLElement
-          el.style.transform = 'translateY(-2px)'
-          el.style.boxShadow = 'var(--shadow-md)'
-        }
-      }}
-      onMouseLeave={e => {
-        const el = e.currentTarget as HTMLElement
-        el.style.transform = ''
-        el.style.boxShadow = ''
-      }}
     >
       <div className="flex items-center gap-2 mb-1">
         {icon && <span className="text-base leading-none">{icon}</span>}

@@ -135,6 +135,13 @@ body {
 .alert-critical::before { background: var(--accent); }
 .alert-warning::before  { background: var(--warning); }
 .alert-info::before     { background: var(--info); }
+.alert-card.cursor-pointer {
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.alert-card.cursor-pointer:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
 .alert-success::before  { background: var(--success); }
 
 /* ── Skeleton shimmer ──────────────────────────────────── */

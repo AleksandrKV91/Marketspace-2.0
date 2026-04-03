@@ -4,11 +4,11 @@ interface Props {
 }
 
 function getColor(s: number): string {
-  if (s >= 80) return '#22C55E'
-  if (s >= 60) return '#10B981'
-  if (s >= 40) return '#F59E0B'
-  if (s >= 20) return '#F97316'
-  return '#EF4444'
+  if (s >= 80) return 'var(--success)'
+  if (s >= 60) return 'var(--success)'
+  if (s >= 40) return 'var(--warning)'
+  if (s >= 20) return 'var(--warning)'
+  return 'var(--danger)'
 }
 
 function getLabel(s: number): string {
