@@ -42,5 +42,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, upload_id: upload.id, rows_parsed: parsed.rows_parsed, rows_skipped: parsed.rows_skipped })
+  return NextResponse.json({
+    ok: true,
+    upload_id: upload.id,
+    rows_parsed: parsed.rows_parsed,
+    rows_skipped: parsed.rows_skipped,
+    sample: parsed.rows.slice(0, 3).map(r => ({ sku_ms: r.sku_ms, sku_wb: r.sku_wb, name: r.name })),
+  })
 }

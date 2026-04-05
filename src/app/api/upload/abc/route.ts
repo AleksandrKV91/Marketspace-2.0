@@ -63,5 +63,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, upload_id: uploadId, period_month: parsed.period_month, rows_parsed: filtered.length, rows_skipped: parsed.rows_skipped + (deduped.length - filtered.length) })
+  return NextResponse.json({
+    ok: true,
+    upload_id: uploadId,
+    period_month: parsed.period_month,
+    rows_parsed: filtered.length,
+    rows_skipped_total: parsed.rows_skipped + (deduped.length - filtered.length),
+    name_map_size: nameToSkuMs.size,
+    unmatched_count: deduped.length - filtered.length,
+    sample_unmatched: deduped.filter(r => !filtered.includes(r)).slice(0, 3).map(r => r.sku_ms),
+    sample_matched: filtered.slice(0, 2).map(r => ({ sku_ms: r.sku_ms, abc_class: r.abc_class })),
+  })
 }
