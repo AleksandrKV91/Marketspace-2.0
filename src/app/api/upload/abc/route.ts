@@ -26,24 +26,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(e) }, { status: 422 })
   }
 
-  // Загружаем маппинг: name (номенклатура) → sku_ms из dim_sku
-  const nameToSkuMs = new Map<string, string>()
-  let from = 0
-  while (true) {
-    const { data, error } = await supabase.from('dim_sku').select('sku_ms, name').range(from, from + 999)
-    if (error || !data?.length) break
-    for (const r of data) { if (r.name) nameToSkuMs.set(r.name.trim(), r.sku_ms) }
-    if (data.length < 1000) break
-    from += 1000
-  }
-
-  // Конвертируем: sku_ms сейчас содержит номенклатуру → заменяем на настоящий sku_ms
+  const knownSkus = await loadKnownSkus(supabase)
   const deduped = [...new Map(parsed.rows.map(r => [r.sku_ms, r])).values()]
-  const mapped = deduped.map(r => {
-    const realSkuMs = nameToSkuMs.get(r.sku_ms) ?? null
-    return realSkuMs ? { ...r, sku_ms: realSkuMs } : null
-  }).filter(Boolean) as typeof deduped
-  const filtered = mapped
+  const filtered = deduped.filter(r => knownSkus.has(r.sku_ms))
 
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')
@@ -68,10 +53,7 @@ export async function POST(req: NextRequest) {
     upload_id: uploadId,
     period_month: parsed.period_month,
     rows_parsed: filtered.length,
-    rows_skipped_total: parsed.rows_skipped + (deduped.length - filtered.length),
-    name_map_size: nameToSkuMs.size,
-    unmatched_count: deduped.length - filtered.length,
-    sample_unmatched: deduped.filter(r => !filtered.includes(r)).slice(0, 3).map(r => r.sku_ms),
-    sample_matched: filtered.slice(0, 2).map(r => ({ sku_ms: r.sku_ms, abc_class: r.abc_class })),
+    rows_skipped: parsed.rows_skipped + (deduped.length - filtered.length),
+    sample: filtered.slice(0, 2).map(r => ({ sku_ms: r.sku_ms, abc_class: r.abc_class })),
   })
 }
