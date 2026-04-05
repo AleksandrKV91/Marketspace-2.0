@@ -18,9 +18,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(e) }, { status: 500 })
   }
 
+  // Загружаем маппинг WB→MS из dim_sku (col 0 в Отчёте = WB арт)
+  const skuMap = new Map<string, string>()
+  let from = 0
+  while (true) {
+    const { data, error } = await supabase.from('dim_sku').select('sku_wb,sku_ms').not('sku_wb', 'is', null).range(from, from + 999)
+    if (error || !data?.length) break
+    for (const row of data) { if (row.sku_wb) skuMap.set(String(row.sku_wb), row.sku_ms) }
+    if (data.length < 1000) break
+    from += 1000
+  }
+
   let parsed
   try {
-    parsed = parseSkuReport(buffer)
+    parsed = parseSkuReport(buffer, skuMap.size > 0 ? skuMap : undefined)
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 422 })
   }
@@ -67,5 +78,5 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, upload_id: uploadId, rows_parsed: parsed.rows_parsed, rows_skipped: parsed.rows_skipped, diag: parsed.daily[0] ?? null })
+  return NextResponse.json({ ok: true, upload_id: uploadId, rows_parsed: parsed.rows_parsed, rows_skipped: parsed.rows_skipped, skipped_no_map: parsed.skipped_skus.length, sku_map_size: skuMap.size, diag: parsed.daily[0] ?? null })
 }

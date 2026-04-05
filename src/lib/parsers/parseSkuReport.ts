@@ -48,161 +48,188 @@ export interface ParseSkuReportResult {
   skipped_skus: string[]
 }
 
-export function parseSkuReport(buffer: ArrayBuffer): ParseSkuReportResult {
+/**
+ * Структура файла «Лист7» (реальная):
+ * Row 0: группы (необязательно)
+ * Row 1: заголовки
+ *   col 0:  SKU (артикул МС)
+ *   col 1:  Категория
+ *   col 2:  Предмет
+ *   col 3:  Название
+ *   col 4:  Бренд
+ *   col 5:  Дата появления на полке
+ *   col 6:  Менеджер
+ *   col 8:  Статус Новинки
+ *   col 10: "Затраты за 5 дней" → cols 11-15 = 5 дат → данные затрат
+ *   col 16: Остаток на ВБ ФБО
+ *   col 17: Остаток FBS Пушкино
+ *   col 18: Остаток FBS Смоленск
+ *   col 19: остаток комплектов
+ *   col 20: остаток, дни
+ *   col 21: дней до прихода
+ *   col 22: Запас дней до OOS
+ *   col 23: Маржа Опер.
+ *   col 25: ЧМД за пять дней, руб
+ *   col 26: дата
+ *   col 27: Затраты план
+ *   col 28: ДРР план
+ *   col 29: Выручка план
+ *   col 30: "Выручка Total за 5 дней" → cols 31-35 = 5 дат → выручка
+ *   col 36: "ДРР Total за 5 дней" → cols 37-41 = 5 дат → ДРР total
+ *   col 42: "ДРР рекл. за 5 дней" → cols 43-47 = 5 дат → ДРР рекл
+ *   col 48: "CTR за 5 дней" → cols 49-53 = 5 дат → CTR
+ *   col 54: "CR в корзину за 5 дней" → cols 55-59 = 5 дат → CR корзина
+ *   col 60: "CR в заказ за 5 дней" → cols 61-65 = 5 дат → CR заказ
+ *   col 66: Цена
+ *   col 67: "CPM за 5 дней" → cols 68-72 = 5 дат → CPM
+ *   col 73: "CPC за 5 дней" → cols 74-78 = 5 дат → CPC
+ *   col 79: "Доля рекламных заказов" → cols 80-84 = 5 дат → ad_order_share
+ *
+ * Парсим ДИНАМИЧЕСКИ — находим каждый блок по заголовку строки 1,
+ * затем берём cols [blockStart+1 .. blockStart+5] как даты/значения
+ */
+/**
+ * skuMap: Map<string WB_art, string MS_art> — передаётся из API route
+ * Если не передан — col 0 используется как sku_ms без конвертации
+ */
+export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>): ParseSkuReportResult {
   const wb = readWorkbook(buffer)
   const sheetName = wb.SheetNames.find(n => norm(n) === 'лист7') ?? 'Лист7'
   const rows = sheetToRows(wb, sheetName)
 
   if (rows.length < 3) throw new Error('Файл пустой или неправильный формат')
 
-  const groupRow = rows[0]  // строка 0: группы
-  const headerRow = rows[1] // строка 1: заголовки
+  const headerRow = rows[1]
   const dataRows = rows.slice(2)
 
-  // ── Определяем смещение pos ───────────────────────────────────────────────
-  let pos = 0
-  for (let ci = 27; ci < 45; ci++) {
-    if (norm(headerRow[ci]).includes('затраты план') ||
-        norm(headerRow[ci]).includes('spend plan')) {
-      pos = ci - 32
-      break
-    }
-  }
-  if (pos === 0) {
-    for (let ci = 27; ci < 45; ci++) {
-      if (norm(groupRow[ci]).includes('планирован')) {
-        pos = ci - 32
-        break
-      }
-    }
-  }
-
-  const POS_LATEST = pos < 0 ? 26 : 29
-
-  // ── Определяем 5 дат ─────────────────────────────────────────────────────
-  const dateCols: number[] = []
-  for (let ci = 10; ci < 40; ci++) {
-    const v = headerRow[ci]
-    if (typeof v === 'number' && v > 40000 && v < 60000) {
-      dateCols.push(ci)
-      if (dateCols.length === 5) break
-    }
-  }
-
-  if (dateCols.length === 0) throw new Error('Не найдены датированные колонки в Отчёте по SKU')
-
-  // Дата снапшота = первая (самая свежая) дата
-  const snapDateISO = excelToISO(headerRow[dateCols[0]] as number)
-
-  // ── Характеристики SKU (фиксированные колонки) ────────────────────────────
-  // По spec: Артикул МС ~ col 0-1, Менеджер, Дата полки, Статус новинки
-  // Ищем по заголовку
-  const shelfDateCol = headerRow.findIndex(h => norm(h).includes('дата появления') || norm(h).includes('дата полки') || norm(h).includes('появления на полке'))
-  const managerCol = headerRow.findIndex(h => norm(h) === 'менеджер')
-  const noveltyCol = headerRow.findIndex(h => norm(h).includes('статус новинки') || norm(h).includes('новинка'))
-  let skuMsCol = headerRow.findIndex(h =>
+  // ── Найти колонку SKU (sku_ms) ─────────────────────────────────────────────
+  let skuCol = headerRow.findIndex(h =>
+    norm(h) === 'sku' ||
     norm(h).includes('артикул мс') ||
-    norm(h) === 'артикул' ||
-    norm(h).includes('номенклатура') ||
     norm(h).includes('артикул склада') ||
-    norm(h) === 'sku'
+    norm(h) === 'артикул' ||
+    norm(h).includes('номенклатура')
   )
-  if (skuMsCol === -1) skuMsCol = 1 // fallback: второй столбец
+  if (skuCol === -1) skuCol = 0
 
-  // Колонки снапшота (по заголовкам)
-  const fboWbCol = headerRow.findIndex(h => norm(h).includes('остаток на вб фбо') || (norm(h).includes('остаток') && norm(h).includes('фбо')))
-  const fbsPushkinoCol = headerRow.findIndex(h => norm(h).includes('fbs пушкино') || norm(h).includes('фбс пушкино'))
-  const fbsSmolenskCol = headerRow.findIndex(h => norm(h).includes('fbs смоленск') || norm(h).includes('фбс смоленск'))
-  const kitsStockCol = headerRow.findIndex(h => norm(h).includes('остаток комплект'))
-  const stockDaysCol = headerRow.findIndex(h => norm(h).includes('остаток, дни') || (norm(h).includes('остаток') && norm(h).includes('дни')))
-  const daysArrivalCol = headerRow.findIndex(h => norm(h).includes('дней до прихода'))
-  const otsReserveCol = headerRow.findIndex(h => norm(h).includes('запас дней до oos') || norm(h).includes('запас дней'))
-  const marginRubCol = headerRow.findIndex(h => norm(h).includes('маржа опер') || (norm(h).includes('маржа') && norm(h).includes('руб')))
-  const chmd5dCol = headerRow.findIndex(h => norm(h).includes('чмд за пять') || norm(h).includes('чмд за 5'))
-  const spendPlanCol = 32 + pos
-  const drrPlanCol = headerRow.findIndex((h, i) => i > spendPlanCol && (norm(h).includes('дрр план') || norm(h).includes('drr план')))
-  const supplyDateCol = headerRow.findIndex(h => norm(h).includes('поставка план') || norm(h).includes('дата поставки'))
-  const supplyQtyCol = headerRow.findIndex(h => norm(h).includes('поступ') || norm(h).includes('поставка шт'))
-  const priceCol = headerRow.findIndex(h => norm(h) === 'цена')
+  // ── Фиксированные снапшот-колонки (ищем по заголовку) ─────────────────────
+  const fc = (q: string) => headerRow.findIndex(h => norm(h).includes(q))
+  const fcs = (qs: string[]) => {
+    for (const q of qs) {
+      const idx = fc(q)
+      if (idx !== -1) return idx
+    }
+    return -1
+  }
 
-  // Метрики по дням: для каждой из 5 дат → смещение от dateCols[i]
-  // По spec: строка метрик идёт последовательно в колонках
-  // Порядок метрик в строке (начиная с dateCols[0]):
-  // ad_spend, revenue, drr_total, drr_ad, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share, spp
-  // При этом каждая группа начинается с dateCols[i]
-  // Нужно найти относительные смещения для каждой метрики
-  // Ищем по заголовку строки 1 для первой даты
-  const firstDateCol = dateCols[0]
-  const metricOffsets: Record<string, number> = {}
+  const shelfDateCol = fcs(['дата появления', 'дата полки', 'появления на полке'])
+  const managerCol = fc('менеджер')
+  const noveltyCol = fcs(['статус новинки', 'статус  новинки'])
+  const fboWbCol = fcs(['остаток на вб фбо', 'остаток на вб'])
+  const fbsPushkinoCol = fcs(['остаток fbs пушкино', 'fbs пушкино', 'фбс пушкино'])
+  const fbsSmolenskCol = fcs(['остаток fbs смоленск', 'fbs смоленск', 'фбс смоленск'])
+  const kitsStockCol = fcs(['остаток комплект'])
+  const stockDaysCol = fcs(['остаток, дни', 'остаток,дни'])
+  const daysArrivalCol = fc('дней до прихода')
+  const otsReserveCol = fcs(['запас дней до out to stock', 'запас дней до oos', 'запас дней'])
+  const marginRubCol = fcs(['маржа опер', 'маржа, руб', 'маржа руб'])
+  const chmd5dCol = fcs(['чмд за пять', 'чмд за 5'])
+  const spendPlanCol = fcs(['затраты план', 'spend plan'])
+  const drrPlanCol = fcs(['дрр план', 'drr план'])
+  const revenPlanCol = fcs(['выручка план'])
+  const priceCol = fc('цена')
+  const supplyDateCol = fcs(['поставка план', 'дата поставки'])
+  const supplyQtyCol = fcs(['поступ', 'поставка шт'])
 
-  const metricSearchMap: Array<{ key: string; queries: string[] }> = [
-    { key: 'ad_spend', queries: ['затраты', 'расходы на рекламу'] },
-    { key: 'revenue', queries: ['выручка total', 'выручка тотал', 'выручка'] },
-    { key: 'drr_total', queries: ['дрр total', 'дрр тотал', 'дрр общий'] },
-    { key: 'drr_ad', queries: ['дрр рекламный', 'дрр рекл'] },
-    { key: 'ctr', queries: ['ctr'] },
-    { key: 'cr_cart', queries: ['cr в корзину', 'cr корзину'] },
-    { key: 'cr_order', queries: ['cr в заказ', 'cr заказ'] },
-    { key: 'cpm', queries: ['cpm'] },
-    { key: 'cpc', queries: ['cpc'] },
-    { key: 'ad_order_share', queries: ['доля рекламных заказов', 'доля рекл'] },
-    { key: 'spp', queries: ['спп', 'spp', 'цена после скидки'] },
-  ]
-
-  for (const { key, queries } of metricSearchMap) {
-    for (let offset = 0; offset < 20; offset++) {
-      const ci = firstDateCol + offset
-      if (ci >= headerRow.length) break
+  // ── Найти блоки метрик: (заголовок группы) → (5 дат в следующих cols) ─────
+  /**
+   * Блок: col с текстом → cols +1..+5 содержат числа-даты
+   * Возвращает: { dateOffsets: number[] } относительно начала блока
+   */
+  function findMetricBlock(queries: string[]): { headerCol: number; dateCols: number[] } | null {
+    for (let ci = 10; ci < headerRow.length - 5; ci++) {
       const h = norm(headerRow[ci])
       if (queries.some(q => h.includes(q))) {
-        metricOffsets[key] = offset
-        break
+        // собираем следующие 5 date-cols
+        const dateCols: number[] = []
+        for (let di = ci + 1; di < ci + 8 && di < headerRow.length; di++) {
+          const v = headerRow[di]
+          if (typeof v === 'number' && v > 40000 && v < 60000) {
+            dateCols.push(di)
+            if (dateCols.length === 5) break
+          }
+        }
+        if (dateCols.length > 0) return { headerCol: ci, dateCols }
       }
     }
+    return null
   }
 
-  // ── Парсим строки данных ──────────────────────────────────────────────────
+  const adSpendBlock = findMetricBlock(['затраты за 5', 'затраты рекл'])
+  const revenueBlock = findMetricBlock(['выручка total за 5', 'выручка тотал за 5', 'выручка за 5'])
+  const drrTotalBlock = findMetricBlock(['дрр total за 5', 'дрр тотал за 5', 'дрр total'])
+  const drrAdBlock = findMetricBlock(['дрр рекл', 'дрр рекламный'])
+  const ctrBlock = findMetricBlock(['ctr за 5', 'ctr'])
+  const crCartBlock = findMetricBlock(['cr в корзину', 'cr корзину'])
+  const crOrderBlock = findMetricBlock(['cr в заказ', 'cr заказ'])
+  const cpmBlock = findMetricBlock(['cpm за 5', 'cpm'])
+  const cpcBlock = findMetricBlock(['cpc за 5', 'cpc'])
+  const adShareBlock = findMetricBlock(['доля рекламных заказов', 'доля рекл'])
+
+  // Основные даты — берём из первого найденного блока (обычно выручка)
+  const primaryBlock = revenueBlock ?? adSpendBlock ?? ctrBlock
+  if (!primaryBlock) throw new Error('Не найдены датированные блоки метрик в Отчёте по SKU')
+
+  // Все уникальные даты из primaryBlock
+  const dateCols = primaryBlock.dateCols
+
+  // Дата снапшота = первая (самая свежая) дата
+  const snapDateISO = excelToISO(headerRow[dateCols[0]] as number) ?? ''
+
+  // ── Парсим строки ───────────────────────────────────────────────────────────
   const daily: SkuDailyRow[] = []
   const snapshots: SkuSnapshotRow[] = []
-  const skippedSkus: string[] = []
   let skipped = 0
+  const skippedSkus: string[] = []
 
   for (const row of dataRows) {
-    const skuMs = String(row[skuMsCol !== -1 ? skuMsCol : 0] ?? '').trim()
-    if (!skuMs || skuMs.toLowerCase() === 'итого') { skipped++; continue }
+    const rawSku = String(row[skuCol] ?? '').trim()
+    if (!rawSku || rawSku.toLowerCase() === 'итого' || rawSku === 'SKU') { skipped++; continue }
+    // Конвертируем WB→MS если передан маппинг
+    const skuMs = skuMap ? (skuMap.get(rawSku) ?? null) : rawSku
+    if (!skuMs) { skipped++; skippedSkus.push(rawSku); continue }
+
+    // Функция получения значения из блока по индексу даты (0..4)
+    const getFromBlock = (block: { dateCols: number[] } | null, di: number) => {
+      if (!block) return null
+      return toNum(row[block.dateCols[di]])
+    }
 
     // Дневные метрики (5 дат)
     for (let di = 0; di < dateCols.length; di++) {
-      const dateCol = dateCols[di]
-      const dateISO = excelToISO(headerRow[dateCol] as number)
+      const dateISO = excelToISO(headerRow[dateCols[di]] as number)
       if (!dateISO) continue
-
-      const getMetric = (key: string) => {
-        const offset = metricOffsets[key]
-        if (offset === undefined) return null
-        return toNum(row[dateCol + offset])
-      }
 
       daily.push({
         sku_ms: skuMs,
         metric_date: dateISO,
-        ad_spend: getMetric('ad_spend'),
-        revenue: getMetric('revenue'),
-        drr_total: getMetric('drr_total'),
-        drr_ad: getMetric('drr_ad'),
-        ctr: getMetric('ctr'),
-        cr_cart: getMetric('cr_cart'),
-        cr_order: getMetric('cr_order'),
-        cpm: getMetric('cpm'),
-        cpc: getMetric('cpc'),
-        ad_order_share: getMetric('ad_order_share'),
-        spp: getMetric('spp'),
+        ad_spend: getFromBlock(adSpendBlock, di),
+        revenue: getFromBlock(revenueBlock, di),
+        drr_total: getFromBlock(drrTotalBlock, di),
+        drr_ad: getFromBlock(drrAdBlock, di),
+        ctr: getFromBlock(ctrBlock, di),
+        cr_cart: getFromBlock(crCartBlock, di),
+        cr_order: getFromBlock(crOrderBlock, di),
+        cpm: getFromBlock(cpmBlock, di),
+        cpc: getFromBlock(cpcBlock, di),
+        ad_order_share: getFromBlock(adShareBlock, di),
+        spp: null,
         spend_plan: di === 0 && spendPlanCol >= 0 ? toNum(row[spendPlanCol]) : null,
         drr_plan: di === 0 && drrPlanCol >= 0 ? toNum(row[drrPlanCol]) : null,
       })
     }
 
-    // Снапшот (только одна запись на SKU)
+    // Снапшот
     const rawNovelty = noveltyCol >= 0 ? String(row[noveltyCol] ?? '').trim() : null
     snapshots.push({
       sku_ms: skuMs,

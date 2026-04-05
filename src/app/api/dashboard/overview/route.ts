@@ -71,7 +71,7 @@ export async function GET() {
     if (abcRows) {
       for (const r of abcRows) {
         abcByMs[r.sku_ms] = r
-        const cls = (r.abc_class ?? '').toUpperCase()
+        const cls = (r.abc_class ?? '').toUpperCase().charAt(0)
         if (cls === 'A') abcCounts.A++
         else if (cls === 'B') abcCounts.B++
         else if (cls === 'C') abcCounts.C++

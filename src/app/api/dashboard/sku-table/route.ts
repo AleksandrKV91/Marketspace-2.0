@@ -65,9 +65,10 @@ export async function GET(req: NextRequest) {
 
     let score = 0
     if (marginPct !== null) score += Math.min(30, Math.round(marginPct * 150))
-    if (abc?.abc_class === 'A') score += 30
-    else if (abc?.abc_class === 'B') score += 20
-    else if (abc?.abc_class === 'C') score += 10
+    const abcFirst = (abc?.abc_class ?? '').toUpperCase().charAt(0)
+    if (abcFirst === 'A') score += 30
+    else if (abcFirst === 'B') score += 20
+    else if (abcFirst === 'C') score += 10
     if (totalStock > 0) score += 20
     score = Math.min(100, Math.max(0, score))
     if (totalStock === 0) score = Math.max(0, score - 20)

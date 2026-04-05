@@ -20,6 +20,7 @@ export interface ChinaRow {
   order_qty: number | null
   order_sum_cost: number | null
   rating: number | null
+  lead_time_days: number | null
 }
 
 export interface ParseChinaResult {
@@ -50,10 +51,38 @@ const COL_QUERIES: Array<{ key: keyof ChinaRow; queries: string[] }> = [
   { key: 'rating', queries: ['рейтинг'] },
 ]
 
+/** Читает лог. плечо из вкладки «Зеленка» — колонка «Лог. плечо, дн», ключ — «Артикул склада» */
+function parseLeadTimes(wb: import('xlsx').WorkBook): Map<string, number> {
+  const sheetName = wb.SheetNames.find(n => norm(n).includes('зеленк'))
+  if (!sheetName) return new Map()
+  const rows = sheetToRows(wb, sheetName)
+  if (rows.length < 2) return new Map()
+
+  // Найти строку заголовка (первую с 'артикул')
+  let headerIdx = 0
+  for (let i = 0; i < Math.min(5, rows.length); i++) {
+    if (rows[i].some(h => norm(h).includes('артикул'))) { headerIdx = i; break }
+  }
+  const header = rows[headerIdx]
+  const skuCol = header.findIndex(h => norm(h).includes('артикул склада') || norm(h).includes('артикул'))
+  const leadCol = header.findIndex(h => norm(h).includes('лог') && norm(h).includes('плечо'))
+  if (skuCol === -1 || leadCol === -1) return new Map()
+
+  const result = new Map<string, number>()
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i]
+    const sku = String(row[skuCol] ?? '').trim()
+    const lt = toNum(row[leadCol])
+    if (sku && lt != null && lt > 0) result.set(sku, lt)
+  }
+  return result
+}
+
 export function parseChina(buffer: ArrayBuffer): ParseChinaResult {
   const wb = readWorkbook(buffer)
   const sheetName = wb.SheetNames.find(n => norm(n) === 'свод') ?? wb.SheetNames[0]
   const rows = sheetToRows(wb, sheetName)
+  const leadTimes = parseLeadTimes(wb)
 
   // Структура: строка 0 пустая, строка 1 пустая, строка 2 = заголовки, строка 3+ = данные
   const HEADER_ROW = 2
@@ -129,6 +158,7 @@ export function parseChina(buffer: ArrayBuffer): ParseChinaResult {
       order_qty: toNum(get('order_qty')),
       order_sum_cost: toNum(get('order_sum_cost')),
       rating: toNum(get('rating')),
+      lead_time_days: leadTimes.get(skuMs) ?? null,
     })
   }
 

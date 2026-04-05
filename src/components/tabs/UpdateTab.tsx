@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useCallback, useRef } from 'react'
-import { createBrowserClient } from '@/lib/supabase/client'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
 
@@ -49,21 +48,41 @@ async function uploadViaStorage(
   file: File,
   onProgress: (pct: number) => void
 ): Promise<{ ok: boolean; rows_parsed?: number; error?: string }> {
-  const supabase = createBrowserClient()
-
   // Уникальное имя файла чтобы избежать коллизий
   const ext = file.name.split('.').pop()
   const storageKey = `${type}/${Date.now()}.${ext}`
 
   onProgress(15)
 
-  // 1. Загрузить в Supabase Storage
-  const { error: storageErr } = await supabase.storage
-    .from('uploads')
-    .upload(storageKey, file, { upsert: true })
+  // 1. Получить signed upload URL через сервер (service role)
+  let signedUrl: string
+  try {
+    const presignRes = await fetch('/api/upload/presign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storageKey }),
+    })
+    const presignJson = await presignRes.json()
+    if (!presignRes.ok || !presignJson.signedUrl) {
+      return { ok: false, error: `Storage presign: ${presignJson.error ?? 'unknown'}` }
+    }
+    signedUrl = presignJson.signedUrl
+  } catch (e) {
+    return { ok: false, error: `Storage presign: ${String(e)}` }
+  }
 
-  if (storageErr) {
-    return { ok: false, error: `Storage: ${storageErr.message}` }
+  onProgress(25)
+
+  // 2. Загрузить файл напрямую по signed URL через fetch (PUT)
+  const uploadRes = await fetch(signedUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  })
+
+  if (!uploadRes.ok) {
+    const errText = await uploadRes.text().catch(() => uploadRes.statusText)
+    return { ok: false, error: `Storage upload: ${errText}` }
   }
 
   onProgress(50)
