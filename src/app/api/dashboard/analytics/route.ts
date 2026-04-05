@@ -124,15 +124,34 @@ export async function GET() {
     }
   }
 
-  const categories = Object.values(categoryData).map(c => ({
+  const by_category = Object.values(categoryData).map(c => ({
     category: c.category,
     sku_count: c.skus.length,
     revenue: c.revenue,
-    ad_spend: c.ad_spend,
-    drr: c.revenue > 0 ? c.ad_spend / c.revenue : 0,
+    delta_pct: 0,
     chmd: c.chmd,
-    avg_margin_rub: c.skus.length > 0 ? c.margin_rub_sum / c.skus.length : 0,
+    margin_pct: c.revenue > 0 ? c.chmd / c.revenue : 0,
+    drr: c.revenue > 0 ? c.ad_spend / c.revenue : 0,
+    stock_rub: 0,
   })).sort((a, b) => b.revenue - a.revenue)
 
-  return NextResponse.json({ categories, latest_date: latestDate })
+  const totalRevenue = by_category.reduce((s, c) => s + c.revenue, 0)
+  const totalChmd = by_category.reduce((s, c) => s + c.chmd, 0)
+  const totalAdSpend = Object.values(dailyAgg).reduce((s, d) => s + d.ad_spend, 0)
+
+  const summary = {
+    revenue: totalRevenue,
+    revenue_prev: 0,
+    chmd: totalChmd,
+    chmd_prev: 0,
+    margin_pct: totalRevenue > 0 ? totalChmd / totalRevenue : 0,
+    margin_prev: 0,
+    drr: totalRevenue > 0 ? totalAdSpend / totalRevenue : 0,
+    drr_prev: 0,
+  }
+
+  // Daily data from fact_stock_daily as proxy (no fact_sku_daily data)
+  const daily: Array<{ date: string; revenue: number; chmd: number; expenses: number; margin_pct: number; drr: number }> = []
+
+  return NextResponse.json({ summary, daily, by_category, by_manager: [], latest_date: latestDate })
 }

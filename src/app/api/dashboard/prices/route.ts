@@ -74,8 +74,32 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Сортировка по дате убывания
   changes.sort((a, b) => b.price_date.localeCompare(a.price_date))
 
-  return NextResponse.json({ changes: changes.slice(0, 1000) })
+  const price_changes = changes.slice(0, 1000).map(c => ({
+    sku: String(c.sku_wb ?? c.sku_ms ?? ''),
+    name: c.name ?? '',
+    manager: '',
+    date: c.price_date,
+    price_before: c.price_before ?? 0,
+    price_after: c.price_after ?? 0,
+    delta_pct: c.delta_pct ?? 0,
+    delta_ctr: undefined as number | undefined,
+    delta_cr_basket: undefined as number | undefined,
+    delta_cr_order: undefined as number | undefined,
+    cpo: undefined as number | undefined,
+    delta_cpm: undefined as number | undefined,
+    delta_cpc: undefined as number | undefined,
+  }))
+
+  const funnel = {
+    ctr: 0,
+    cr_basket: 0,
+    cr_order: 0,
+    cpc: 0,
+    cpm: 0,
+    ad_order_share: 0,
+  }
+
+  return NextResponse.json({ funnel, daily: [], price_changes })
 }

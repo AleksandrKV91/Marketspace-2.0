@@ -178,12 +178,37 @@ export async function GET() {
   const statusOrder = { oos: 0, critical: 1, warning: 2, ok: 3 }
   rows.sort((a, b) => statusOrder[a.status] - statusOrder[b.status])
 
-  const kpi = {
-    critical: rows.filter(r => r.status === 'critical').length,
-    warning: rows.filter(r => r.status === 'warning').length,
-    oos: rows.filter(r => r.status === 'oos').length,
-    to_order: rows.filter(r => r.calc_order > 0).length,
+  const criticalRows = rows.filter(r => r.status === 'critical' || r.status === 'oos')
+  const warningRows = rows.filter(r => r.status === 'warning')
+  const toOrderRows = rows.filter(r => r.calc_order > 0)
+  const avgDaysToOos = rows.reduce((s, r) => s + r.days_stock, 0) / Math.max(rows.length, 1)
+
+  const summary = {
+    critical_count: criticalRows.length,
+    warning_count: warningRows.length,
+    oos_with_demand: rows.filter(r => r.status === 'oos' && r.sales_31d > 0).length,
+    to_order_count: toOrderRows.reduce((s, r) => s + r.calc_order, 0),
+    order_sum_rub: 0,
+    avg_days_to_oos: Math.round(avgDaysToOos),
+    total_stock_rub: 0,
   }
 
-  return NextResponse.json({ rows, kpi, latest_date: maxDate })
+  const mappedRows = rows.map(r => ({
+    sku_wb: String(r.sku_wb),
+    name: r.name ?? '',
+    status: r.status === 'oos' ? 'critical' : r.status,
+    abc: r.abc_class ?? '—',
+    sales_31d: r.sales_31d,
+    oos_days: r.status === 'oos' ? 1 : 0,
+    trend: 0,
+    stock_qty: r.total_stock,
+    stock_days: r.days_stock,
+    lead_time: r.log_pleche,
+    calc_order: r.calc_order,
+    manager_order: 0,
+    delta_order: r.calc_order,
+    margin_pct: r.profitability ?? 0,
+  }))
+
+  return NextResponse.json({ summary, rows: mappedRows, latest_date: maxDate })
 }

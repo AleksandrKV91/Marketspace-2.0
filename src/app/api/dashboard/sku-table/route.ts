@@ -74,42 +74,43 @@ export async function GET(req: NextRequest) {
 
     const status = totalStock === 0 ? 'oos' : totalStock < 30 ? 'warning' : 'ok'
 
+    const marginPctVal = marginPct ?? 0
+    const oos_status: 'critical' | 'warning' | 'ok' | 'none' =
+      totalStock === 0 ? 'critical' : totalStock < 30 ? 'warning' : 'ok'
+    const margin_status: 'high' | 'medium' | 'low' =
+      marginPctVal > 0.20 ? 'high' : marginPctVal > 0.10 ? 'medium' : 'low'
+
+    const stockDays = skuSnap?.stock_days ?? null
+    const drr = null as number | null
+
     return {
-      sku_ms: sku.sku_ms,
-      sku_wb: wb,
-      name: sku.name,
-      brand: sku.brand,
-      supplier: sku.supplier,
-      subject_wb: sku.subject_wb,
-      category_wb: sku.category_wb,
-      manager: skuSnap?.manager ?? null,
-      fbo_wb: fbo,
-      fbs_pushkino: fbsPushkino,
-      fbs_smolensk: fbsSmolensk,
-      fbs: fbs,
-      total_stock: totalStock,
-      price: skuSnap?.price ?? stockSnap?.price ?? null,
-      margin_pct: marginPct,
-      margin_rub: skuSnap?.margin_rub ?? null,
-      supply_date: skuSnap?.supply_date ?? stockSnap?.supply_date ?? null,
-      supply_qty: skuSnap?.supply_qty ?? stockSnap?.supply_qty ?? null,
-      stock_days: skuSnap?.stock_days ?? null,
-      novelty_status: skuSnap?.novelty_status ?? null,
-      abc_class: abc?.abc_class ?? null,
-      profitability: abc?.profitability ?? null,
-      chmd: abc?.chmd ?? null,
-      revenue: abc?.revenue ?? null,
-      turnover_days: abc?.turnover_days ?? null,
-      score,
-      status,
-      revenue_5d: null as number | null,
-      ad_spend_5d: null as number | null,
-      drr_5d: null as number | null,
+      sku: String(wb || sku.sku_ms),
+      name: sku.name ?? '',
+      manager: skuSnap?.manager ?? '',
+      category: sku.category_wb ?? sku.subject_wb ?? '',
+      revenue: abc?.revenue ?? 0,
+      margin_pct: marginPctVal,
+      chmd: abc?.chmd ?? 0,
+      drr,
       ctr: null as number | null,
+      cr_basket: null as number | null,
       cr_order: null as number | null,
+      stock_qty: totalStock,
+      stock_days: stockDays ?? 0,
       cpo: null as number | null,
+      score,
+      oos_status,
+      margin_status,
+      novelty: skuSnap?.novelty_status === 'new',
     }
   })
 
-  return NextResponse.json({ rows })
+  const totalRevenue = rows.reduce((s, r) => s + r.revenue, 0)
+
+  return NextResponse.json({
+    rows,
+    total: rows.length,
+    selected_count: rows.length,
+    selected_revenue: totalRevenue,
+  })
 }

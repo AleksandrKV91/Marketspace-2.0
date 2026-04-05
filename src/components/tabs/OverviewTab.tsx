@@ -5,12 +5,10 @@ import { motion } from 'framer-motion'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
-import {
-  ShoppingBag, TrendingDown, Percent, AlertTriangle, Package, BarChart2, Zap, ChevronRight
-} from 'lucide-react'
+import { Zap, ChevronRight } from 'lucide-react'
 import { GlassCard } from '@/components/ui/GlassCard'
-import { StatCard } from '@/components/ui/StatCard'
 import { AlertBox } from '@/components/ui/AlertBox'
+import { KPIBar } from '@/components/ui/KPIBar'
 
 interface OverviewData {
   kpi: {
@@ -74,23 +72,6 @@ function ChartTip({ active, payload, label }: ChartTipProps) {
   )
 }
 
-function SkeletonCards({ count }: { count: number }) {
-  const items = Array.from({ length: count })
-  const cols = count === 3 ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2 md:grid-cols-4'
-  return (
-    <div className={`grid gap-3 ${cols}`}>
-      {items.map((_, i) => (
-        <GlassCard key={i}>
-          <div className="space-y-3">
-            <div className="skeleton h-9 w-9 rounded-full" />
-            <div className="skeleton h-4 w-20" />
-            <div className="skeleton h-7 w-28" />
-          </div>
-        </GlassCard>
-      ))}
-    </div>
-  )
-}
 
 export default function OverviewTab() {
   const [data, setData] = useState<OverviewData | null>(null)
@@ -106,8 +87,14 @@ export default function OverviewTab() {
 
   if (loading) return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
-      <SkeletonCards count={3} />
-      <SkeletonCards count={3} />
+      <KPIBar loading items={[
+        { label: 'Выручка', value: '' },
+        { label: 'ЧМД', value: '' },
+        { label: 'Маржа %', value: '' },
+        { label: 'ДРР', value: '' },
+        { label: 'SKU в риске', value: '' },
+        { label: 'Потери', value: '' },
+      ]} />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <GlassCard><div className="skeleton h-56 w-full" /></GlassCard>
         <GlassCard><div className="skeleton h-56 w-full" /></GlassCard>
@@ -140,57 +127,14 @@ export default function OverviewTab() {
   return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
 
-      <motion.div variants={stagger} initial="hidden" animate="show"
-        className="grid grid-cols-1 sm:grid-cols-3 gap-3"
-      >
-        <motion.div variants={fadeUp}>
-          <StatCard label="Выручка (период)" value={fmt(data.kpi.revenue)} icon={<ShoppingBag size={16} />} />
-        </motion.div>
-        <motion.div variants={fadeUp}>
-          <StatCard label="ЧМД (период)" value={fmt(data.kpi.chmd)} icon={<TrendingDown size={16} />} iconColor="var(--success)" />
-        </motion.div>
-        <motion.div variants={fadeUp}>
-          <StatCard
-            label="Маржа %"
-            value={fmtPct(data.kpi.avg_margin_pct)}
-            icon={<Percent size={16} />}
-            accent={data.kpi.avg_margin_pct < 0.10}
-            iconColor={data.kpi.avg_margin_pct < 0.10 ? 'var(--danger)' : 'var(--success)'}
-          />
-        </motion.div>
-      </motion.div>
-
-      <motion.div variants={stagger} initial="hidden" animate="show"
-        className="grid grid-cols-1 sm:grid-cols-3 gap-3"
-      >
-        <motion.div variants={fadeUp}>
-          <StatCard
-            label="ДРР (период)"
-            value={drr > 0 ? (drr * 100).toFixed(1) + '%' : '—'}
-            icon={<BarChart2 size={16} />}
-            accent={isHighDrr}
-            iconColor="var(--info)"
-          />
-        </motion.div>
-        <motion.div variants={fadeUp}>
-          <StatCard
-            label="SKU в риске (OOS)"
-            value={String(data.kpi.oos_count)}
-            icon={<AlertTriangle size={16} />}
-            accent={data.kpi.oos_count > 0}
-            iconColor="var(--danger)"
-          />
-        </motion.div>
-        <motion.div variants={fadeUp}>
-          <StatCard
-            label="Потери (OOS)"
-            value={data.kpi.lost_revenue ? fmt(data.kpi.lost_revenue) : '—'}
-            icon={<Package size={16} />}
-            accent={(data.kpi.lost_revenue ?? 0) > 0}
-            iconColor="var(--danger)"
-          />
-        </motion.div>
-      </motion.div>
+      <KPIBar items={[
+        { label: 'Выручка', value: fmt(data.kpi.revenue) },
+        { label: 'ЧМД', value: fmt(data.kpi.chmd) },
+        { label: 'Маржа %', value: fmtPct(data.kpi.avg_margin_pct) },
+        { label: 'ДРР', value: drr > 0 ? (drr * 100).toFixed(1) + '%' : '—', danger: isHighDrr },
+        { label: 'SKU в риске', value: String(data.kpi.oos_count), danger: data.kpi.oos_count > 0 },
+        { label: 'Потери', value: data.kpi.lost_revenue ? fmt(data.kpi.lost_revenue) : '—', danger: (data.kpi.lost_revenue ?? 0) > 0 },
+      ]} />
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <GlassCard padding="lg" className="xl:col-span-2">
