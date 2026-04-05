@@ -2,25 +2,22 @@
 
 /* ── Liquid Glass Design System 2026 ────────────────────────── */
 :root {
-  /* Backgrounds */
-  --bg: #EEF2F7;
-  --bg-secondary: #E4EAF2;
-  --bg-mesh-1: rgba(99, 149, 255, 0.12);
-  --bg-mesh-2: rgba(255, 59, 92, 0.08);
-  --bg-mesh-3: rgba(100, 220, 180, 0.07);
+  /* Backgrounds — насыщенный цветной фон чтобы стекло было видно */
+  --bg: #D8E4F0;
+  --bg-secondary: #C8D8EC;
 
-  /* Glass surfaces */
-  --surface: rgba(255, 255, 255, 0.62);
-  --surface-solid: rgba(255, 255, 255, 0.92);
-  --surface-hover: rgba(255, 255, 255, 0.78);
-  --surface-deep: rgba(255, 255, 255, 0.40);
+  /* Glass surfaces — более прозрачные чтобы фон просвечивал */
+  --surface: rgba(255, 255, 255, 0.52);
+  --surface-solid: rgba(255, 255, 255, 0.82);
+  --surface-hover: rgba(255, 255, 255, 0.70);
+  --surface-deep: rgba(255, 255, 255, 0.28);
 
   /* Specular & borders */
-  --border: rgba(255, 255, 255, 0.55);
-  --border-subtle: rgba(255, 255, 255, 0.30);
-  --border-outer: rgba(0, 0, 0, 0.07);
-  --specular: rgba(255, 255, 255, 0.90);
-  --specular-dim: rgba(255, 255, 255, 0.45);
+  --border: rgba(255, 255, 255, 0.65);
+  --border-subtle: rgba(0, 0, 0, 0.10);
+  --border-outer: rgba(0, 0, 0, 0.08);
+  --specular: rgba(255, 255, 255, 0.95);
+  --specular-dim: rgba(255, 255, 255, 0.50);
 
   /* Text */
   --text: #0F172A;
@@ -35,35 +32,34 @@
 
   /* Semantic */
   --success: #16A34A;
-  --success-bg: rgba(22, 163, 74, 0.10);
+  --success-bg: rgba(22, 163, 74, 0.12);
   --warning: #D97706;
-  --warning-bg: rgba(217, 119, 6, 0.10);
+  --warning-bg: rgba(217, 119, 6, 0.12);
   --info: #2563EB;
-  --info-bg: rgba(37, 99, 235, 0.10);
+  --info-bg: rgba(37, 99, 235, 0.12);
   --danger: #DC2626;
-  --danger-bg: rgba(220, 38, 38, 0.10);
+  --danger-bg: rgba(220, 38, 38, 0.12);
 
-  /* Shadows — layered like real glass */
-  --shadow-sm:    0 2px 8px rgba(0,0,0,0.06), 0 0 0 1px var(--border-outer);
-  --shadow-md:    0 8px 24px rgba(0,0,0,0.09), 0 2px 6px rgba(0,0,0,0.05), 0 0 0 1px var(--border-outer);
-  --shadow-lg:    0 20px 50px rgba(0,0,0,0.13), 0 6px 16px rgba(0,0,0,0.07), 0 0 0 1px var(--border-outer);
+  /* Shadows */
+  --shadow-sm:    0 2px 8px rgba(0,0,0,0.08), 0 0 0 1px var(--border-outer);
+  --shadow-md:    0 8px 24px rgba(0,0,0,0.10), 0 2px 6px rgba(0,0,0,0.06), 0 0 0 1px var(--border-outer);
+  --shadow-lg:    0 20px 50px rgba(0,0,0,0.14), 0 6px 16px rgba(0,0,0,0.08), 0 0 0 1px var(--border-outer);
   --shadow-float: 0 8px 32px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.06), inset 0 1px 0 var(--specular);
-  --shadow-lift:  0 16px 48px rgba(0,0,0,0.15), 0 4px 12px rgba(0,0,0,0.08), inset 0 1px 0 var(--specular);
-  --shadow-inset: inset 0 1px 0 rgba(255,255,255,0.7), inset 0 -1px 0 rgba(0,0,0,0.04);
+  --shadow-lift:  0 16px 48px rgba(0,0,0,0.16), 0 4px 12px rgba(0,0,0,0.09), inset 0 1px 0 var(--specular);
 
-  /* Radius — squircle approximation */
-  --radius:     14px;
-  --radius-lg:  18px;
-  --radius-xl:  22px;
-  --radius-2xl: 28px;
-  --radius-icon: 27%;   /* squircle: 27% of size */
+  /* Radius — немного меньше чем раньше */
+  --radius:     10px;
+  --radius-lg:  14px;
+  --radius-xl:  16px;
+  --radius-2xl: 20px;
+  --radius-icon: 24%;
 
   /* Blur */
   --blur:    blur(24px);
   --blur-sm: blur(14px);
   --blur-xs: blur(8px);
 
-  /* Spring transition */
+  /* Spring */
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -72,20 +68,17 @@
 [data-theme="dark"] {
   --bg: #0C1220;
   --bg-secondary: #111827;
-  --bg-mesh-1: rgba(99, 149, 255, 0.07);
-  --bg-mesh-2: rgba(255, 59, 92, 0.05);
-  --bg-mesh-3: rgba(100, 220, 180, 0.04);
 
-  --surface: rgba(255, 255, 255, 0.06);
-  --surface-solid: rgba(255, 255, 255, 0.09);
-  --surface-hover: rgba(255, 255, 255, 0.11);
-  --surface-deep: rgba(255, 255, 255, 0.03);
+  --surface: rgba(255, 255, 255, 0.07);
+  --surface-solid: rgba(255, 255, 255, 0.10);
+  --surface-hover: rgba(255, 255, 255, 0.13);
+  --surface-deep: rgba(255, 255, 255, 0.04);
 
-  --border: rgba(255, 255, 255, 0.14);
-  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border: rgba(255, 255, 255, 0.16);
+  --border-subtle: rgba(255, 255, 255, 0.09);
   --border-outer: rgba(255, 255, 255, 0.06);
-  --specular: rgba(255, 255, 255, 0.18);
-  --specular-dim: rgba(255, 255, 255, 0.08);
+  --specular: rgba(255, 255, 255, 0.20);
+  --specular-dim: rgba(255, 255, 255, 0.09);
 
   --text: #E2E8F0;
   --text-muted: #94A3B8;
@@ -95,26 +88,23 @@
   --accent-glass: rgba(255, 59, 92, 0.12);
 
   --success: #22C55E;
-  --success-bg: rgba(34, 197, 94, 0.12);
+  --success-bg: rgba(34, 197, 94, 0.13);
   --warning: #F59E0B;
-  --warning-bg: rgba(245, 158, 11, 0.12);
+  --warning-bg: rgba(245, 158, 11, 0.13);
   --info: #3B82F6;
-  --info-bg: rgba(59, 130, 246, 0.12);
+  --info-bg: rgba(59, 130, 246, 0.13);
   --danger: #EF4444;
-  --danger-bg: rgba(239, 68, 68, 0.12);
+  --danger-bg: rgba(239, 68, 68, 0.13);
 
-  --shadow-sm:    0 2px 8px rgba(0,0,0,0.4), 0 0 0 1px var(--border-outer);
-  --shadow-md:    0 8px 24px rgba(0,0,0,0.5), 0 2px 6px rgba(0,0,0,0.3), 0 0 0 1px var(--border-outer);
-  --shadow-lg:    0 20px 50px rgba(0,0,0,0.65), 0 6px 16px rgba(0,0,0,0.4), 0 0 0 1px var(--border-outer);
-  --shadow-float: 0 8px 32px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.3), inset 0 1px 0 var(--specular);
-  --shadow-lift:  0 16px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.4), inset 0 1px 0 var(--specular);
-  --shadow-inset: inset 0 1px 0 rgba(255,255,255,0.10), inset 0 -1px 0 rgba(0,0,0,0.2);
+  --shadow-sm:    0 2px 8px rgba(0,0,0,0.45), 0 0 0 1px var(--border-outer);
+  --shadow-md:    0 8px 24px rgba(0,0,0,0.55), 0 2px 6px rgba(0,0,0,0.35), 0 0 0 1px var(--border-outer);
+  --shadow-lg:    0 20px 50px rgba(0,0,0,0.70), 0 6px 16px rgba(0,0,0,0.45), 0 0 0 1px var(--border-outer);
+  --shadow-float: 0 8px 32px rgba(0,0,0,0.50), 0 2px 8px rgba(0,0,0,0.35), inset 0 1px 0 var(--specular);
+  --shadow-lift:  0 16px 48px rgba(0,0,0,0.65), 0 4px 12px rgba(0,0,0,0.45), inset 0 1px 0 var(--specular);
 }
 
 /* ── Base ───────────────────────────────────────────────────── */
-html {
-  font-family: 'Plus Jakarta Sans', 'Lato', sans-serif;
-}
+html { font-family: 'Plus Jakarta Sans', 'Lato', sans-serif; }
 
 body {
   background: var(--bg);
@@ -127,7 +117,7 @@ body {
   overflow-x: hidden;
 }
 
-/* ── Ambient mesh background ────────────────────────────────── */
+/* ── Ambient mesh — цветные пятна за стеклом ────────────────── */
 body::before,
 body::after {
   content: '';
@@ -135,30 +125,27 @@ body::after {
   border-radius: 50%;
   pointer-events: none;
   z-index: 0;
-  filter: blur(80px);
+  filter: blur(70px);
 }
 body::before {
-  top: -15%;
+  top: -10%;
   right: -5%;
   width: 55%;
   height: 55%;
-  background: radial-gradient(ellipse, var(--bg-mesh-1) 0%, transparent 65%);
+  background: radial-gradient(ellipse, rgba(99,149,255,0.22) 0%, transparent 65%);
 }
 body::after {
-  bottom: -20%;
-  left: -8%;
+  bottom: -15%;
+  left: -5%;
   width: 50%;
   height: 50%;
-  background: radial-gradient(ellipse, var(--bg-mesh-2) 0%, transparent 65%);
+  background: radial-gradient(ellipse, rgba(255,59,92,0.14) 0%, transparent 65%);
 }
 
 /* ── Scrollbar ──────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 999px;
-}
+::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 999px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-subtle); }
 
 /* ── Core Liquid Glass card ─────────────────────────────────── */
@@ -173,19 +160,15 @@ body::after {
   isolation: isolate;
 }
 
-/* Specular highlight — light point top-right */
+/* Specular highlight top-right */
 .glass::after {
   content: '';
   position: absolute;
   top: 0;
   right: 0;
-  width: 60%;
-  height: 50%;
-  background: radial-gradient(
-    ellipse at 85% 15%,
-    var(--specular-dim) 0%,
-    transparent 65%
-  );
+  width: 55%;
+  height: 45%;
+  background: radial-gradient(ellipse at 80% 15%, var(--specular-dim) 0%, transparent 60%);
   border-radius: inherit;
   pointer-events: none;
   z-index: 1;
@@ -207,19 +190,15 @@ body::after {
   position: absolute;
   top: 0;
   right: 0;
-  width: 55%;
-  height: 45%;
-  background: radial-gradient(
-    ellipse at 80% 15%,
-    rgba(255,255,255,0.55) 0%,
-    transparent 60%
-  );
+  width: 50%;
+  height: 40%;
+  background: radial-gradient(ellipse at 80% 15%, rgba(255,255,255,0.55) 0%, transparent 60%);
   border-radius: inherit;
   pointer-events: none;
   z-index: 1;
 }
 
-/* Hover lift — spring feel */
+/* Hover lift */
 .glass-hover {
   transition:
     transform 0.45s var(--spring),
@@ -227,12 +206,12 @@ body::after {
   cursor: pointer;
 }
 .glass-hover:hover {
-  transform: translateY(-5px) scale(1.005);
+  transform: translateY(-4px) scale(1.004);
   box-shadow: var(--shadow-lift);
 }
 .glass-hover:active {
-  transform: translateY(-2px) scale(0.998);
-  transition-duration: 0.12s;
+  transform: translateY(-1px) scale(0.998);
+  transition-duration: 0.10s;
 }
 
 /* ── Squircle icon container ────────────────────────────────── */
@@ -241,61 +220,67 @@ body::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 27%;
+  border-radius: 24%;
   backdrop-filter: var(--blur-sm);
   -webkit-backdrop-filter: var(--blur-sm);
   box-shadow:
-    0 8px 24px rgba(0,0,0,0.15),
-    inset 0 1px 0 rgba(255,255,255,0.6),
-    inset 0 -1px 0 rgba(0,0,0,0.06);
+    0 6px 20px rgba(0,0,0,0.18),
+    inset 0 1px 0 rgba(255,255,255,0.65),
+    inset 0 -1px 0 rgba(0,0,0,0.08);
   overflow: hidden;
   isolation: isolate;
   flex-shrink: 0;
 }
 
-/* Specular in top-right of icon */
 .icon-squircle::after {
   content: '';
   position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 40%;
-  height: 40%;
-  background: radial-gradient(circle, rgba(255,255,255,0.75) 0%, transparent 70%);
+  top: 2px;
+  right: 2px;
+  width: 38%;
+  height: 38%;
+  background: radial-gradient(circle, rgba(255,255,255,0.70) 0%, transparent 70%);
   pointer-events: none;
   z-index: 2;
 }
 
-/* ── Top navigation — Liquid Glass ─────────────────────────── */
+.icon-squircle svg {
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.18));
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Top navigation — Liquid Glass, СЛИВАЕТСЯ С ФОНОМ ──────── */
 .top-nav {
-  background: var(--surface-solid);
+  /* Такой же фон как body — без отдельного цвета */
+  background: rgba(216, 228, 240, 0.75);
   border-bottom: 1px solid var(--border);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  box-shadow: 0 1px 0 var(--border-outer), 0 4px 20px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.4), 0 4px 20px rgba(0,0,0,0.04);
   position: relative;
 }
 
-/* subtle top specular line on nav */
+[data-theme="dark"] .top-nav {
+  background: rgba(12, 18, 32, 0.80);
+}
+
+/* Specular line at top of nav */
 .top-nav::before {
   content: '';
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  top: 0; left: 0; right: 0;
   height: 1px;
   background: linear-gradient(90deg, transparent 0%, var(--specular) 30%, var(--specular) 70%, transparent 100%);
-  opacity: 0.7;
+  opacity: 0.6;
 }
 
-/* ── Nav pill (active tab indicator) ───────────────────────── */
+/* ── Nav pill (active indicator) ────────────────────────────── */
 .nav-pill {
-  background: var(--surface);
+  background: var(--surface-solid);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow:
-    0 2px 8px rgba(0,0,0,0.07),
-    inset 0 1px 0 rgba(255,255,255,0.7);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.8);
   backdrop-filter: var(--blur-xs);
   -webkit-backdrop-filter: var(--blur-xs);
 }
@@ -313,13 +298,10 @@ body::after {
   isolation: isolate;
 }
 
-/* Left accent bar */
 .alert-card::before {
   content: '';
   position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
+  left: 0; top: 0; bottom: 0;
   width: 3px;
   border-radius: 0 2px 2px 0;
   z-index: 2;
@@ -329,31 +311,26 @@ body::after {
 .alert-info::before     { background: var(--info); }
 .alert-success::before  { background: var(--success); }
 
-/* Specular in alert */
 .alert-card::after {
   content: '';
   position: absolute;
-  top: 0;
-  right: 0;
-  width: 40%;
-  height: 100%;
-  background: radial-gradient(ellipse at 80% 15%, rgba(255,255,255,0.25) 0%, transparent 60%);
+  top: 0; right: 0;
+  width: 40%; height: 100%;
+  background: radial-gradient(ellipse at 80% 15%, rgba(255,255,255,0.22) 0%, transparent 60%);
   pointer-events: none;
   z-index: 1;
 }
 
 .alert-card.cursor-pointer {
-  transition:
-    transform 0.4s var(--spring),
-    box-shadow 0.3s var(--ease-out);
+  transition: transform 0.4s var(--spring), box-shadow 0.3s var(--ease-out);
 }
 .alert-card.cursor-pointer:hover {
-  transform: translateY(-3px) scale(1.005);
+  transform: translateY(-2px) scale(1.004);
   box-shadow: var(--shadow-md);
 }
 .alert-card.cursor-pointer:active {
-  transform: translateY(-1px);
-  transition-duration: 0.1s;
+  transform: translateY(0) scale(0.997);
+  transition-duration: 0.10s;
 }
 
 /* ── Skeleton shimmer ───────────────────────────────────────── */
@@ -364,28 +341,20 @@ body::after {
 .skeleton {
   background: linear-gradient(
     90deg,
-    var(--surface-deep) 25%,
-    var(--surface-hover) 50%,
-    var(--surface-deep) 75%
+    rgba(255,255,255,0.25) 25%,
+    rgba(255,255,255,0.55) 50%,
+    rgba(255,255,255,0.25) 75%
   );
   background-size: 200% 100%;
   animation: shimmer 1.8s infinite;
-  border-radius: 10px;
+  border-radius: 8px;
 }
 
-/* ── Score gradient bar ─────────────────────────────────────── */
+/* ── Score bar ──────────────────────────────────────────────── */
 .score-bar {
   height: 3px;
   border-radius: 999px;
   background: linear-gradient(90deg, #EF4444 0%, #F59E0B 50%, #22C55E 100%);
-  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
-}
-
-/* ── Focus ring for interactive elements ────────────────────── */
-button:focus-visible,
-[role="button"]:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 /* ── Liquid glass button ────────────────────────────────────── */
@@ -396,21 +365,16 @@ button:focus-visible,
   box-shadow: var(--shadow-sm);
   backdrop-filter: var(--blur-xs);
   -webkit-backdrop-filter: var(--blur-xs);
-  transition:
-    transform 0.4s var(--spring),
-    box-shadow 0.3s var(--ease-out),
-    background 0.2s;
+  transition: transform 0.4s var(--spring), box-shadow 0.3s var(--ease-out), background 0.2s;
   position: relative;
   overflow: hidden;
 }
 .btn-glass::after {
   content: '';
   position: absolute;
-  top: 0;
-  right: 0;
-  width: 50%;
-  height: 50%;
-  background: radial-gradient(circle at 75% 20%, rgba(255,255,255,0.5) 0%, transparent 65%);
+  top: 0; right: 0;
+  width: 50%; height: 50%;
+  background: radial-gradient(circle at 75% 20%, rgba(255,255,255,0.45) 0%, transparent 65%);
   pointer-events: none;
 }
 .btn-glass:hover {
@@ -419,11 +383,11 @@ button:focus-visible,
   background: var(--surface-hover);
 }
 .btn-glass:active {
-  transform: translateY(0px) scale(0.97);
-  transition-duration: 0.1s;
+  transform: scale(0.97);
+  transition-duration: 0.10s;
 }
 
-/* ── Gradient icon backgrounds ──────────────────────────────── */
+/* ── Icon gradients ─────────────────────────────────────────── */
 .icon-gradient-red    { background: linear-gradient(135deg, #FF6B81 0%, #FF3B5C 60%, #C0142E 100%); }
 .icon-gradient-blue   { background: linear-gradient(135deg, #60A5FA 0%, #3B82F6 60%, #1D4ED8 100%); }
 .icon-gradient-green  { background: linear-gradient(135deg, #4ADE80 0%, #22C55E 60%, #15803D 100%); }
@@ -433,35 +397,16 @@ button:focus-visible,
 .icon-gradient-pink   { background: linear-gradient(135deg, #F9A8D4 0%, #EC4899 60%, #9D174D 100%); }
 .icon-gradient-indigo { background: linear-gradient(135deg, #818CF8 0%, #6366F1 60%, #3730A3 100%); }
 
-/* Dark theme: slightly desaturated gradients */
-[data-theme="dark"] .icon-gradient-red    { background: linear-gradient(135deg, rgba(255,107,129,0.9) 0%, rgba(220,38,38,0.9) 60%, rgba(153,27,27,0.9) 100%); }
-[data-theme="dark"] .icon-gradient-blue   { background: linear-gradient(135deg, rgba(96,165,250,0.9) 0%, rgba(59,130,246,0.9) 60%, rgba(29,78,216,0.9) 100%); }
-[data-theme="dark"] .icon-gradient-green  { background: linear-gradient(135deg, rgba(74,222,128,0.9) 0%, rgba(34,197,94,0.9) 60%, rgba(21,128,61,0.9) 100%); }
-[data-theme="dark"] .icon-gradient-amber  { background: linear-gradient(135deg, rgba(252,211,77,0.9) 0%, rgba(245,158,11,0.9) 60%, rgba(180,83,9,0.9) 100%); }
-
-/* ── Duotone icon inside squircle ───────────────────────────── */
-.icon-squircle svg {
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.2));
-  position: relative;
-  z-index: 1;
+/* ── Focus ring ─────────────────────────────────────────────── */
+button:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-/* ── Spring pop keyframe (for entrance) ─────────────────────── */
+/* ── Spring entrance ────────────────────────────────────────── */
 @keyframes springIn {
-  0%   { opacity: 0; transform: scale(0.88) translateY(10px); }
-  60%  { opacity: 1; transform: scale(1.03) translateY(-2px); }
+  0%   { opacity: 0; transform: scale(0.90) translateY(8px); }
+  60%  { opacity: 1; transform: scale(1.02) translateY(-1px); }
   100% { opacity: 1; transform: scale(1) translateY(0); }
 }
-.spring-in {
-  animation: springIn 0.5s var(--ease-out) both;
-}
-
-/* ── Stagger children via CSS custom props ──────────────────── */
-.stagger-children > *:nth-child(1) { animation-delay: 0.00s; }
-.stagger-children > *:nth-child(2) { animation-delay: 0.06s; }
-.stagger-children > *:nth-child(3) { animation-delay: 0.12s; }
-.stagger-children > *:nth-child(4) { animation-delay: 0.18s; }
-.stagger-children > *:nth-child(5) { animation-delay: 0.24s; }
-.stagger-children > *:nth-child(6) { animation-delay: 0.30s; }
-.stagger-children > *:nth-child(7) { animation-delay: 0.36s; }
-.stagger-children > *:nth-child(8) { animation-delay: 0.42s; }

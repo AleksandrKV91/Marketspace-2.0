@@ -101,12 +101,38 @@ export default function OrderTab() {
         ))}
       </motion.div>
 
-      {/* Alert row */}
-      <div className="flex gap-3 flex-wrap">
-        <AlertBox icon="🚨" title="Критический запас" count={s.critical_count}  severity="critical" description="Запас < 50% лог. плеча" />
-        <AlertBox icon="⚠️" title="Требует внимания"  count={s.warning_count}   severity="warning"  description="Запас < лог. плеча" />
-        <AlertBox icon="📭" title="OOS с продажами"   count={s.oos_with_demand} severity="critical" description="Нет стока, есть спрос" />
-        <AlertBox icon="📦" title="К заказу"          count={s.to_order_count}  severity="info"     description={`Сумма: ${fmt(s.order_sum_rub)} ₽`} />
+      {/* Alert row — единый glass-блок по центру */}
+      <div className="flex justify-center">
+        <div
+          className="glass overflow-hidden inline-flex"
+          style={{ borderRadius: 'var(--radius-xl)' }}
+        >
+          {[
+            { icon: '🚨', title: 'Критический запас', count: s.critical_count,  severity: 'critical' as const, description: 'Запас < 50% лог. плеча' },
+            { icon: '⚠️', title: 'Требует внимания',  count: s.warning_count,   severity: 'warning'  as const, description: 'Запас < лог. плеча' },
+            { icon: '📭', title: 'OOS с продажами',   count: s.oos_with_demand, severity: 'critical' as const, description: 'Нет стока, есть спрос' },
+            { icon: '📦', title: 'К заказу',          count: s.to_order_count,  severity: 'info'     as const, description: 'Сумма: ' + fmt(s.order_sum_rub) + ' ₽' },
+          ].map((item, idx, arr) => {
+            const colors: Record<string, string> = { critical: 'var(--accent)', warning: 'var(--warning)', info: 'var(--info)', success: 'var(--success)' }
+            return (
+              <div
+                key={idx}
+                className="px-6 py-4 text-center"
+                style={{
+                  borderRight: idx < arr.length - 1 ? '1px solid var(--border-subtle)' : undefined,
+                  minWidth: 140,
+                }}
+              >
+                <div className="flex items-center justify-center gap-1.5 mb-1">
+                  <span className="text-sm">{item.icon}</span>
+                  <p className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>{item.title}</p>
+                </div>
+                <p className="text-2xl font-black" style={{ color: colors[item.severity], letterSpacing: '-0.03em' }}>{item.count}</p>
+                <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-subtle)' }}>{item.description}</p>
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       {/* Main table */}

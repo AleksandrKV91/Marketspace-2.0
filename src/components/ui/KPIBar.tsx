@@ -23,10 +23,7 @@ export function KPIBar({ items, loading }: KPIBarProps) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ type: 'spring', stiffness: 400, damping: 28 }}
       className="glass overflow-hidden"
-      style={{
-        borderRadius: 'var(--radius-xl)',
-        boxShadow: 'var(--shadow-float), inset 0 1px 0 var(--specular)',
-      }}
+      style={{ borderRadius: 'var(--radius-xl)' }}
     >
       <div
         className="grid"
@@ -38,55 +35,59 @@ export function KPIBar({ items, loading }: KPIBarProps) {
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ type: 'spring', stiffness: 400, damping: 28, delay: idx * 0.05 }}
-            className="relative px-5 py-4 space-y-1"
+            className="relative px-5 py-4"
             style={{
-              borderRight: idx < items.length - 1 ? '1px solid var(--border-subtle)' : undefined,
+              /* Видимый разделитель — тёмная линия */
+              borderRight: idx < items.length - 1
+                ? '1px solid var(--border-subtle)'
+                : undefined,
               background: item.danger
-                ? 'linear-gradient(135deg, rgba(220,38,38,0.07) 0%, rgba(220,38,38,0.02) 100%)'
+                ? 'linear-gradient(135deg, rgba(220,38,38,0.08) 0%, rgba(220,38,38,0.03) 100%)'
                 : undefined,
             }}
           >
-            {/* Per-cell specular top-right */}
+            {/* Specular per-cell */}
             <div
               className="absolute top-0 right-0 w-1/2 h-full pointer-events-none"
-              style={{
-                background: 'radial-gradient(ellipse at 85% 10%, rgba(255,255,255,0.18) 0%, transparent 60%)',
-              }}
+              style={{ background: 'radial-gradient(ellipse at 85% 10%, rgba(255,255,255,0.20) 0%, transparent 60%)' }}
             />
 
             {loading ? (
-              <>
+              <div className="space-y-2">
                 <div className="skeleton h-2.5 w-16 rounded" />
-                <div className="skeleton h-6 w-24 rounded mt-1" />
-              </>
+                <div className="skeleton h-6 w-24 rounded" />
+                <div className="skeleton h-2 w-14 rounded" />
+              </div>
             ) : (
-              <>
+              <div className="space-y-0.5 relative z-10">
                 <p
-                  className="text-[10px] uppercase tracking-widest font-semibold relative z-10"
-                  style={{ color: item.danger ? 'rgba(220,38,38,0.65)' : 'var(--text-subtle)' }}
+                  className="text-[10px] uppercase tracking-widest font-semibold"
+                  style={{ color: item.danger ? 'rgba(220,38,38,0.70)' : 'var(--text-subtle)' }}
                 >
                   {item.label}
                 </p>
                 <p
-                  className="text-xl font-bold tracking-tight leading-none relative z-10"
+                  className="text-xl font-bold tracking-tight leading-tight"
                   style={{ color: item.danger ? 'var(--danger)' : 'var(--text)' }}
                 >
                   {item.value}
                 </p>
-                {item.delta && (
-                  <p className="text-[10px] font-semibold relative z-10 flex items-center gap-1">
+                {item.delta ? (
+                  <p className="text-[10px] font-semibold flex items-center gap-1">
                     <span style={{ color: item.deltaPositive ? 'var(--success)' : 'var(--danger)' }}>
                       {item.deltaPositive ? '↑' : '↓'} {item.delta}
                     </span>
                     <span style={{ color: 'var(--text-subtle)', fontWeight: 400 }}>vs пред.</span>
                   </p>
-                )}
-                {!item.delta && item.danger && (
-                  <p className="text-[10px] font-semibold relative z-10" style={{ color: 'var(--danger)' }}>
+                ) : item.danger ? (
+                  <p className="text-[10px] font-semibold" style={{ color: 'var(--danger)' }}>
                     Критический
                   </p>
+                ) : (
+                  /* Пустая строка для выравнивания высоты */
+                  <p className="text-[10px]" style={{ color: 'transparent' }}>—</p>
                 )}
-              </>
+              </div>
             )}
           </motion.div>
         ))}
