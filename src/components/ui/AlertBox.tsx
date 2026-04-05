@@ -1,5 +1,7 @@
 'use client'
 
+import { motion } from 'framer-motion'
+
 interface Props {
   icon?: string
   title: string
@@ -9,27 +11,41 @@ interface Props {
   onClick?: () => void
 }
 
+const severityColor: Record<string, string> = {
+  critical: 'var(--accent)',
+  warning:  'var(--warning)',
+  success:  'var(--success)',
+  info:     'var(--info)',
+}
+
 export function AlertBox({ icon, title, count, description, severity = 'info', onClick }: Props) {
+  const color = severityColor[severity]
+
   return (
-    <div
+    <motion.div
+      whileHover={onClick ? { y: -3, scale: 1.005 } : undefined}
+      whileTap={onClick ? { y: -1, scale: 0.998 } : undefined}
+      transition={{ type: 'spring', stiffness: 400, damping: 28 }}
       className={`alert-card alert-${severity} px-4 py-3 ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
     >
-      <div className="flex items-center gap-2 mb-1">
+      <div className="flex items-center gap-2 mb-1 relative z-10">
         {icon && <span className="text-base leading-none">{icon}</span>}
         <span className="text-sm font-semibold" style={{ color: 'var(--text)' }}>{title}</span>
       </div>
       {count !== undefined && (
-        <p className="text-2xl font-bold" style={{
-          color: severity === 'critical' ? 'var(--accent)' :
-                 severity === 'warning'  ? 'var(--warning)' :
-                 severity === 'success'  ? 'var(--success)' : 'var(--info)',
-          letterSpacing: '-0.02em'
-        }}>{count}</p>
+        <p
+          className="text-2xl font-bold relative z-10"
+          style={{ color, letterSpacing: '-0.025em' }}
+        >
+          {count}
+        </p>
       )}
       {description && (
-        <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{description}</p>
+        <p className="text-xs mt-0.5 relative z-10" style={{ color: 'var(--text-muted)' }}>
+          {description}
+        </p>
       )}
-    </div>
+    </motion.div>
   )
 }
