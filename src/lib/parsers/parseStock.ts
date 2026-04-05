@@ -53,7 +53,11 @@ export function parseStock(
   const headerRow = rows[HEADER_ROW]
 
   // Найти колонки по заголовку
-  const skuWbCol = 2 // по spec: col 2
+  // col B (index 1) = SKU (WB артикул числовой)
+  const skuWbCol = (() => {
+    const idx = headerRow.findIndex(h => norm(h) === 'sku' || norm(h).includes('артикул wb') || norm(h).includes('артикул вб'))
+    return idx !== -1 ? idx : 1 // fallback: col B (index 1)
+  })()
   const supplyQtyCol = headerRow.findIndex(h => norm(h).includes('кол-во в поставке') || norm(h).includes('поставк') && norm(h).includes('кол'))
   const supplyDateCol = headerRow.findIndex(h => norm(h).includes('дата прихода') || norm(h).includes('приход'))
   const priceCol = headerRow.findIndex(h => norm(h).includes('цена утром') || (norm(h) === 'цена'))

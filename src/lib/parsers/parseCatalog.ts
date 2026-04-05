@@ -56,9 +56,10 @@ const MONTH_NAMES = [
 
 const COL_MAP: Record<string, keyof CatalogRow> = {
   'артикул wb': 'sku_wb',
-  'артикул мс': 'sku_ms',
-  'артикул склада': 'sku_warehouse',
+  'артикул мс': 'sku_ms',       // если есть явная колонка "Артикул МС"
+  'артикул склада': 'sku_ms',   // col C в Своде = Артикул склада = sku_ms
   'артикул китай': 'sku_china',
+  'номенклатура': 'name',       // col F в Своде = Номенклатура
   'название': 'name',
   'бренд': 'brand',
   'поставщик': 'supplier',
@@ -89,8 +90,9 @@ export function parseCatalog(buffer: ArrayBuffer): ParseCatalogResult {
   const headerRow = rows[0]
   const colIdx: Record<string, number> = {}
 
-  // Основные колонки
+  // Основные колонки — не перезаписываем уже найденные (первый найденный побеждает)
   for (const [colName, field] of Object.entries(COL_MAP)) {
+    if (colIdx[field] !== undefined) continue  // уже нашли эту колонку
     const idx = headerRow.findIndex(h => norm(h) === colName)
     if (idx !== -1) colIdx[field] = idx
   }
