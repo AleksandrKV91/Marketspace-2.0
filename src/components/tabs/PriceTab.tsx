@@ -1,13 +1,14 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
   BarChart, Bar
 } from 'recharts'
 import { GlassCard } from '@/components/ui/GlassCard'
-import { StatCard } from '@/components/ui/StatCard'
+import { KPIBar } from '@/components/ui/KPIBar'
+import { FilterBar } from '@/components/ui/FilterBar'
+import { exportToExcel } from '@/lib/exportExcel'
 import { MousePointerClick, ShoppingCart, ArrowRight, DollarSign, Megaphone, Percent } from 'lucide-react'
 
 interface PriceData {
@@ -55,9 +56,6 @@ function fmtDate(iso: string) {
   return `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}`
 }
 
-const stagger = { hidden: {}, show: { transition: { staggerChildren: 0.06 } } }
-const fadeUp = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transition: { duration: 0.3 } } }
-
 function ChartTip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
   if (!active || !payload?.length) return null
   return (
@@ -88,6 +86,8 @@ export default function PriceTab() {
   const [data, setData] = useState<PriceData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [priceFilter, setPriceFilter] = useState<Record<string, string>>({ direction: 'all', manager: 'all' })
 
   useEffect(() => {
     fetch('/api/dashboard/prices')
@@ -98,17 +98,35 @@ export default function PriceTab() {
 
   if (loading) return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <GlassCard key={i}><div className="space-y-3"><div className="skeleton h-9 w-9 rounded-full" /><div className="skeleton h-4 w-20" /><div className="skeleton h-7 w-28" /></div></GlassCard>
-        ))}
-      </div>
+      <KPIBar loading items={[
+        { label: 'CTR', value: '' }, { label: 'CR в корзину', value: '' },
+        { label: 'CR в заказ', value: '' }, { label: 'CPC', value: '' },
+        { label: 'CPM', value: '' }, { label: 'Доля рекл.', value: '' },
+      ]} />
     </div>
   )
   if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
   if (!data) return null
 
   const f = data.funnel
+  const priceChanges = data.price_changes ?? []
+  const hasFilter = priceFilter.direction !== 'all' || search.trim() !== ''
+
+  const filteredPrices = priceChanges.filter(row => {
+    if (search && !row.name.toLowerCase().includes(search.toLowerCase()) && !row.sku.includes(search)) return false
+    if (priceFilter.direction === 'up' && row.delta_pct <= 0) return false
+    if (priceFilter.direction === 'down' && row.delta_pct >= 0) return false
+    return true
+  })
+
+  function exportPrices() {
+    exportToExcel(filteredPrices.map(r => ({
+      'SKU': r.sku, 'Название': r.name, 'Менеджер': r.manager, 'Дата': r.date,
+      'Было': r.price_before, 'Стало': r.price_after, 'Δ%': r.delta_pct.toFixed(1),
+      'CPO': r.cpo ?? '',
+    })), 'Цены_изменения')
+  }
+
   const dailyFmt = (data.daily ?? []).map(d => ({
     date: fmtDate(d.date),
     'CTR': +(d.ctr * 100).toFixed(2),
@@ -121,21 +139,15 @@ export default function PriceTab() {
   return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
 
-      {/* KPI — 6 карточек воронки */}
-      <motion.div variants={stagger} initial="hidden" animate="show"
-        className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3"
-      >
-        {[
-          { label: 'CTR',                value: f.ctr != null ? (f.ctr * 100).toFixed(2) + '%' : '—',                        icon: <MousePointerClick size={16} />, iconColor: 'var(--info)' },
-          { label: 'CR в корзину',       value: f.cr_basket != null ? (f.cr_basket * 100).toFixed(2) + '%' : '—',            icon: <ShoppingCart size={16} />,      iconColor: 'var(--warning)' },
-          { label: 'CR в заказ',         value: f.cr_order != null ? (f.cr_order * 100).toFixed(2) + '%' : '—',              icon: <ArrowRight size={16} />,        iconColor: 'var(--success)' },
-          { label: 'CPC',                value: f.cpc != null ? fmt(f.cpc) + ' ₽' : '—',                                    icon: <DollarSign size={16} />,        iconColor: 'var(--accent)' },
-          { label: 'CPM',                value: f.cpm != null ? fmt(f.cpm) + ' ₽' : '—',                                    icon: <Megaphone size={16} />,         iconColor: 'var(--danger)' },
-          { label: 'Доля рекл. заказов', value: f.ad_order_share != null ? (f.ad_order_share * 100).toFixed(1) + '%' : '—', icon: <Percent size={16} />,           iconColor: 'var(--info)' },
-        ].map((card, i) => (
-          <motion.div key={i} variants={fadeUp}><StatCard {...card} /></motion.div>
-        ))}
-      </motion.div>
+      {/* KPI bar */}
+      <KPIBar items={[
+        { label: 'CTR',                value: f.ctr != null ? (f.ctr * 100).toFixed(2) + '%' : '—' },
+        { label: 'CR в корзину',       value: f.cr_basket != null ? (f.cr_basket * 100).toFixed(2) + '%' : '—' },
+        { label: 'CR в заказ',         value: f.cr_order != null ? (f.cr_order * 100).toFixed(2) + '%' : '—' },
+        { label: 'CPC',                value: f.cpc != null ? fmt(f.cpc) + ' ₽' : '—' },
+        { label: 'CPM',                value: f.cpm != null ? fmt(f.cpm) + ' ₽' : '—' },
+        { label: 'Доля рекл. заказов', value: f.ad_order_share != null ? (f.ad_order_share * 100).toFixed(1) + '%' : '—' },
+      ]} />
 
       {/* Charts */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -177,7 +189,26 @@ export default function PriceTab() {
 
       {/* Таблица изменений цен */}
       <GlassCard padding="lg">
-        <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Изменения цен и влияние на метрики</p>
+        <div className="mb-4">
+          <FilterBar
+            search={search}
+            onSearch={setSearch}
+            searchPlaceholder="Поиск по названию или SKU..."
+            filters={[
+              { label: 'Направление', key: 'direction', options: [
+                { value: 'all', label: 'Все' },
+                { value: 'up', label: 'Рост цены' },
+                { value: 'down', label: 'Снижение цены' },
+              ]},
+            ]}
+            values={priceFilter}
+            onChange={(k, v) => setPriceFilter(f => ({ ...f, [k]: v }))}
+            onReset={() => { setPriceFilter({ direction: 'all', manager: 'all' }); setSearch('') }}
+            hasActive={hasFilter}
+            onExport={exportPrices}
+            summary={<span className="text-xs" style={{ color: 'var(--text-muted)' }}>Изменения цен · {filteredPrices.length}</span>}
+          />
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -196,7 +227,7 @@ export default function PriceTab() {
               </tr>
             </thead>
             <tbody>
-              {(data.price_changes ?? []).map((row, i) => {
+              {filteredPrices.map((row, i) => {
                 const up = row.delta_pct > 0
                 return (
                   <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
@@ -214,7 +245,7 @@ export default function PriceTab() {
                   </tr>
                 )
               })}
-              {(data.price_changes ?? []).length === 0 && (
+              {filteredPrices.length === 0 && (
                 <tr><td colSpan={11} className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>Нет изменений цен за выбранный период</td></tr>
               )}
             </tbody>

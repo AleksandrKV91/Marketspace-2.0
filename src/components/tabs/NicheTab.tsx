@@ -3,9 +3,10 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { GlassCard } from '@/components/ui/GlassCard'
-import { StatCard } from '@/components/ui/StatCard'
+import { KPIBar } from '@/components/ui/KPIBar'
+import { FilterBar } from '@/components/ui/FilterBar'
 import { SeasonalitySparkline } from '@/components/ui/SeasonalitySparkline'
-import { Globe, Star, TrendingUp, BarChart2 } from 'lucide-react'
+import { exportToExcel } from '@/lib/exportExcel'
 
 interface NicheRow {
   niche: string
@@ -40,67 +41,79 @@ function fmt(n: number | null | undefined) {
 
 const MONTHS = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек']
 
-const stagger = { hidden: {}, show: { transition: { staggerChildren: 0.06 } } }
-const fadeUp = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transition: { duration: 0.3 } } }
-
 export default function NicheTab() {
   const [data, setData] = useState<NicheData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [filterSeasonal, setFilterSeasonal] = useState<'all' | 'seasonal' | 'no'>('all')
+  const [nicheFilter, setNicheFilter] = useState<Record<string, string>>({ seasonal: 'all', abc: 'all' })
 
   useEffect(() => {
-    const p = new URLSearchParams()
-    if (search) p.set('search', search)
-    if (filterSeasonal !== 'all') p.set('seasonal', filterSeasonal)
-    fetch('/api/dashboard/niches?' + p.toString())
+    fetch('/api/dashboard/niches')
       .then(r => r.json())
       .then((d: NicheData) => { setData(d); setLoading(false) })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
-  }, [search, filterSeasonal])
+  }, [])
 
   if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
+
+  const allRows = data?.rows ?? []
+  const hasFilter = search.trim() !== '' || nicheFilter.seasonal !== 'all' || nicheFilter.abc !== 'all'
+  const filteredRows = allRows.filter(row => {
+    if (search && !row.niche.toLowerCase().includes(search.toLowerCase()) && !row.category.toLowerCase().includes(search.toLowerCase())) return false
+    if (nicheFilter.seasonal === 'seasonal' && !row.seasonal) return false
+    if (nicheFilter.seasonal === 'no' && row.seasonal) return false
+    if (nicheFilter.abc !== 'all' && row.abc_class !== nicheFilter.abc) return false
+    return true
+  })
+
+  function exportNiches() {
+    exportToExcel(filteredRows.map(r => ({
+      'Ниша': r.niche, 'Категория': r.category, 'Рейтинг': r.rating,
+      'Привлекательность': r.attractiveness, 'Выручка': r.revenue,
+      'Сезонный': r.seasonal ? 'Да' : 'Нет', 'ABC': r.abc_class,
+    })), 'Ниши')
+  }
 
   return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
 
       {/* KPI */}
-      <motion.div variants={stagger} initial="hidden" animate="show"
-        className="grid grid-cols-2 md:grid-cols-4 gap-3"
-      >
-        {loading ? Array.from({ length: 4 }).map((_, i) => (
-          <GlassCard key={i}><div className="space-y-3"><div className="skeleton h-9 w-9 rounded-full" /><div className="skeleton h-4 w-20" /><div className="skeleton h-7 w-28" /></div></GlassCard>
-        )) : [
-          { label: 'Ср. привлекательность', value: data?.summary.avg_attractiveness?.toFixed(1) ?? '—', icon: <Star size={16} /> },
-          { label: 'Доля рынка',            value: data?.summary.avg_market_share != null ? (data.summary.avg_market_share * 100).toFixed(1) + '%' : '—', icon: <TrendingUp size={16} />, iconColor: 'var(--info)' },
-          { label: 'Сезонных ниш',          value: String(data?.summary.seasonal_count ?? '—'), icon: <Globe size={16} />, iconColor: 'var(--warning)' },
-          { label: 'Средний ABC-класс',     value: data?.summary.avg_abc ?? '—', icon: <BarChart2 size={16} />, iconColor: 'var(--success)' },
-        ].map((card, i) => (
-          <motion.div key={i} variants={fadeUp}><StatCard {...card} /></motion.div>
-        ))}
-      </motion.div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap gap-2 items-center">
-        <input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Поиск по нише, категории..."
-          className="text-sm px-3 py-2 rounded-xl border outline-none min-w-[240px]"
-          style={{ background: 'var(--surface-solid)', border: '1px solid var(--border)', color: 'var(--text)' }}
-        />
-        {(['all','seasonal','no'] as const).map(v => (
-          <button key={v} onClick={() => setFilterSeasonal(v)}
-            className="text-xs px-3 py-1.5 rounded-xl font-medium"
-            style={{ background: filterSeasonal === v ? 'var(--accent)' : 'var(--border)', color: filterSeasonal === v ? 'white' : 'var(--text-muted)' }}>
-            {v === 'all' ? 'Все' : v === 'seasonal' ? 'Сезонные' : 'Несезонные'}
-          </button>
-        ))}
-      </div>
+      <KPIBar loading={loading} items={[
+        { label: 'Ср. привлекательность', value: data?.summary.avg_attractiveness?.toFixed(1) ?? '—' },
+        { label: 'Доля рынка', value: data?.summary.avg_market_share != null ? (data.summary.avg_market_share * 100).toFixed(1) + '%' : '—' },
+        { label: 'Сезонных ниш', value: String(data?.summary.seasonal_count ?? '—') },
+        { label: 'Средний ABC-класс', value: data?.summary.avg_abc ?? '—' },
+      ]} />
 
       {/* Table */}
       <GlassCard padding="none">
+        <div className="px-4 pt-4">
+          <FilterBar
+            search={search}
+            onSearch={setSearch}
+            searchPlaceholder="Поиск по нише, категории..."
+            filters={[
+              { label: 'Сезонность', key: 'seasonal', options: [
+                { value: 'all', label: 'Все' },
+                { value: 'seasonal', label: 'Сезонные' },
+                { value: 'no', label: 'Несезонные' },
+              ]},
+              { label: 'ABC класс', key: 'abc', options: [
+                { value: 'all', label: 'Все' },
+                { value: 'A', label: 'A' },
+                { value: 'B', label: 'B' },
+                { value: 'C', label: 'C' },
+              ]},
+            ]}
+            values={nicheFilter}
+            onChange={(k, v) => setNicheFilter(f => ({ ...f, [k]: v }))}
+            onReset={() => { setNicheFilter({ seasonal: 'all', abc: 'all' }); setSearch('') }}
+            hasActive={hasFilter}
+            onExport={exportNiches}
+            summary={<span className="text-xs" style={{ color: 'var(--text-muted)' }}>Ниши · {filteredRows.length}</span>}
+          />
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -124,7 +137,7 @@ export default function NicheTab() {
                   ))}
                 </tr>
               ))}
-              {!loading && (data?.rows ?? []).map((row, i) => (
+              {!loading && filteredRows.map((row, i) => (
                 <tr key={i} className="border-t transition-colors"
                   style={{ borderColor: 'var(--border)', cursor: 'pointer' }}
                   onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-hover)' }}
@@ -157,7 +170,7 @@ export default function NicheTab() {
                   </td>
                 </tr>
               ))}
-              {!loading && (data?.rows ?? []).length === 0 && (
+              {!loading && filteredRows.length === 0 && (
                 <tr><td colSpan={9} className="px-4 py-12 text-center text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных по нишам</td></tr>
               )}
             </tbody>

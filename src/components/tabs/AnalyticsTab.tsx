@@ -7,7 +7,9 @@ import {
   LineChart, Line, Legend
 } from 'recharts'
 import { GlassCard } from '@/components/ui/GlassCard'
-import { StatCard } from '@/components/ui/StatCard'
+import { KPIBar } from '@/components/ui/KPIBar'
+import { FilterBar } from '@/components/ui/FilterBar'
+import { exportToExcel } from '@/lib/exportExcel'
 import { ShoppingBag, TrendingDown, Percent, BarChart2, Target, TrendingUp } from 'lucide-react'
 
 interface AnalyticsData {
@@ -70,6 +72,7 @@ export default function AnalyticsTab() {
   const [data, setData] = useState<AnalyticsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [catFilter, setCatFilter] = useState<Record<string, string>>({ margin: 'all', drr: 'all' })
 
   useEffect(() => {
     fetch('/api/dashboard/analytics')
@@ -80,11 +83,11 @@ export default function AnalyticsTab() {
 
   if (loading) return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <GlassCard key={i}><div className="space-y-3"><div className="skeleton h-9 w-9 rounded-full" /><div className="skeleton h-4 w-20" /><div className="skeleton h-7 w-28" /></div></GlassCard>
-        ))}
-      </div>
+      <KPIBar loading items={[
+        { label: 'Выручка', value: '' }, { label: 'ЧМД', value: '' },
+        { label: 'Маржа %', value: '' }, { label: 'ДРР', value: '' },
+        { label: 'CPO', value: '' }, { label: 'Δ Выручки', value: '' },
+      ]} />
     </div>
   )
   if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
@@ -100,26 +103,36 @@ export default function AnalyticsTab() {
     'ДРР%': +(d.drr * 100).toFixed(1),
   }))
 
+  const hasFilter = catFilter.margin !== 'all' || catFilter.drr !== 'all'
+  const filteredCats = (data.by_category ?? []).filter(c => {
+    if (catFilter.margin === 'low' && c.margin_pct >= 0.15) return false
+    if (catFilter.margin === 'mid' && (c.margin_pct < 0.15 || c.margin_pct > 0.25)) return false
+    if (catFilter.margin === 'high' && c.margin_pct <= 0.25) return false
+    if (catFilter.drr === 'over' && c.drr <= c.margin_pct) return false
+    if (catFilter.drr === 'under' && c.drr > c.margin_pct) return false
+    return true
+  })
+
+  function exportCats() {
+    exportToExcel(filteredCats.map(c => ({
+      'Категория': c.category, 'SKU': c.sku_count, 'Выручка': c.revenue,
+      'Δ%': c.delta_pct, 'ЧМД': c.chmd, 'Маржа%': (c.margin_pct * 100).toFixed(1),
+      'ДРР%': (c.drr * 100).toFixed(1), 'Остаток': c.stock_rub,
+    })), 'Аналитика_категории')
+  }
+
   return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
 
-      {/* KPI row */}
-      <motion.div variants={stagger} initial="hidden" animate="show"
-        className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3"
-      >
-        {[
-          { label: 'Выручка', value: fmt(s.revenue), icon: <ShoppingBag size={16} />, delta: delta(s.revenue, s.revenue_prev) },
-          { label: 'ЧМД', value: fmt(s.chmd), icon: <TrendingDown size={16} />, iconColor: 'var(--success)', delta: delta(s.chmd, s.chmd_prev) },
-          { label: 'Маржа %', value: fmtPct(s.margin_pct), icon: <Percent size={16} />, delta: s.margin_prev ? (s.margin_pct - s.margin_prev) * 100 : undefined, accent: s.margin_pct < 0.10 },
-          { label: 'ДРР Total', value: fmtPct(s.drr), icon: <BarChart2 size={16} />, iconColor: 'var(--info)', delta: s.drr_prev ? (s.drr_prev - s.drr) * 100 : undefined },
-          { label: 'CPO', value: s.cpo ? fmt(s.cpo) + ' ₽' : '—', icon: <Target size={16} />, iconColor: 'var(--warning)' },
-          { label: 'Δ Выручки', value: s.delta_revenue_pct != null ? (s.delta_revenue_pct > 0 ? '+' : '') + s.delta_revenue_pct.toFixed(1) + '%' : '—', icon: <TrendingUp size={16} />, iconColor: (s.delta_revenue_pct ?? 0) >= 0 ? 'var(--success)' : 'var(--danger)' },
-        ].map((card, i) => (
-          <motion.div key={i} variants={fadeUp}>
-            <StatCard {...card} />
-          </motion.div>
-        ))}
-      </motion.div>
+      {/* KPI bar — единый стиль */}
+      <KPIBar items={[
+        { label: 'Выручка', value: fmt(s.revenue), delta: s.revenue_prev ? ((s.revenue - s.revenue_prev) / s.revenue_prev * 100).toFixed(1) + '%' : undefined, deltaPositive: s.revenue >= s.revenue_prev },
+        { label: 'ЧМД', value: fmt(s.chmd) },
+        { label: 'Маржа %', value: fmtPct(s.margin_pct), danger: s.margin_pct < 0.10 },
+        { label: 'ДРР', value: fmtPct(s.drr) },
+        { label: 'CPO', value: s.cpo ? fmt(s.cpo) + ' ₽' : '—' },
+        { label: 'Δ Выручки', value: s.delta_revenue_pct != null ? (s.delta_revenue_pct > 0 ? '+' : '') + s.delta_revenue_pct.toFixed(1) + '%' : '—', deltaPositive: (s.delta_revenue_pct ?? 0) >= 0 },
+      ]} />
 
       {/* Charts */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -174,7 +187,29 @@ export default function AnalyticsTab() {
 
       {/* По категориям */}
       <GlassCard padding="lg">
-        <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>По категориям</p>
+        <div className="mb-4">
+          <FilterBar
+            filters={[
+              { label: 'Маржа', key: 'margin', options: [
+                { value: 'all', label: 'Все' },
+                { value: 'low', label: '<15%' },
+                { value: 'mid', label: '15–25%' },
+                { value: 'high', label: '>25%' },
+              ]},
+              { label: 'ДРР vs Маржа', key: 'drr', options: [
+                { value: 'all', label: 'Все' },
+                { value: 'over', label: 'ДРР > Маржи' },
+                { value: 'under', label: 'ДРР ≤ Маржи' },
+              ]},
+            ]}
+            values={catFilter}
+            onChange={(k, v) => setCatFilter(f => ({ ...f, [k]: v }))}
+            onReset={() => setCatFilter({ margin: 'all', drr: 'all' })}
+            hasActive={hasFilter}
+            onExport={exportCats}
+            summary={<span className="text-xs" style={{ color: 'var(--text-muted)' }}>По категориям · {filteredCats.length}</span>}
+          />
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -190,7 +225,7 @@ export default function AnalyticsTab() {
               </tr>
             </thead>
             <tbody>
-              {(data.by_category ?? []).map((cat, i) => {
+              {filteredCats.map((cat, i) => {
                 const isLow = cat.margin_pct < 0.10
                 const dUp = (cat.delta_pct ?? 0) > 0
                 return (
