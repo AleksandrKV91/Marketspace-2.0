@@ -182,14 +182,14 @@ export default function OverviewTab() {
           </div>
           <div className="space-y-3">
             {data.kpi.oos_count > 0 && (
-              <div className="flex items-start gap-3 p-3 rounded-xl cursor-pointer" style={{ background: 'var(--danger-bg)' }}>
+              <motion.div whileHover={{ scale: 1.02, y: -2 }} className="flex items-start gap-3 p-3 rounded-xl cursor-pointer" style={{ background: 'var(--danger-bg)' }}>
                 <AlertCircle size={15} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: 1 }} />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-semibold" style={{ color: 'var(--danger)' }}>Стоп реклама</p>
                   <p className="text-sm" style={{ color: 'var(--text)' }}>{data.kpi.oos_count} SKU без стока с активной рекламой</p>
                 </div>
                 <ChevronRight size={14} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
-              </div>
+              </motion.div>
             )}
             {data.kpi.avg_margin_pct < 0.10 && (
               <div className="flex items-start gap-3 p-3 rounded-xl" style={{ background: 'var(--warning-bg)' }}>
@@ -256,11 +256,11 @@ export default function OverviewTab() {
           {abcItems.map(({ cls, count, color }) => {
             const pct = abcTotal > 0 ? (count / abcTotal * 100).toFixed(0) : '0'
             return (
-              <div key={cls} className="text-center p-4 rounded-xl" style={{ background: 'var(--bg)' }}>
+              <motion.div key={cls} whileHover={{ scale: 1.02, y: -2 }} className="text-center p-4 rounded-xl cursor-pointer" style={{ background: 'var(--bg)' }}>
                 <p className="text-3xl font-black" style={{ color }}>{count}</p>
                 <p className="text-xs font-bold mt-1" style={{ color }}>Класс {cls}</p>
                 <p className="text-xs mt-0.5" style={{ color: 'var(--text-subtle)' }}>{pct}% от всех</p>
-              </div>
+              </motion.div>
             )
           })}
         </div>

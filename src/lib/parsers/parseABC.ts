@@ -49,7 +49,9 @@ function detectPeriodMonth(filename: string): string {
 }
 
 const COL_QUERIES: Array<{ key: keyof ABCRow; queries: string[] }> = [
-  { key: 'sku_ms', queries: ['артикул'] },
+  // col B = Артикул склада = sku_ms (главный ключ)
+  // col A = Номенклатура (не используем как ключ)
+  { key: 'sku_ms', queries: ['артикул склада', 'артикул мс', 'артикул mc', 'артикул'] },
   { key: 'qty_stock_rub', queries: ['количество'] },
   { key: 'cost', queries: ['себестоимость без ндс'] },
   { key: 'revenue', queries: ['выручка без ндс', 'выручка'] },
@@ -68,6 +70,38 @@ const COL_QUERIES: Array<{ key: keyof ABCRow; queries: string[] }> = [
   { key: 'novelty_flag', queries: ['флаг новинки', 'новинка'] },
   { key: 'stock_status', queries: ['статус остатка'] },
 ]
+
+/**
+ * Нормализует ABC класс — поддерживает форматы:
+ * "AA", "BA", "AB" — стандартные двухбуквенные
+ * "A | н/д", "B | н/д", "C | н/д" — класс с неопределённым вторым
+ * "убыток | C", "убыток | B", "убыток | A", "убыток | н/д" — убыточные
+ */
+function normalizeAbcClass(raw: string): string | null {
+  const s = raw.trim()
+  if (!s) return null
+  // Уже стандартный двух- или однобуквенный класс
+  if (/^[AaBbCc]{1,2}$/.test(s)) return s.toUpperCase()
+  // Формат "X | Y" — берём оба компонента
+  if (s.includes('|')) {
+    const parts = s.split('|').map(p => p.trim())
+    const left = parts[0].toLowerCase()
+    const right = parts[1]?.toLowerCase() ?? ''
+    // "убыток | X" — первый = убыток, второй = класс
+    if (left === 'убыток' || left === 'убыт') {
+      const cls = right.charAt(0).toUpperCase()
+      if ('ABC'.includes(cls)) return `убыток|${cls}`
+      return 'убыток'
+    }
+    // "A | н/д" — берём только первый
+    const cls = left.charAt(0).toUpperCase()
+    if ('ABC'.includes(cls)) return cls
+  }
+  // Попробуем взять первый символ
+  const first = s.charAt(0).toUpperCase()
+  if ('ABC'.includes(first)) return first
+  return s // сохраняем как есть
+}
 
 export function parseABC(buffer: ArrayBuffer, filename = ''): ParseABCResult {
   const wb = readWorkbook(buffer)
@@ -136,8 +170,8 @@ export function parseABC(buffer: ArrayBuffer, filename = ''): ParseABCResult {
       tz: toNum(get('tz')),
       turnover_days: toNum(get('turnover_days')),
       chmd_share: toNum(get('chmd_share')),
-      abc_class: get('abc_class') != null ? String(get('abc_class')).trim() : null,
-      abc_class2: abcClass2Raw != null ? String(abcClass2Raw).trim() : null,
+      abc_class: get('abc_class') != null ? normalizeAbcClass(String(get('abc_class'))) : null,
+      abc_class2: abcClass2Raw != null ? normalizeAbcClass(String(abcClass2Raw)) : null,
       novelty_flag: toBool(noveltyRaw),
       stock_status: get('stock_status') != null ? String(get('stock_status')).trim() : null,
     })

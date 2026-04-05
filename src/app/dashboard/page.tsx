@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, Table2, TrendingUp, BarChart2,
@@ -14,6 +14,16 @@ import AnalyticsTab from '@/components/tabs/AnalyticsTab'
 import NicheTab     from '@/components/tabs/NicheTab'
 import OrderTab     from '@/components/tabs/OrderTab'
 import UpdateTab    from '@/components/tabs/UpdateTab'
+
+type SkuFilter = { type: string; label: string }
+const PendingFilterContext = React.createContext<{
+  pending: SkuFilter | null
+  setPending: (f: SkuFilter | null) => void
+}>({ pending: null, setPending: () => {} })
+
+export function usePendingFilter() {
+  return React.useContext(PendingFilterContext)
+}
 
 type Tab = 'svod' | 'sku' | 'price' | 'analytics' | 'niche' | 'orders' | 'update'
 type TabDef = { id: Tab; label: string; icon: React.ComponentType<{ size?: number }> }
@@ -71,8 +81,10 @@ function ThemeButton() {
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<Tab>('svod')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [pendingFilter, setPendingFilter] = useState<SkuFilter | null>(null)
 
   return (
+    <PendingFilterContext.Provider value={{ pending: pendingFilter, setPending: setPendingFilter }}>
     <DateRangeProvider>
     <div className="min-h-screen relative" style={{ background: 'var(--bg)' }}>
 
@@ -99,6 +111,8 @@ export default function DashboardPage() {
             Marketspace 2.0
           </span>
         </motion.div>
+
+        <DateRangePicker />
 
         {/* Desktop nav */}
         <nav className="hidden lg:flex items-center gap-0.5 flex-1 overflow-x-auto">
@@ -133,7 +147,27 @@ export default function DashboardPage() {
 
         {/* Right actions */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          <DateRangePicker />
+          <motion.button
+            whileHover={{ y: -2 }}
+            whileTap={{ scale: 0.95 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+            onClick={() => setActiveTab('update')}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+            style={{
+              background: activeTab === 'update'
+                ? 'linear-gradient(135deg, #FF6B81 0%, #FF3B5C 100%)'
+                : 'var(--surface)',
+              color: activeTab === 'update' ? 'white' : 'var(--text-muted)',
+              border: '1px solid var(--border)',
+              boxShadow: activeTab === 'update'
+                ? '0 4px 12px rgba(255,59,92,0.3), inset 0 1px 0 rgba(255,255,255,0.3)'
+                : 'var(--shadow-sm)',
+              backdropFilter: 'blur(14px)',
+            }}
+          >
+            <Upload size={12} />
+            <span>Загрузить</span>
+          </motion.button>
 
           <ThemeButton />
 
@@ -208,5 +242,6 @@ export default function DashboardPage() {
       </main>
     </div>
     </DateRangeProvider>
+    </PendingFilterContext.Provider>
   )
 }
