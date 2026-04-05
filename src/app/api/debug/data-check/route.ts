@@ -53,12 +53,29 @@ export async function GET() {
 
   const { data: dimSkus } = await supabase
     .from('dim_sku')
-    .select('sku_ms')
-    .limit(100)
+    .select('sku_ms, sku_wb')
+    .not('sku_wb', 'is', null)
+    .limit(10)
 
   const dimSet = new Set((dimSkus ?? []).map(r => r.sku_ms))
   const skuDailySet = new Set((skuDailySkus ?? []).map(r => r.sku_ms))
   const intersection = [...skuDailySet].filter(s => dimSet.has(s))
+
+  // Диагностика: sku_daily может содержать WB арты как sku_ms (числа)
+  // Проверяем — есть ли эти числа в dim_sku.sku_wb
+  const numericSkus = [...skuDailySet].filter(s => /^\d+$/.test(s))
+  let wbMatchCount = 0
+  if (numericSkus.length > 0) {
+    const { count } = await supabase
+      .from('dim_sku')
+      .select('sku_wb', { count: 'exact', head: true })
+      .in('sku_wb', numericSkus.slice(0, 10).map(Number))
+    wbMatchCount = count ?? 0
+  }
+
+  // Диапазон sku_wb в dim_sku
+  const { data: wbMin } = await supabase.from('dim_sku').select('sku_wb').not('sku_wb','is',null).order('sku_wb',{ascending:true}).limit(1)
+  const { data: wbMax } = await supabase.from('dim_sku').select('sku_wb').not('sku_wb','is',null).order('sku_wb',{ascending:false}).limit(1)
 
   // 6. Примеры из fact_sku_daily с НЕНУЛЕВЫМИ метриками
   const { data: nonZeroSample } = await supabase
@@ -92,9 +109,12 @@ export async function GET() {
     dim_sample: dimSample,
     sku_mapping_check: {
       fact_sku_daily_skus_sample: [...skuDailySet].slice(0, 5),
-      dim_sku_skus_sample: [...dimSet].slice(0, 5),
+      dim_sku_with_wb_sample: (dimSkus ?? []).slice(0, 5),
       intersection_count: intersection.length,
       intersection_sample: intersection.slice(0, 5),
+      numeric_skus_in_daily: numericSkus.slice(0, 5),
+      wb_match_count_for_numeric: wbMatchCount,
+      dim_sku_wb_range: { min: wbMin?.[0]?.sku_wb, max: wbMax?.[0]?.sku_wb },
     },
   })
 }

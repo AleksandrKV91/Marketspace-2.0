@@ -78,5 +78,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, upload_id: uploadId, rows_parsed: parsed.rows_parsed, rows_skipped: parsed.rows_skipped, skipped_no_map: parsed.skipped_skus.length, sku_map_size: skuMap.size, diag: parsed.daily[0] ?? null })
+  return NextResponse.json({
+    ok: true,
+    upload_id: uploadId,
+    rows_parsed: parsed.rows_parsed,
+    rows_skipped: parsed.rows_skipped,
+    skipped_no_map: parsed.skipped_skus.length,
+    sku_map_size: skuMap.size,
+    diag_daily: parsed.daily.slice(0, 2),
+    diag_skipped_skus: parsed.skipped_skus.slice(0, 10),
+    diag_sku_map_sample: [...skuMap.entries()].slice(0, 3).map(([wb, ms]) => ({ wb, ms })),
+  })
 }
