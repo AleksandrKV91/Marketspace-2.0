@@ -26,9 +26,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(e) }, { status: 422 })
   }
 
-  const knownSkus = await loadKnownSkus(supabase)
+  // Загружаем маппинг: name (номенклатура) → sku_ms из dim_sku
+  const nameToSkuMs = new Map<string, string>()
+  let from = 0
+  while (true) {
+    const { data, error } = await supabase.from('dim_sku').select('sku_ms, name').range(from, from + 999)
+    if (error || !data?.length) break
+    for (const r of data) { if (r.name) nameToSkuMs.set(r.name.trim(), r.sku_ms) }
+    if (data.length < 1000) break
+    from += 1000
+  }
+
+  // Конвертируем: sku_ms сейчас содержит номенклатуру → заменяем на настоящий sku_ms
   const deduped = [...new Map(parsed.rows.map(r => [r.sku_ms, r])).values()]
-  const filtered = deduped.filter(r => knownSkus.has(r.sku_ms))
+  const mapped = deduped.map(r => {
+    const realSkuMs = nameToSkuMs.get(r.sku_ms) ?? null
+    return realSkuMs ? { ...r, sku_ms: realSkuMs } : null
+  }).filter(Boolean) as typeof deduped
+  const filtered = mapped
 
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')

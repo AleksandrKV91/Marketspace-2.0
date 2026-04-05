@@ -118,3 +118,32 @@ export async function GET() {
     },
   })
 }
+
+/**
+ * POST /api/debug/data-check
+ * action=cleanup_numeric_sku_daily → удаляет строки где sku_ms = числовая строка (старые WB арты)
+ */
+export async function POST(req: Request) {
+  const supabase = createServiceClient()
+  const { action } = await req.json()
+
+  if (action === 'cleanup_numeric_sku_daily') {
+    // Удаляем строки где sku_ms не содержит '_' (числовые WB арты не имеют подчёркивания)
+    // Артикулы склада всегда содержат '_': SENSOBABY_DIAPERS_...
+    const { error: e1, count: c1 } = await supabase
+      .from('fact_sku_daily')
+      .delete({ count: 'exact' })
+      .not('sku_ms', 'like', '%_%')
+    if (e1) return NextResponse.json({ error: e1.message }, { status: 500 })
+
+    const { error: e2, count: c2 } = await supabase
+      .from('fact_sku_snapshot')
+      .delete({ count: 'exact' })
+      .not('sku_ms', 'like', '%_%')
+    if (e2) return NextResponse.json({ error: e2.message }, { status: 500 })
+
+    return NextResponse.json({ ok: true, deleted_daily: c1, deleted_snapshot: c2 })
+  }
+
+  return NextResponse.json({ error: 'unknown action' }, { status: 400 })
+}
