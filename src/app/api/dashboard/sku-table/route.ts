@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
       .select('sku_wb, sku_ms, fbo_wb, fbs_pushkino, fbs_smolensk, total_stock, price, margin_pct, supply_date, supply_qty')
       .eq('upload_id', stockId).in('sku_wb', wbList) : Promise.resolve({ data: null }),
     abcId ? supabase.from('fact_abc')
-      .select('sku_ms, abc_class, profitability, chmd, revenue, turnover_days')
+      .select('sku_ms, abc_class, abc_class2, profitability, chmd, revenue, turnover_days')
       .eq('upload_id', abcId).in('sku_ms', skuMsList) : Promise.resolve({ data: null }),
     skuReportId ? supabase.from('fact_sku_snapshot')
       .select('sku_ms, fbo_wb, fbs_pushkino, fbs_smolensk, margin_rub, price, supply_date, supply_qty, stock_days, novelty_status, manager')
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
   const stockByWb: Record<number, { fbo_wb: number; fbs_pushkino: number; fbs_smolensk: number; total_stock: number; price: number | null; margin_pct: number | null; supply_date: string | null; supply_qty: number | null }> = {}
   if (stockRes.data) for (const r of stockRes.data) stockByWb[r.sku_wb] = r
 
-  const abcByMs: Record<string, { abc_class: string | null; profitability: number | null; chmd: number | null; revenue: number | null; turnover_days: number | null }> = {}
+  const abcByMs: Record<string, { abc_class: string | null; abc_class2: string | null; profitability: number | null; chmd: number | null; revenue: number | null; turnover_days: number | null }> = {}
   if (abcRes.data) for (const r of abcRes.data) abcByMs[r.sku_ms] = r
 
   const snapByMs: Record<string, { fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null; margin_rub: number | null; price: number | null; supply_date: string | null; supply_qty: number | null; stock_days: number | null; novelty_status: string | null; manager: string | null }> = {}
@@ -103,6 +103,8 @@ export async function GET(req: NextRequest) {
       oos_status,
       margin_status,
       novelty: skuSnap?.novelty_status === 'new',
+      abc_class: abc?.abc_class ?? null,
+      abc_class2: abc?.abc_class2 ?? null,
     }
   })
 

@@ -53,8 +53,9 @@ export async function GET() {
 
   const { data: dimSkus } = await supabase
     .from('dim_sku')
-    .select('sku_ms')
-    .limit(100)
+    .select('sku_ms, sku_wb')
+    .not('sku_wb', 'is', null)
+    .limit(10)
 
   const dimSet = new Set((dimSkus ?? []).map(r => r.sku_ms))
   const skuDailySet = new Set((skuDailySkus ?? []).map(r => r.sku_ms))
@@ -74,6 +75,27 @@ export async function GET() {
     .order('metric_date', { ascending: false })
     .limit(10)
 
+  // 8. Проверка dim_sku.sku_wb — есть ли маппинг для sku-report
+  const { count: dimWbCount } = await supabase
+    .from('dim_sku')
+    .select('sku_wb', { count: 'exact', head: true })
+    .not('sku_wb', 'is', null)
+
+  // 9. Последние ошибки загрузок
+  const { data: errorUploads } = await supabase
+    .from('uploads')
+    .select('file_type, filename, status, error_msg, uploaded_at, rows_count')
+    .eq('status', 'error')
+    .order('uploaded_at', { ascending: false })
+    .limit(5)
+
+  // 10. ABC классы — примеры
+  const { data: abcSample } = await supabase
+    .from('fact_abc')
+    .select('sku_ms, abc_class, abc_class2, revenue')
+    .not('abc_class', 'is', null)
+    .limit(5)
+
   return NextResponse.json({
     tables: {
       dim_sku: dimCount.count,
@@ -92,9 +114,12 @@ export async function GET() {
     dim_sample: dimSample,
     sku_mapping_check: {
       fact_sku_daily_skus_sample: [...skuDailySet].slice(0, 5),
-      dim_sku_skus_sample: [...dimSet].slice(0, 5),
+      dim_sku_with_wb_sample: (dimSkus ?? []).slice(0, 5),
+      dim_sku_with_wb_count: dimWbCount,
       intersection_count: intersection.length,
       intersection_sample: intersection.slice(0, 5),
     },
+    error_uploads: errorUploads,
+    abc_sample: abcSample,
   })
 }
