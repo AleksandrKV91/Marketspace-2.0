@@ -133,29 +133,6 @@ export default function DashboardPage() {
 
         {/* Right actions */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          {/* Upload button */}
-          <motion.button
-            whileHover={{ y: -2 }}
-            whileTap={{ scale: 0.95 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-            onClick={() => setActiveTab('update')}
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
-            style={{
-              background: activeTab === 'update'
-                ? 'linear-gradient(135deg, #FF6B81 0%, #FF3B5C 100%)'
-                : 'var(--surface)',
-              color: activeTab === 'update' ? 'white' : 'var(--text-muted)',
-              border: '1px solid var(--border)',
-              boxShadow: activeTab === 'update'
-                ? '0 4px 12px rgba(255,59,92,0.3), inset 0 1px 0 rgba(255,255,255,0.3)'
-                : 'var(--shadow-sm)',
-              backdropFilter: 'blur(14px)',
-            }}
-          >
-            <Upload size={12} />
-            <span>Загрузить</span>
-          </motion.button>
-
           <DateRangePicker />
 
           <ThemeButton />

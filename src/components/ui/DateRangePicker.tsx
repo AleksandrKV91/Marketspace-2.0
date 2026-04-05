@@ -206,15 +206,16 @@ export function DateRangePicker() {
       <AnimatePresence>
         {open && (
           <motion.div
-            initial={{ opacity: 0, y: -8, scale: 0.97 }}
+            initial={{ opacity: 0, y: 8, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -6, scale: 0.97 }}
+            exit={{ opacity: 0, y: 6, scale: 0.97 }}
             transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-            className="absolute right-0 top-full mt-2 z-[200] glass p-4"
+            className="absolute right-0 z-[200] glass p-4"
             style={{
+              top: 'calc(100% + 8px)',
               borderRadius: 'var(--radius-xl)',
-              minWidth: 300,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+              width: 296,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
             }}
           >
             {/* Quick presets */}
