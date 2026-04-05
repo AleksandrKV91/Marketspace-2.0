@@ -1,0 +1,11 @@
+[   11702ms] TypeError: Cannot read properties of undefined (reading 'total_stock_rub')
+    at A1 (https://marketspace-20.vercel.app/_next/static/chunks/173pt8o~i7i2n.js:9:402133)
+    at ay (https://marketspace-20.vercel.app/_next/static/chunks/0bogtdbh.dcu1.js:1:63845)
+    at oJ (https://marketspace-20.vercel.app/_next/static/chunks/0bogtdbh.dcu1.js:1:84102)
+    at iu (https://marketspace-20.vercel.app/_next/static/chunks/0bogtdbh.dcu1.js:1:95704)
+    at sd (https://marketspace-20.vercel.app/_next/static/chunks/0bogtdbh.dcu1.js:1:138944)
+    at https://marketspace-20.vercel.app/_next/static/chunks/0bogtdbh.dcu1.js:1:138789
+    at sf (https://marketspace-20.vercel.app/_next/static/chunks/0bogtdbh.dcu1.js:1:138797)
+    at se (https://marketspace-20.vercel.app/_next/static/chunks/0bogtdbh.dcu1.js:1:134718)
+    at s$ (https://marketspace-20.vercel.app/_next/static/chunks/0bogtdbh.dcu1.js:1:160495)
+    at MessagePort.O (https://marketspace-20.vercel.app/_next/static/chunks/0bogtdbh.dcu1.js:1:8660)

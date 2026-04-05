@@ -252,12 +252,11 @@ body::after {
 
 /* ── Top navigation — Liquid Glass, СЛИВАЕТСЯ С ФОНОМ ──────── */
 .top-nav {
-  /* Такой же фон как body — без отдельного цвета */
   background: rgba(216, 228, 240, 0.75);
-  border-bottom: 1px solid var(--border);
+  /* border убран — хедер сливается со страницей */
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  box-shadow: 0 1px 0 rgba(255,255,255,0.4), 0 4px 20px rgba(0,0,0,0.04);
+  box-shadow: none;
   position: relative;
 }
 

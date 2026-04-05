@@ -1,9 +1,10 @@
 'use client'
 
 import { motion } from 'framer-motion'
+import { type ReactNode } from 'react'
 
 interface Props {
-  icon?: string
+  icon?: ReactNode
   title: string
   count?: number
   description?: string
@@ -18,8 +19,16 @@ const severityColor: Record<string, string> = {
   info:     'var(--info)',
 }
 
+const severityIconBg: Record<string, string> = {
+  critical: 'var(--danger-bg)',
+  warning:  'var(--warning-bg)',
+  success:  'var(--success-bg)',
+  info:     'var(--info-bg)',
+}
+
 export function AlertBox({ icon, title, count, description, severity = 'info', onClick }: Props) {
   const color = severityColor[severity]
+  const iconBg = severityIconBg[severity]
   const isClickable = !!onClick
 
   return (
@@ -31,10 +40,21 @@ export function AlertBox({ icon, title, count, description, severity = 'info', o
       onClick={onClick}
     >
       <div className="flex items-center gap-2 mb-0.5 relative z-10">
-        {icon && <span className="text-base leading-none">{icon}</span>}
+        {icon && (
+          <span
+            className="flex items-center justify-center w-5 h-5 rounded-md flex-shrink-0"
+            style={{ background: iconBg, color }}
+          >
+            {icon}
+          </span>
+        )}
         <span className="text-sm font-semibold" style={{ color: 'var(--text)' }}>{title}</span>
         {isClickable && (
-          <span className="ml-auto text-xs" style={{ color: 'var(--text-subtle)' }}>→</span>
+          <span className="ml-auto" style={{ color: 'var(--text-subtle)' }}>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </span>
         )}
       </div>
       {count !== undefined && (

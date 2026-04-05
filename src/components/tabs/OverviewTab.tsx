@@ -5,7 +5,7 @@ import { motion } from 'framer-motion'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
-import { Zap, ChevronRight } from 'lucide-react'
+import { Zap, ChevronRight, AlertCircle, AlertTriangle, TrendingDown, Rocket } from 'lucide-react'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { AlertBox } from '@/components/ui/AlertBox'
 import { KPIBar } from '@/components/ui/KPIBar'
@@ -167,10 +167,10 @@ export default function OverviewTab() {
 
         <div className="space-y-3">
           <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Критические алерты</p>
-          <AlertBox icon="🚨" title="STOP реклама" count={data.kpi.oos_count} severity="critical" description={data.kpi.lost_revenue ? ('Потеря: ' + fmt(data.kpi.lost_revenue) + ' ₽') : undefined} onClick={() => {}} />
-          <AlertBox icon="⚠️" title="Скоро OOS" count={0} severity="warning" description="Запас < лог. плеча" onClick={() => {}} />
-          <AlertBox icon="💸" title="ДРР > Маржа" count={0} severity="warning" onClick={() => {}} />
-          <AlertBox icon="🚀" title="Потенциал роста" count={data.abc.A} severity="success" onClick={() => {}} />
+          <AlertBox icon={<AlertCircle size={14} />} title="STOP реклама" count={data.kpi.oos_count} severity="critical" description={data.kpi.lost_revenue ? ('Потеря: ' + fmt(data.kpi.lost_revenue) + ' ₽') : undefined} onClick={() => {}} />
+          <AlertBox icon={<AlertTriangle size={14} />} title="Скоро OOS" count={0} severity="warning" description="Запас < лог. плеча" onClick={() => {}} />
+          <AlertBox icon={<TrendingDown size={14} />} title="ДРР > Маржа" count={0} severity="warning" onClick={() => {}} />
+          <AlertBox icon={<Rocket size={14} />} title="Потенциал роста" count={data.abc.A} severity="success" onClick={() => {}} />
         </div>
       </div>
 
@@ -182,8 +182,8 @@ export default function OverviewTab() {
           </div>
           <div className="space-y-3">
             {data.kpi.oos_count > 0 && (
-              <div className="flex items-start gap-3 p-3 rounded-xl" style={{ background: 'var(--danger-bg)' }}>
-                <span className="text-base">🚨</span>
+              <div className="flex items-start gap-3 p-3 rounded-xl cursor-pointer" style={{ background: 'var(--danger-bg)' }}>
+                <AlertCircle size={15} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: 1 }} />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-semibold" style={{ color: 'var(--danger)' }}>Стоп реклама</p>
                   <p className="text-sm" style={{ color: 'var(--text)' }}>{data.kpi.oos_count} SKU без стока с активной рекламой</p>
@@ -193,7 +193,7 @@ export default function OverviewTab() {
             )}
             {data.kpi.avg_margin_pct < 0.10 && (
               <div className="flex items-start gap-3 p-3 rounded-xl" style={{ background: 'var(--warning-bg)' }}>
-                <span className="text-base">💸</span>
+                <TrendingDown size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-semibold" style={{ color: 'var(--warning)' }}>Низкая маржа</p>
                   <p className="text-sm" style={{ color: 'var(--text)' }}>Средняя маржа {fmtPct(data.kpi.avg_margin_pct)} — ниже порога 10%</p>
