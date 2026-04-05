@@ -6,6 +6,7 @@ import {
   LayoutDashboard, Table2, TrendingUp, BarChart2,
   Globe, ShoppingCart, Upload, Moon, Sun, Monitor
 } from 'lucide-react'
+import { DateRangeProvider, DateRangePicker } from '@/components/ui/DateRangePicker'
 import SvodTab      from '@/components/tabs/OverviewTab'
 import SkuTab       from '@/components/tabs/SkuTableTab'
 import PriceTab     from '@/components/tabs/PriceTab'
@@ -72,6 +73,7 @@ export default function DashboardPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   return (
+    <DateRangeProvider>
     <div className="min-h-screen relative" style={{ background: 'var(--bg)' }}>
 
       {/* ── Liquid Glass sticky header ── */}
@@ -154,6 +156,8 @@ export default function DashboardPage() {
             <span>Загрузить</span>
           </motion.button>
 
+          <DateRangePicker />
+
           <ThemeButton />
 
           {/* Mobile hamburger */}
@@ -226,5 +230,6 @@ export default function DashboardPage() {
         {activeTab === 'update'    && <UpdateTab />}
       </main>
     </div>
+    </DateRangeProvider>
   )
 }
