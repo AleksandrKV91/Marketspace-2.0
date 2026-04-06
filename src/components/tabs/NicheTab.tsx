@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from 'recharts'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { KPIBar } from '@/components/ui/KPIBar'
 import { FilterBar } from '@/components/ui/FilterBar'
 import { SeasonalitySparkline } from '@/components/ui/SeasonalitySparkline'
 import { exportToExcel } from '@/lib/exportExcel'
+import { ChevronUp, ChevronDown } from 'lucide-react'
 
 interface NicheRow {
   niche: string
@@ -47,6 +49,24 @@ export default function NicheTab() {
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [nicheFilter, setNicheFilter] = useState<Record<string, string>>({ seasonal: 'all', abc: 'all' })
+  const [sortKey, setSortKey] = useState<keyof NicheRow>('rating')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  function toggleSort(key: keyof NicheRow) {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(key); setSortDir('desc') }
+  }
+  function SortTh({ label, sk, align = 'right' }: { label: string; sk: keyof NicheRow; align?: 'left' | 'right' | 'center' }) {
+    const active = sortKey === sk
+    return (
+      <th className={`text-${align} px-4 py-3 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text-subtle)' }} onClick={() => toggleSort(sk)}>
+        <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
+          {label}
+          {active ? (sortDir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <ChevronUp size={11} style={{ opacity: 0.3 }} />}
+        </span>
+      </th>
+    )
+  }
 
   useEffect(() => {
     fetch('/api/dashboard/niches')
@@ -65,7 +85,19 @@ export default function NicheTab() {
     if (nicheFilter.seasonal === 'no' && row.seasonal) return false
     if (nicheFilter.abc !== 'all' && row.abc_class !== nicheFilter.abc) return false
     return true
+  }).sort((a, b) => {
+    const mult = sortDir === 'asc' ? 1 : -1
+    const av = a[sortKey]; const bv = b[sortKey]
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * mult
+    return String(av ?? '').localeCompare(String(bv ?? '')) * mult
   })
+
+  const topNiches = filteredRows.slice(0, 12).map(r => ({
+    name: r.niche.length > 18 ? r.niche.slice(0, 16) + '…' : r.niche,
+    rating: r.rating,
+    attractiveness: r.attractiveness,
+    abc: r.abc_class,
+  }))
 
   function exportNiches() {
     exportToExcel(filteredRows.map(r => ({
@@ -84,7 +116,31 @@ export default function NicheTab() {
         { label: 'Доля рынка', value: data?.summary.avg_market_share != null ? (data.summary.avg_market_share * 100).toFixed(1) + '%' : '—' },
         { label: 'Сезонных ниш', value: String(data?.summary.seasonal_count ?? '—') },
         { label: 'Средний ABC-класс', value: data?.summary.avg_abc ?? '—' },
+        { label: 'Ниш всего', value: String(allRows.length), accent: true },
       ]} />
+
+      {/* Рейтинг ниш */}
+      {topNiches.length > 0 && (
+        <GlassCard padding="lg">
+          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Рейтинг ниш (ТОП-12)</p>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={topNiches} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.4} horizontal={false} />
+              <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} domain={[0, 'dataMax']} />
+              <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} width={120} tickLine={false} axisLine={false} />
+              <Tooltip formatter={(v) => [v, 'Рейтинг']} />
+              <Bar dataKey="rating" radius={[0, 4, 4, 0]} barSize={14}>
+                {topNiches.map((entry, i) => (
+                  <Cell
+                    key={i}
+                    fill={entry.abc === 'A' ? 'var(--success)' : entry.abc === 'B' ? 'var(--warning)' : 'var(--accent)'}
+                  />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </GlassCard>
+      )}
 
       {/* Table */}
       <GlassCard padding="none">
@@ -117,16 +173,16 @@ export default function NicheTab() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-xs border-b" style={{ borderColor: 'var(--border)', color: 'var(--text-subtle)' }}>
-                <th className="text-left px-4 py-3 font-medium">Ниша / Категория</th>
-                <th className="text-right px-4 py-3 font-medium">Рейтинг</th>
-                <th className="text-right px-4 py-3 font-medium">Привл.</th>
-                <th className="text-right px-4 py-3 font-medium">Выручка</th>
-                <th className="text-center px-4 py-3 font-medium">Сезонность</th>
-                <th className="text-right px-4 py-3 font-medium">Старт</th>
-                <th className="text-right px-4 py-3 font-medium">Пик</th>
-                <th className="text-right px-4 py-3 font-medium">Доступность</th>
-                <th className="text-right px-4 py-3 font-medium">ABC</th>
+              <tr className="text-xs border-b" style={{ borderColor: 'var(--border)' }}>
+                <th className="text-left px-4 py-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Ниша / Категория</th>
+                <SortTh label="Рейтинг" sk="rating" />
+                <SortTh label="Привл." sk="attractiveness" />
+                <SortTh label="Выручка" sk="revenue" />
+                <th className="text-center px-4 py-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Сезонность</th>
+                <SortTh label="Старт" sk="season_start" />
+                <SortTh label="Пик" sk="season_peak" />
+                <SortTh label="Доступность" sk="availability" />
+                <SortTh label="ABC" sk="abc_class" align="center" />
               </tr>
             </thead>
             <tbody>
