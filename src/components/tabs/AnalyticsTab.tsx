@@ -10,7 +10,7 @@ import { GlassCard } from '@/components/ui/GlassCard'
 import { KPIBar } from '@/components/ui/KPIBar'
 import { FilterBar } from '@/components/ui/FilterBar'
 import { exportToExcel } from '@/lib/exportExcel'
-import { ShoppingBag, TrendingDown, Percent, BarChart2, Target, TrendingUp } from 'lucide-react'
+import { ShoppingBag, TrendingDown, Percent, BarChart2, Target, TrendingUp, ChevronUp, ChevronDown } from 'lucide-react'
 
 interface AnalyticsData {
   summary: {
@@ -68,11 +68,32 @@ function ChartTip({ active, payload, label }: { active?: boolean; payload?: Arra
   )
 }
 
+type CatSortKey = 'revenue' | 'delta_pct' | 'chmd' | 'margin_pct' | 'drr' | 'sku_count'
+
+function SortTh({ label, sortKey, current, dir, onClick, align = 'right' }: { label: string; sortKey: CatSortKey; current: CatSortKey; dir: 'asc' | 'desc'; onClick: (k: CatSortKey) => void; align?: 'left' | 'right' }) {
+  const active = current === sortKey
+  return (
+    <th className={`text-${align} pb-3 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text-subtle)' }} onClick={() => onClick(sortKey)}>
+      <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
+        {label}
+        {active ? (dir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <ChevronUp size={11} style={{ opacity: 0.3 }} />}
+      </span>
+    </th>
+  )
+}
+
 export default function AnalyticsTab() {
   const [data, setData] = useState<AnalyticsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [catFilter, setCatFilter] = useState<Record<string, string>>({ margin: 'all', drr: 'all' })
+  const [sortKey, setSortKey] = useState<CatSortKey>('revenue')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  function toggleSort(key: CatSortKey) {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(key); setSortDir('desc') }
+  }
 
   useEffect(() => {
     fetch('/api/dashboard/analytics')
@@ -111,6 +132,9 @@ export default function AnalyticsTab() {
     if (catFilter.drr === 'over' && c.drr <= c.margin_pct) return false
     if (catFilter.drr === 'under' && c.drr > c.margin_pct) return false
     return true
+  }).sort((a, b) => {
+    const mult = sortDir === 'asc' ? 1 : -1
+    return ((a[sortKey] ?? 0) - (b[sortKey] ?? 0)) * mult
   })
 
   function exportCats() {
@@ -213,15 +237,15 @@ export default function AnalyticsTab() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-xs" style={{ color: 'var(--text-subtle)' }}>
-                <th className="text-left pb-3 font-medium">Категория</th>
-                <th className="text-right pb-3 font-medium">SKU</th>
-                <th className="text-right pb-3 font-medium">Выручка</th>
-                <th className="text-right pb-3 font-medium">Δ%</th>
-                <th className="text-right pb-3 font-medium">ЧМД</th>
-                <th className="text-right pb-3 font-medium">Маржа</th>
-                <th className="text-right pb-3 font-medium">ДРР</th>
-                <th className="text-right pb-3 font-medium">Остаток</th>
+              <tr className="text-xs">
+                <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Категория</th>
+                <SortTh label="SKU" sortKey="sku_count" current={sortKey} dir={sortDir} onClick={toggleSort} />
+                <SortTh label="Выручка" sortKey="revenue" current={sortKey} dir={sortDir} onClick={toggleSort} />
+                <SortTh label="Δ%" sortKey="delta_pct" current={sortKey} dir={sortDir} onClick={toggleSort} />
+                <SortTh label="ЧМД" sortKey="chmd" current={sortKey} dir={sortDir} onClick={toggleSort} />
+                <SortTh label="Маржа" sortKey="margin_pct" current={sortKey} dir={sortDir} onClick={toggleSort} />
+                <SortTh label="ДРР" sortKey="drr" current={sortKey} dir={sortDir} onClick={toggleSort} />
+                <th className="text-right pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Остаток</th>
               </tr>
             </thead>
             <tbody>

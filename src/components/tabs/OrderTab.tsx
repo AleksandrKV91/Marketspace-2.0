@@ -5,7 +5,7 @@ import { GlassCard } from '@/components/ui/GlassCard'
 import { KPIBar } from '@/components/ui/KPIBar'
 import { FilterBar } from '@/components/ui/FilterBar'
 import { exportToExcel } from '@/lib/exportExcel'
-import { Package, AlertTriangle, TrendingDown, DollarSign, ShoppingBag, AlertCircle, PackageOpen } from 'lucide-react'
+import { Package, AlertTriangle, TrendingDown, DollarSign, ShoppingBag, AlertCircle, PackageOpen, ChevronUp, ChevronDown } from 'lucide-react'
 import { OrderModal } from '@/components/ui/OrderModal'
 
 interface OrderRow {
@@ -63,6 +63,24 @@ export default function OrderTab() {
   const [search, setSearch] = useState('')
   const [orderFilter, setOrderFilter] = useState<Record<string, string>>({ status: 'all', abc: 'all' })
   const [selectedSku, setSelectedSku] = useState<string | null>(null)
+  const [sortKey, setSortKey] = useState<keyof OrderRow>('stock_days')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+
+  function toggleSort(key: keyof OrderRow) {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(key); setSortDir('asc') }
+  }
+  function SortTh({ label, sk, align = 'right' }: { label: string; sk: keyof OrderRow; align?: 'left' | 'right' | 'center' }) {
+    const active = sortKey === sk
+    return (
+      <th className={`text-${align} pb-3 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text-subtle)' }} onClick={() => toggleSort(sk)}>
+        <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
+          {label}
+          {active ? (sortDir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <ChevronUp size={11} style={{ opacity: 0.3 }} />}
+        </span>
+      </th>
+    )
+  }
 
   useEffect(() => {
     fetch('/api/dashboard/orders')
@@ -90,6 +108,10 @@ export default function OrderTab() {
     if (orderFilter.status !== 'all' && row.status !== orderFilter.status) return false
     if (orderFilter.abc !== 'all' && row.abc !== orderFilter.abc) return false
     return true
+  }).sort((a, b) => {
+    const av = a[sortKey]; const bv = b[sortKey]
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * (sortDir === 'asc' ? 1 : -1)
+    return String(av).localeCompare(String(bv)) * (sortDir === 'asc' ? 1 : -1)
   })
 
   function exportOrders() {
@@ -166,20 +188,20 @@ export default function OrderTab() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-xs" style={{ color: 'var(--text-subtle)' }}>
-                <th className="text-left pb-3 font-medium">SKU WB</th>
-                <th className="text-left pb-3 font-medium">Название</th>
-                <th className="text-center pb-3 font-medium">Статус</th>
-                <th className="text-center pb-3 font-medium">ABC</th>
-                <th className="text-right pb-3 font-medium">Продажи 31д</th>
-                <th className="text-right pb-3 font-medium">OOS дней</th>
-                <th className="text-right pb-3 font-medium">Наличие</th>
-                <th className="text-right pb-3 font-medium">Остаток дней</th>
-                <th className="text-right pb-3 font-medium">Лог. плечо</th>
-                <th className="text-right pb-3 font-medium">Расч. заказ</th>
-                <th className="text-right pb-3 font-medium">Заказ менедж.</th>
-                <th className="text-right pb-3 font-medium">Δ</th>
-                <th className="text-right pb-3 font-medium">Маржа</th>
+              <tr className="text-xs">
+                <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>SKU WB</th>
+                <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Название</th>
+                <SortTh label="Статус" sk="status" align="center" />
+                <SortTh label="ABC" sk="abc" align="center" />
+                <SortTh label="Продажи 31д" sk="sales_31d" />
+                <SortTh label="OOS дней" sk="oos_days" />
+                <SortTh label="Наличие" sk="stock_qty" />
+                <SortTh label="Остаток дней" sk="stock_days" />
+                <SortTh label="Лог. плечо" sk="lead_time" />
+                <SortTh label="Расч. заказ" sk="calc_order" />
+                <SortTh label="Заказ менедж." sk="manager_order" />
+                <SortTh label="Δ" sk="delta_order" />
+                <SortTh label="Маржа" sk="margin_pct" />
               </tr>
             </thead>
             <tbody>
