@@ -9,6 +9,7 @@ import { Zap, ChevronRight, AlertCircle, AlertTriangle, TrendingDown, Rocket } f
 import { GlassCard } from '@/components/ui/GlassCard'
 import { AlertBox } from '@/components/ui/AlertBox'
 import { KPIBar } from '@/components/ui/KPIBar'
+import { usePendingFilter } from '@/app/dashboard/page'
 
 interface OverviewData {
   kpi: {
@@ -77,6 +78,7 @@ export default function OverviewTab() {
   const [data, setData] = useState<OverviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { navigateToSku } = usePendingFilter()
 
   useEffect(() => {
     fetch('/api/dashboard/overview')
@@ -167,10 +169,10 @@ export default function OverviewTab() {
 
         <div className="space-y-3">
           <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Критические алерты</p>
-          <AlertBox icon={<AlertCircle size={14} />} title="STOP реклама" count={data.kpi.oos_count} severity="critical" description={data.kpi.lost_revenue ? ('Потеря: ' + fmt(data.kpi.lost_revenue) + ' ₽') : undefined} onClick={() => {}} />
-          <AlertBox icon={<AlertTriangle size={14} />} title="Скоро OOS" count={0} severity="warning" description="Запас < лог. плеча" onClick={() => {}} />
-          <AlertBox icon={<TrendingDown size={14} />} title="ДРР > Маржа" count={0} severity="warning" onClick={() => {}} />
-          <AlertBox icon={<Rocket size={14} />} title="Потенциал роста" count={data.abc.A} severity="success" onClick={() => {}} />
+          <AlertBox icon={<AlertCircle size={14} />} title="STOP реклама" count={data.kpi.oos_count} severity="critical" description={data.kpi.lost_revenue ? ('Потеря: ' + fmt(data.kpi.lost_revenue) + ' ₽') : undefined} onClick={() => navigateToSku({ type: 'stop_ads', label: 'STOP реклама: OOS + активная реклама' })} />
+          <AlertBox icon={<AlertTriangle size={14} />} title="Скоро OOS" count={0} severity="warning" description="Запас < лог. плеча" onClick={() => navigateToSku({ type: 'low_stock', label: 'Скоро OOS: запас < лог. плеча' })} />
+          <AlertBox icon={<TrendingDown size={14} />} title="ДРР > Маржа" count={0} severity="warning" onClick={() => navigateToSku({ type: 'drr_over', label: 'ДРР > Маржа' })} />
+          <AlertBox icon={<Rocket size={14} />} title="Потенциал роста" count={data.abc.A} severity="success" onClick={() => navigateToSku({ type: 'potential', label: 'Потенциал: высокий CTR + низкий CR' })} />
         </div>
       </div>
 

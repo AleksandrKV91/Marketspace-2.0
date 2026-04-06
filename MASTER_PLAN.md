@@ -1,5 +1,5 @@
 # MASTER PLAN — Marketspace 2.0
-_Создан: 05.04.2026. Обновлять по мере выполнения._
+_Создан: 05.04.2026. Обновлять по мере выполнения. Последнее обновление: 06.04.2026_
 
 ---
 
@@ -175,9 +175,9 @@ LEFT JOIN fact_abc ab ON ab.sku_ms = d.sku_ms
 
 ---
 
-## БЛОК B — МОДАЛЬНЫЕ ОКНА (приоритет #2)
+## БЛОК B — МОДАЛЬНЫЕ ОКНА (приоритет #2) ✅ ВЫПОЛНЕНО (06.04.2026)
 
-### B1. SkuModal — стандартный (все вкладки кроме OrderTab)
+### B1. SkuModal — стандартный (все вкладки кроме OrderTab) ✅
 
 **Файл:** `src/components/ui/SkuModal.tsx`
 
@@ -205,7 +205,7 @@ LEFT JOIN fact_abc ab ON ab.sku_ms = d.sku_ms
 
 **API:** `GET /api/sku-modal?sku_ms=XXX` — новый route, собирает всё из unified_sku + fact_sku_daily (последние 30д) + fact_price_changes (последние 10)
 
-### B2. OrderModal — вкладка «Логистика и заказы»
+### B2. OrderModal — вкладка «Логистика и заказы» ✅
 
 **Файл:** `src/components/ui/OrderModal.tsx`
 
@@ -397,7 +397,10 @@ const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
 ---
 
-## БЛОК G — ГЛОБАЛЬНЫЙ КАЛЕНДАРНЫЙ ФИЛЬТР (приоритет #3.5, между C и D)
+## БЛОК G — ГЛОБАЛЬНЫЙ КАЛЕНДАРНЫЙ ФИЛЬТР (приоритет #3.5, между C и D) ✅ КОМПОНЕНТ ГОТОВ (06.04.2026)
+> ⚠️ Известная проблема: DateRangePicker отображается в хедере, но позиция требует уточнения.
+> Нужно: переместить под логотип «M Marketspace 2.0» (вторая строка хедера, слева).
+> Статус: компонент работает, от/до выбирается корректно. Подключение к API routes — в очереди.
 
 ### G1. Компонент DateRangeFilter (в FilterBar или отдельно)
 
@@ -442,22 +445,24 @@ interface DateRange {
 
 ---
 
-## ПОРЯДОК ВЫПОЛНЕНИЯ (обновлён)
+## ПОРЯДОК ВЫПОЛНЕНИЯ (обновлён 06.04.2026)
 
 ```
-Шаг 0: [A0] Починить Supabase Storage bucket — загрузка выдаёт "Storage: Load failed"
-Шаг 1: [A1] Загрузить Отчёт по SKU → заполнить fact_sku_daily + fact_sku_snapshot
-Шаг 2: [A2] fact_price_changes — /api/upload/stock сохраняет ✅, источник — колонки CJ-CO в Отчёте по SKU (дублируют данные из Таблицы остатков)
-Шаг 3: [A5/A6] Добавить mc_stock (= fbs_smolensk колонка ADD) + lead_time_days из Потребность Китай → Зеленка → колонка AN
-Шаг 4: [A9] Создать materialized view unified_sku в Supabase
-Шаг 5: [G] DateRangePicker компонент + uiStore dateRange + обновить API routes
-Шаг 6: [B1] SkuModal стандартный + /api/sku-modal route
-Шаг 7: [B2] OrderModal + /api/order-modal route
-Шаг 8: [C] Клики по карточкам + pendingFilter в uiStore + hover effects
-Шаг 9: [D1] Сортировка по колонкам во всех таблицах
-Шаг 10: [D2] Расширенные фильтры в FilterBar
-Шаг 11: [E] Доработка вкладок (по очереди)
-Шаг 12: [F] Sticky header
+Шаг 0:  [A0] Починить Supabase Storage bucket ✅ (решено — загрузки работают)
+Шаг 1:  [A1] Загрузить Отчёт по SKU → заполнить fact_sku_daily + fact_sku_snapshot — ⏳ данные пусты, файл загружается но парсер не находит нужные колонки
+Шаг 2:  [A2] fact_price_changes — route сохраняет ✅, нужна повторная загрузка остатков
+Шаг 3:  [A5/A6] mc_stock (fbs_smolensk) ✅ уже есть в fact_stock_snapshot. lead_time_days — нужно парсить из «Потребность Китай» (колонка AN)
+Шаг 4:  [A9] Materialized view unified_sku — в очереди
+Шаг 5:  [G] DateRangePicker ✅ компонент создан, в хедере. ⚠️ позиция требует правки (под лого слева). Подключение к API — в очереди
+Шаг 6:  [B1] SkuModal ✅ создан, подключён в SkuTableTab
+Шаг 7:  [B2] OrderModal ✅ создан, подключён в OrderTab
+Шаг 8:  [C] Клики по карточкам + pendingFilter — ⏳ СЛЕДУЮЩИЙ
+Шаг 9:  [D1] Сортировка по колонкам во всех таблицах — в очереди
+Шаг 10: [D2] Расширенные фильтры в FilterBar — в очереди
+Шаг 11: [E] Доработка вкладок (по очереди) — в очереди
+Шаг 12: [F] Sticky header — в очереди
+Шаг 13: [FIX] DateRangePicker — перенести под логотип (вторая строка хедера, слева)
+Шаг 14: [FIX] Модалки — проверить и исправить после тестирования
 ```
 
 ---

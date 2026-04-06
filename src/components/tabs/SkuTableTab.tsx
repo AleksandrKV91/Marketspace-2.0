@@ -6,6 +6,7 @@ import { ScoreBadge } from '@/components/ui/ScoreBadge'
 import { PriorityBadge } from '@/components/ui/PriorityBadge'
 import { Search, Filter, Download, X, ChevronUp, ChevronDown } from 'lucide-react'
 import { SkuModal } from '@/components/ui/SkuModal'
+import { usePendingFilter } from '@/app/dashboard/page'
 
 interface SkuRow {
   sku: string
@@ -116,6 +117,15 @@ export default function SkuTableTab() {
 
   const hasFilters = search || filterNovelty !== 'all' || filterOos !== 'all' || filterDrr !== 'all' || filterMargin !== 'all'
   const [selectedSku, setSelectedSku] = useState<string | null>(null)
+  const { pending, setPending } = usePendingFilter()
+
+  useEffect(() => {
+    if (!pending) return
+    if (pending.type === 'stop_ads' || pending.type === 'oos') setFilterOos('critical')
+    else if (pending.type === 'low_stock') setFilterOos('warning')
+    else if (pending.type === 'drr_over') setFilterDrr('over')
+    setPending(null)
+  }, [])
 
   if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
 
