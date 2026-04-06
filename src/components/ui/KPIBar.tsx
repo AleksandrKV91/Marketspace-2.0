@@ -8,6 +8,7 @@ interface KPIItem {
   delta?: string
   deltaPositive?: boolean
   danger?: boolean
+  accent?: boolean
   icon?: string
 }
 
@@ -43,6 +44,8 @@ export function KPIBar({ items, loading }: KPIBarProps) {
                 : undefined,
               background: item.danger
                 ? 'linear-gradient(135deg, rgba(220,38,38,0.08) 0%, rgba(220,38,38,0.03) 100%)'
+                : item.accent
+                ? 'linear-gradient(135deg, rgba(59,130,246,0.10) 0%, rgba(59,130,246,0.04) 100%)'
                 : undefined,
             }}
           >
@@ -68,7 +71,7 @@ export function KPIBar({ items, loading }: KPIBarProps) {
                 </p>
                 <p
                   className="text-xl font-bold tracking-tight leading-tight"
-                  style={{ color: item.danger ? 'var(--danger)' : 'var(--text)' }}
+                  style={{ color: item.danger ? 'var(--danger)' : item.accent ? '#3B82F6' : 'var(--text)' }}
                 >
                   {item.value}
                 </p>

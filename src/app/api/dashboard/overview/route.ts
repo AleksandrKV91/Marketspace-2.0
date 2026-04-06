@@ -152,6 +152,26 @@ export async function GET() {
     ? marginsWithRevenue.reduce((s, r) => s + (r.margin_pct ?? 0), 0) / marginsWithRevenue.length
     : 0
 
+  // Top-15 SKU by revenue
+  const top15 = Object.entries(abcByMs)
+    .map(([skuMs, abc]) => {
+      const dim = dimByMs[skuMs]
+      const stock = dim?.sku_wb ? stockByWb[dim.sku_wb] : null
+      const dpd = (stock?.total_stock ?? 0) > 0 ? undefined : undefined
+      const stockDays = stock?.total_stock && stock.total_stock > 0 ? 999 : 0
+      return {
+        sku_ms: skuMs,
+        sku_wb: dim?.sku_wb ?? null,
+        name: dim?.name ?? skuMs,
+        revenue: abc.revenue ?? 0,
+        margin_pct: abc.profitability ?? (stock?.margin_pct ?? 0),
+        stock_days: stockDays,
+        abc_class: abc.abc_class ?? '—',
+      }
+    })
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 15)
+
   return NextResponse.json({
     kpi: {
       revenue: totalRevenue,
@@ -162,6 +182,7 @@ export async function GET() {
     },
     stock: stockAgg,
     abc: abcCounts,
+    top15,
     trend,
     categories,
     managers,

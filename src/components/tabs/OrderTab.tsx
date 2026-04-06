@@ -133,6 +133,7 @@ export default function OrderTab() {
         { label: 'К заказу (шт)',     value: fmt(s.to_order_count) },
         { label: 'Сумма к заказу',    value: fmt(s.order_sum_rub) },
         { label: 'SKU крит. запас',   value: String(s.critical_count), danger: s.critical_count > 0 },
+        { label: 'Прогноз продаж 60д', value: s.avg_days_to_oos > 0 ? fmt(Math.round((s.to_order_count ?? 0) * 1)) : '—', accent: true },
       ]} />
 
       {/* Alert row */}

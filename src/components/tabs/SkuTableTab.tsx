@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { ScoreBadge } from '@/components/ui/ScoreBadge'
 import { PriorityBadge } from '@/components/ui/PriorityBadge'
-import { Search, Filter, Download, X, ChevronUp, ChevronDown } from 'lucide-react'
+import { Search, Filter, Download, X, ChevronUp, ChevronDown, SlidersHorizontal } from 'lucide-react'
 import { SkuModal } from '@/components/ui/SkuModal'
 import { usePendingFilter } from '@/app/dashboard/page'
 
@@ -84,6 +84,11 @@ export default function SkuTableTab() {
   const [sortKey, setSortKey] = useState<SortKey>('score')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [sidePanelOpen, setSidePanelOpen] = useState(false)
+  const [filterOosOnly, setFilterOosOnly] = useState(false)
+  const [filterDrrOnly, setFilterDrrOnly] = useState(false)
+  const [filterLowMarginOnly, setFilterLowMarginOnly] = useState(false)
+  const [filterWithAds, setFilterWithAds] = useState(false)
 
   const buildUrl = useCallback(() => {
     const p = new URLSearchParams()
@@ -92,10 +97,14 @@ export default function SkuTableTab() {
     if (filterOos !== 'all') p.set('oos', filterOos)
     if (filterDrr !== 'all') p.set('drr', filterDrr)
     if (filterMargin !== 'all') p.set('margin', filterMargin)
+    if (filterOosOnly) p.set('oos', 'critical')
+    if (filterDrrOnly) p.set('drr', 'over')
+    if (filterLowMarginOnly) p.set('margin', 'low')
+    if (filterWithAds) p.set('with_ads', '1')
     p.set('sort', sortKey)
     p.set('dir', sortDir)
     return '/api/dashboard/sku-table?' + p.toString()
-  }, [search, filterNovelty, filterOos, filterDrr, filterMargin, sortKey, sortDir])
+  }, [search, filterNovelty, filterOos, filterDrr, filterMargin, filterOosOnly, filterDrrOnly, filterLowMarginOnly, filterWithAds, sortKey, sortDir])
 
   useEffect(() => {
     setLoading(true)
@@ -186,6 +195,11 @@ export default function SkuTableTab() {
           style={{ background: filtersOpen ? 'var(--accent-glow)' : 'var(--border)', color: filtersOpen ? 'var(--accent)' : 'var(--text-muted)' }}>
           <Filter size={12} /> Фильтры {hasFilters ? '●' : ''}
         </button>
+        <button onClick={() => setSidePanelOpen(v => !v)}
+          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-medium"
+          style={{ background: sidePanelOpen ? 'var(--accent-glow)' : 'var(--border)', color: sidePanelOpen ? 'var(--accent)' : 'var(--text-muted)' }}>
+          <SlidersHorizontal size={12} /> Доп. фильтры {(filterOosOnly || filterDrrOnly || filterLowMarginOnly || filterWithAds) ? '●' : ''}
+        </button>
       </div>
 
       {/* Additional filters */}
@@ -230,7 +244,41 @@ export default function SkuTableTab() {
         </div>
       )}
 
+      {/* Side panel + table layout */}
+      <div className="flex gap-4 items-start">
+
+      {/* Side panel */}
+      {sidePanelOpen && (
+        <div className="w-[240px] shrink-0 glass rounded-2xl p-4 space-y-4" style={{ borderRadius: 'var(--radius-xl)' }}>
+          <p className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Быстрые фильтры</p>
+          {[
+            { key: 'oos', label: 'OOS критично', state: filterOosOnly, toggle: () => setFilterOosOnly(v => !v) },
+            { key: 'drr', label: 'ДРР > Маржа', state: filterDrrOnly, toggle: () => setFilterDrrOnly(v => !v) },
+            { key: 'margin', label: 'Маржа < 15%', state: filterLowMarginOnly, toggle: () => setFilterLowMarginOnly(v => !v) },
+            { key: 'ads', label: 'Только с рекламой', state: filterWithAds, toggle: () => setFilterWithAds(v => !v) },
+          ].map(f => (
+            <label key={f.key} className="flex items-center gap-2.5 cursor-pointer" onClick={f.toggle}>
+              <div
+                className="w-4 h-4 rounded flex items-center justify-center shrink-0 transition-colors"
+                style={{ background: f.state ? 'var(--accent)' : 'transparent', border: f.state ? 'none' : '1px solid var(--border)' }}
+              >
+                {f.state && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+              </div>
+              <span className="text-xs" style={{ color: 'var(--text)' }}>{f.label}</span>
+            </label>
+          ))}
+          <button
+            onClick={() => { setFilterOosOnly(false); setFilterDrrOnly(false); setFilterLowMarginOnly(false); setFilterWithAds(false) }}
+            className="w-full text-xs py-1.5 rounded-xl font-medium mt-2"
+            style={{ background: 'var(--border)', color: 'var(--text-muted)' }}
+          >
+            Сбросить
+          </button>
+        </div>
+      )}
+
       {/* Main table */}
+      <div className="flex-1 min-w-0">
       <GlassCard padding="none">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -319,6 +367,8 @@ export default function SkuTableTab() {
           </table>
         </div>
       </GlassCard>
+      </div>
+      </div>
       <SkuModal skuMs={selectedSku} onClose={() => setSelectedSku(null)} />
     </div>
   )

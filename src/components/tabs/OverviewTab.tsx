@@ -10,6 +10,8 @@ import { GlassCard } from '@/components/ui/GlassCard'
 import { AlertBox } from '@/components/ui/AlertBox'
 import { KPIBar } from '@/components/ui/KPIBar'
 import { usePendingFilter } from '@/app/dashboard/page'
+import { exportToExcel } from '@/lib/exportExcel'
+import { Download } from 'lucide-react'
 
 interface OverviewData {
   kpi: {
@@ -26,6 +28,7 @@ interface OverviewData {
   trend: Array<{ date: string; sales_qty: number; revenue?: number; chmd?: number }>
   categories: Array<{ category: string; revenue: number; chmd: number; sku_count: number }>
   managers: Array<{ manager: string; revenue: number; chmd: number; sku_count: number; margin_pct: number }>
+  top15: Array<{ sku_ms: string; sku_wb: number | null; name: string; revenue: number; margin_pct: number; stock_days: number; abc_class: string }>
   latest_date: string | null
 }
 
@@ -267,6 +270,64 @@ export default function OverviewTab() {
           })}
         </div>
       </GlassCard>
+
+      {/* TOP-15 SKU */}
+      {(data.top15 ?? []).length > 0 && (
+        <GlassCard padding="lg">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>ТОП-15 SKU по выручке</p>
+            <button
+              onClick={() => exportToExcel((data.top15 ?? []).map((r, i) => ({
+                '#': i + 1, 'Артикул МС': r.sku_ms, 'Артикул WB': r.sku_wb, 'Название': r.name,
+                'Выручка': r.revenue, 'Маржа%': (r.margin_pct * 100).toFixed(1), 'ABC': r.abc_class,
+              })), 'ТОП-15')}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}
+            >
+              <Download size={12} /> Excel
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs" style={{ color: 'var(--text-subtle)', borderBottom: '1px solid var(--border)' }}>
+                  <th className="text-left pb-2 font-medium w-8">#</th>
+                  <th className="text-left pb-2 font-medium">Название</th>
+                  <th className="text-left pb-2 font-medium">Арт. WB</th>
+                  <th className="text-right pb-2 font-medium">Выручка</th>
+                  <th className="text-right pb-2 font-medium">Маржа</th>
+                  <th className="text-center pb-2 font-medium">ABC</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data.top15 ?? []).map((row, i) => {
+                  const isLow = row.margin_pct < 0.10
+                  const abcCls = (row.abc_class ?? '').charAt(0).toUpperCase()
+                  const abcColor = abcCls === 'A' ? 'var(--success)' : abcCls === 'B' ? 'var(--warning)' : 'var(--danger)'
+                  return (
+                    <tr key={row.sku_ms} className="border-t" style={{ borderColor: 'var(--border)' }}>
+                      <td className="py-2 text-xs" style={{ color: 'var(--text-subtle)' }}>{i + 1}</td>
+                      <td className="py-2 pr-4 max-w-[240px]">
+                        <span className="block truncate text-xs font-medium" style={{ color: 'var(--text)' }}>{row.name}</span>
+                      </td>
+                      <td className="py-2 pr-4 font-mono text-xs" style={{ color: 'var(--text-muted)' }}>{row.sku_wb ?? '—'}</td>
+                      <td className="py-2 text-right font-semibold text-xs" style={{ color: 'var(--text)' }}>{fmt(row.revenue)}</td>
+                      <td className="py-2 text-right">
+                        <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: isLow ? 'var(--danger-bg)' : 'var(--success-bg)', color: isLow ? 'var(--danger)' : 'var(--success)' }}>
+                          {(row.margin_pct * 100).toFixed(1)}%
+                        </span>
+                      </td>
+                      <td className="py-2 text-center">
+                        <span className="text-xs font-bold" style={{ color: abcColor }}>{abcCls || '—'}</span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </GlassCard>
+      )}
     </div>
   )
 }

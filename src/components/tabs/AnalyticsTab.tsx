@@ -156,6 +156,7 @@ export default function AnalyticsTab() {
         { label: 'ДРР', value: fmtPct(s.drr) },
         { label: 'CPO', value: s.cpo ? fmt(s.cpo) + ' ₽' : '—' },
         { label: 'Δ Выручки', value: s.delta_revenue_pct != null ? (s.delta_revenue_pct > 0 ? '+' : '') + s.delta_revenue_pct.toFixed(1) + '%' : '—', deltaPositive: (s.delta_revenue_pct ?? 0) >= 0 },
+        { label: 'Прогноз 60д', value: s.revenue > 0 ? fmt(Math.round(s.revenue / 30 * 60)) : '—', accent: true },
       ]} />
 
       {/* Charts */}
