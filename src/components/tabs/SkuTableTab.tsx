@@ -5,6 +5,7 @@ import { GlassCard } from '@/components/ui/GlassCard'
 import { ScoreBadge } from '@/components/ui/ScoreBadge'
 import { PriorityBadge } from '@/components/ui/PriorityBadge'
 import { Search, Filter, Download, X, ChevronUp, ChevronDown } from 'lucide-react'
+import { SkuModal } from '@/components/ui/SkuModal'
 
 interface SkuRow {
   sku: string
@@ -114,6 +115,7 @@ export default function SkuTableTab() {
   }
 
   const hasFilters = search || filterNovelty !== 'all' || filterOos !== 'all' || filterDrr !== 'all' || filterMargin !== 'all'
+  const [selectedSku, setSelectedSku] = useState<string | null>(null)
 
   if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
 
@@ -262,6 +264,7 @@ export default function SkuTableTab() {
                     key={i}
                     className="border-t transition-colors"
                     style={{ borderColor: 'var(--border)', cursor: 'pointer' }}
+                    onClick={() => setSelectedSku(row.sku)}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-hover)' }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}
                   >
@@ -306,6 +309,7 @@ export default function SkuTableTab() {
           </table>
         </div>
       </GlassCard>
+      <SkuModal skuMs={selectedSku} onClose={() => setSelectedSku(null)} />
     </div>
   )
 }

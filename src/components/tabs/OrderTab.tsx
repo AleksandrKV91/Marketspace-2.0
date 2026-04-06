@@ -6,8 +6,10 @@ import { KPIBar } from '@/components/ui/KPIBar'
 import { FilterBar } from '@/components/ui/FilterBar'
 import { exportToExcel } from '@/lib/exportExcel'
 import { Package, AlertTriangle, TrendingDown, DollarSign, ShoppingBag, AlertCircle, PackageOpen } from 'lucide-react'
+import { OrderModal } from '@/components/ui/OrderModal'
 
 interface OrderRow {
+  sku_ms: string
   sku_wb: string
   name: string
   status: 'critical' | 'warning' | 'ok'
@@ -60,6 +62,7 @@ export default function OrderTab() {
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [orderFilter, setOrderFilter] = useState<Record<string, string>>({ status: 'all', abc: 'all' })
+  const [selectedSku, setSelectedSku] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/dashboard/orders')
@@ -184,7 +187,7 @@ export default function OrderTab() {
                 const sc = statusCfg[row.status] ?? statusCfg.ok
                 const isLowMargin = row.margin_pct < 0.10
                 return (
-                  <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
+                  <tr key={i} className="border-t" style={{ borderColor: 'var(--border)', cursor: 'pointer' }} onClick={() => setSelectedSku(row.sku_ms)}>
                     <td className="py-2 pr-2 font-mono text-xs" style={{ color: 'var(--text-muted)' }}>{row.sku_wb}</td>
                     <td className="py-2 pr-4 max-w-[180px] truncate" style={{ color: 'var(--text)' }}>{row.name}</td>
                     <td className="py-2 text-center">
@@ -224,6 +227,7 @@ export default function OrderTab() {
           </table>
         </div>
       </GlassCard>
+      <OrderModal skuMs={selectedSku} onClose={() => setSelectedSku(null)} />
     </div>
   )
 }
