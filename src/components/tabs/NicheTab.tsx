@@ -48,7 +48,7 @@ export default function NicheTab() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [nicheFilter, setNicheFilter] = useState<Record<string, string>>({ seasonal: 'all', abc: 'all' })
+  const [nicheFilter, setNicheFilter] = useState<Record<string, string>>({ seasonal: 'all', abc: 'all', min_revenue: 'all' })
   const [sortKey, setSortKey] = useState<keyof NicheRow>('rating')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
@@ -78,12 +78,15 @@ export default function NicheTab() {
   if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
 
   const allRows = data?.rows ?? []
-  const hasFilter = search.trim() !== '' || nicheFilter.seasonal !== 'all' || nicheFilter.abc !== 'all'
+  const hasFilter = search.trim() !== '' || nicheFilter.seasonal !== 'all' || nicheFilter.abc !== 'all' || nicheFilter.min_revenue !== 'all'
   const filteredRows = allRows.filter(row => {
     if (search && !row.niche.toLowerCase().includes(search.toLowerCase()) && !row.category.toLowerCase().includes(search.toLowerCase())) return false
     if (nicheFilter.seasonal === 'seasonal' && !row.seasonal) return false
     if (nicheFilter.seasonal === 'no' && row.seasonal) return false
     if (nicheFilter.abc !== 'all' && row.abc_class !== nicheFilter.abc) return false
+    if (nicheFilter.min_revenue === '100k' && row.revenue < 100_000) return false
+    if (nicheFilter.min_revenue === '500k' && row.revenue < 500_000) return false
+    if (nicheFilter.min_revenue === '1m' && row.revenue < 1_000_000) return false
     return true
   }).sort((a, b) => {
     const mult = sortDir === 'asc' ? 1 : -1
@@ -161,10 +164,16 @@ export default function NicheTab() {
                 { value: 'B', label: 'B' },
                 { value: 'C', label: 'C' },
               ]},
+              { label: 'Мин. выручка', key: 'min_revenue', options: [
+                { value: 'all', label: 'Все' },
+                { value: '100k', label: '>100К' },
+                { value: '500k', label: '>500К' },
+                { value: '1m', label: '>1М' },
+              ]},
             ]}
             values={nicheFilter}
             onChange={(k, v) => setNicheFilter(f => ({ ...f, [k]: v }))}
-            onReset={() => { setNicheFilter({ seasonal: 'all', abc: 'all' }); setSearch('') }}
+            onReset={() => { setNicheFilter({ seasonal: 'all', abc: 'all', min_revenue: 'all' }); setSearch('') }}
             hasActive={hasFilter}
             onExport={exportNiches}
             summary={<span className="text-xs" style={{ color: 'var(--text-muted)' }}>Ниши · {filteredRows.length}</span>}
