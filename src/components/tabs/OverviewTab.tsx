@@ -12,6 +12,7 @@ import { KPIBar } from '@/components/ui/KPIBar'
 import { usePendingFilter } from '@/app/dashboard/page'
 import { exportToExcel } from '@/lib/exportExcel'
 import { Download } from 'lucide-react'
+import { useDateRange } from '@/components/ui/DateRangePicker'
 
 interface OverviewData {
   kpi: {
@@ -82,13 +83,14 @@ export default function OverviewTab() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const { navigateToSku } = usePendingFilter()
+  const { range } = useDateRange()
 
   useEffect(() => {
-    fetch('/api/dashboard/overview')
+    fetch(`/api/dashboard/overview?from=${range.from}&to=${range.to}`)
       .then(r => r.json())
       .then((d: OverviewData) => { setData(d); setLoading(false) })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
-  }, [])
+  }, [range.from, range.to])
 
   if (loading) return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">

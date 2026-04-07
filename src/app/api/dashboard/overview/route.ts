@@ -3,8 +3,11 @@ import { createServiceClient } from '@/lib/supabase/server'
 
 export const maxDuration = 30
 
-export async function GET() {
+export async function GET(req: Request) {
   const supabase = createServiceClient()
+  const url = new URL(req.url)
+  const fromParam = url.searchParams.get('from')
+  const toParam = url.searchParams.get('to')
 
   // Latest upload IDs
   const { data: lastUploads } = await supabase
@@ -23,6 +26,7 @@ export async function GET() {
 
   const stockId = latestByType['stock']
   const abcId = latestByType['abc']
+  const skuReportId = latestByType['sku_report']
 
   // dim_sku for category/manager mapping
   const { data: dimRows } = await supabase
@@ -143,6 +147,18 @@ export async function GET() {
     .map(([manager, v]) => ({ manager, ...v, margin_pct: v.revenue > 0 ? v.chmd / v.revenue : 0 }))
     .sort((a, b) => b.revenue - a.revenue)
 
+  // Ad spend from sku_snapshot for DRR
+  let totalAdSpend = 0
+  if (skuReportId) {
+    const { data: snapRows } = await supabase
+      .from('fact_sku_snapshot')
+      .select('ad_spend')
+      .eq('upload_id', skuReportId)
+    if (snapRows) {
+      for (const r of snapRows) totalAdSpend += r.ad_spend ?? 0
+    }
+  }
+
   // OOS count
   const oosCount = Object.values(stockByWb).filter(s => (s.total_stock ?? 0) === 0).length
 
@@ -177,6 +193,7 @@ export async function GET() {
       revenue: totalRevenue,
       chmd: totalChmd,
       avg_margin_pct: avgMargin,
+      drr: totalRevenue > 0 ? totalAdSpend / totalRevenue : null,
       oos_count: oosCount,
       sku_count: dimRows?.length ?? 0,
     },
