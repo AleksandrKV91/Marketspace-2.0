@@ -7,6 +7,8 @@ export async function GET(req: NextRequest) {
   const supabase = createServiceClient()
   const { searchParams } = new URL(req.url)
   const search = searchParams.get('search') ?? ''
+  const fromParam = searchParams.get('from')
+  const toParam = searchParams.get('to')
 
   // Все изменения цен — соединим с dim_sku для названия
   let query = supabase
@@ -14,6 +16,9 @@ export async function GET(req: NextRequest) {
     .select('sku_wb, sku_ms, price_date, price')
     .order('price_date', { ascending: false })
     .limit(2000)
+
+  if (fromParam) query = query.gte('price_date', fromParam)
+  if (toParam) query = query.lte('price_date', toParam)
 
   if (search) {
     query = query.or(`sku_ms.ilike.%${search}%`)

@@ -210,7 +210,7 @@ export function DateRangePicker() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.97 }}
             transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-            className="absolute right-0 z-[200] glass p-4"
+            className="absolute left-0 z-[200] glass p-4"
             style={{
               top: 'calc(100% + 8px)',
               borderRadius: 'var(--radius-xl)',

@@ -3,8 +3,12 @@ import { createServiceClient } from '@/lib/supabase/server'
 
 export const maxDuration = 30
 
-export async function GET() {
+export async function GET(req: Request) {
   const supabase = createServiceClient()
+  const url = new URL(req.url)
+  const fromParam = url.searchParams.get('from')
+  const toParam = url.searchParams.get('to')
+  const horizon = parseInt(url.searchParams.get('horizon') ?? '60', 10)
 
   // Последние uploads по типам
   const { data: lastUploads } = await supabase
@@ -136,7 +140,7 @@ export async function GET() {
     const dpd = daysWithStock > 0 ? dpd31 / daysWithStock : 0
 
     const daysStock = dpd > 0 ? totalStock / dpd : (totalStock > 0 ? 999 : 0)
-    const logPleche = 60 // дней (горизонт поставки)
+    const logPleche = horizon // дней (горизонт поставки)
 
     const needed = Math.max(0, Math.round(dpd * logPleche - alreadyHave))
 

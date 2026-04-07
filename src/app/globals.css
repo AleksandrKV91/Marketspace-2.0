@@ -257,7 +257,25 @@ body::after {
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
   box-shadow: none;
-  position: relative;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+/* Sticky table header — используй top: var(--header-h) */
+:root { --header-h: 88px; }
+
+.sticky-thead thead tr th {
+  position: sticky;
+  top: var(--header-h);
+  z-index: 20;
+  background: var(--surface-solid);
+  backdrop-filter: var(--blur-xs);
+  -webkit-backdrop-filter: var(--blur-xs);
+}
+
+[data-theme="dark"] .sticky-thead thead tr th {
+  background: rgba(17, 24, 39, 0.92);
 }
 
 [data-theme="dark"] .top-nav {

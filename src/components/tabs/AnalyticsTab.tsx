@@ -11,6 +11,7 @@ import { KPIBar } from '@/components/ui/KPIBar'
 import { FilterBar } from '@/components/ui/FilterBar'
 import { exportToExcel } from '@/lib/exportExcel'
 import { ShoppingBag, TrendingDown, Percent, BarChart2, Target, TrendingUp, ChevronUp, ChevronDown } from 'lucide-react'
+import { useDateRange } from '@/components/ui/DateRangePicker'
 
 interface AnalyticsData {
   summary: {
@@ -89,6 +90,7 @@ export default function AnalyticsTab() {
   const [catFilter, setCatFilter] = useState<Record<string, string>>({ margin: 'all', drr: 'all' })
   const [sortKey, setSortKey] = useState<CatSortKey>('revenue')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const { range } = useDateRange()
 
   function toggleSort(key: CatSortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -96,11 +98,11 @@ export default function AnalyticsTab() {
   }
 
   useEffect(() => {
-    fetch('/api/dashboard/analytics')
+    fetch(`/api/dashboard/analytics?from=${range.from}&to=${range.to}`)
       .then(r => r.json())
       .then((d: AnalyticsData) => { setData(d); setLoading(false) })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
-  }, [])
+  }, [range.from, range.to])
 
   if (loading) return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
@@ -236,7 +238,7 @@ export default function AnalyticsTab() {
           />
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm sticky-thead">
             <thead>
               <tr className="text-xs">
                 <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Категория</th>

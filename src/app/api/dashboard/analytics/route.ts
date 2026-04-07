@@ -3,8 +3,11 @@ import { createServiceClient } from '@/lib/supabase/server'
 
 export const maxDuration = 30
 
-export async function GET() {
+export async function GET(req: Request) {
   const supabase = createServiceClient()
+  const url = new URL(req.url)
+  const fromParam = url.searchParams.get('from')
+  const toParam = url.searchParams.get('to')
 
   // Последний upload_id для sku_report и abc
   const { data: lastUploads } = await supabase
@@ -45,17 +48,21 @@ export async function GET() {
 
   const dailyAgg: Record<string, { revenue: number; ad_spend: number; drr: number }> = {}
   if (latestDate) {
-    const { data: dates5 } = await supabase
-      .from('fact_sku_daily')
-      .select('metric_date')
-      .order('metric_date', { ascending: false })
-      .limit(5)
-    const dateList = [...new Set((dates5 ?? []).map(d => d.metric_date))]
-
-    const { data: dailyRows } = await supabase
+    let dailyQ = supabase
       .from('fact_sku_daily')
       .select('sku_ms, revenue, ad_spend')
-      .in('metric_date', dateList)
+    if (fromParam && toParam) {
+      dailyQ = dailyQ.gte('metric_date', fromParam).lte('metric_date', toParam)
+    } else {
+      const { data: dates5 } = await supabase
+        .from('fact_sku_daily')
+        .select('metric_date')
+        .order('metric_date', { ascending: false })
+        .limit(5)
+      const dateList = [...new Set((dates5 ?? []).map(d => d.metric_date))]
+      dailyQ = dailyQ.in('metric_date', dateList)
+    }
+    const { data: dailyRows } = await dailyQ
 
     if (dailyRows) {
       for (const r of dailyRows) {

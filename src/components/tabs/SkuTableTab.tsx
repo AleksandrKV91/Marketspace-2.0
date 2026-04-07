@@ -6,6 +6,7 @@ import { ScoreBadge } from '@/components/ui/ScoreBadge'
 import { PriorityBadge } from '@/components/ui/PriorityBadge'
 import { Search, Filter, Download, X, ChevronUp, ChevronDown, SlidersHorizontal } from 'lucide-react'
 import { SkuModal } from '@/components/ui/SkuModal'
+import { useDateRange } from '@/components/ui/DateRangePicker'
 import { usePendingFilter } from '@/app/dashboard/page'
 
 interface SkuRow {
@@ -77,6 +78,7 @@ export default function SkuTableTab() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const { range } = useDateRange()
   const [filterNovelty, setFilterNovelty] = useState<'all' | 'novelty' | 'no_novelty'>('all')
   const [filterOos, setFilterOos] = useState<'all' | 'critical' | 'warning' | 'ok'>('all')
   const [filterDrr, setFilterDrr] = useState<'all' | 'over' | 'under'>('all')
@@ -103,8 +105,10 @@ export default function SkuTableTab() {
     if (filterWithAds) p.set('with_ads', '1')
     p.set('sort', sortKey)
     p.set('dir', sortDir)
+    p.set('from', range.from)
+    p.set('to', range.to)
     return '/api/dashboard/sku-table?' + p.toString()
-  }, [search, filterNovelty, filterOos, filterDrr, filterMargin, filterOosOnly, filterDrrOnly, filterLowMarginOnly, filterWithAds, sortKey, sortDir])
+  }, [search, filterNovelty, filterOos, filterDrr, filterMargin, filterOosOnly, filterDrrOnly, filterLowMarginOnly, filterWithAds, sortKey, sortDir, range.from, range.to])
 
   useEffect(() => {
     setLoading(true)
@@ -281,7 +285,7 @@ export default function SkuTableTab() {
       <div className="flex-1 min-w-0">
       <GlassCard padding="none">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm sticky-thead">
             <thead>
               <tr className="text-xs border-b" style={{ borderColor: 'var(--border)', color: 'var(--text-subtle)' }}>
                 <th className="text-left px-4 py-3 font-medium w-24">Статус</th>

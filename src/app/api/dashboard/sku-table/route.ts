@@ -7,6 +7,8 @@ export async function GET(req: NextRequest) {
   const supabase = createServiceClient()
   const { searchParams } = new URL(req.url)
   const search = (searchParams.get('search') ?? '').trim()
+  const fromParam = searchParams.get('from')
+  const toParam = searchParams.get('to')
 
   const { data: lastUploads } = await supabase
     .from('uploads').select('id, file_type').eq('status', 'ok')

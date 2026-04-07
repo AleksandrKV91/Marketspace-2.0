@@ -171,7 +171,7 @@ export default function NicheTab() {
           />
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm sticky-thead">
             <thead>
               <tr className="text-xs border-b" style={{ borderColor: 'var(--border)' }}>
                 <th className="text-left px-4 py-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Ниша / Категория</th>

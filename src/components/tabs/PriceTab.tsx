@@ -10,6 +10,7 @@ import { KPIBar } from '@/components/ui/KPIBar'
 import { FilterBar } from '@/components/ui/FilterBar'
 import { exportToExcel } from '@/lib/exportExcel'
 import { MousePointerClick, ShoppingCart, ArrowRight, DollarSign, Megaphone, Percent, ChevronUp, ChevronDown } from 'lucide-react'
+import { useDateRange } from '@/components/ui/DateRangePicker'
 
 interface PriceData {
   funnel: {
@@ -86,6 +87,7 @@ export default function PriceTab() {
   const [data, setData] = useState<PriceData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { range } = useDateRange()
   const [search, setSearch] = useState('')
   const [priceFilter, setPriceFilter] = useState<Record<string, string>>({ direction: 'all', manager: 'all' })
   const [sortKey, setSortKey] = useState<string>('date')
@@ -108,11 +110,11 @@ export default function PriceTab() {
   }
 
   useEffect(() => {
-    fetch('/api/dashboard/prices')
+    fetch(`/api/dashboard/prices?from=${range.from}&to=${range.to}`)
       .then(r => r.json())
       .then((d: PriceData) => { setData(d); setLoading(false) })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
-  }, [])
+  }, [range.from, range.to])
 
   if (loading) return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
@@ -261,7 +263,7 @@ export default function PriceTab() {
           />
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm sticky-thead">
             <thead>
               <tr className="text-xs">
                 <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>SKU</th>

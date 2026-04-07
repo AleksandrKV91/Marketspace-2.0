@@ -7,6 +7,7 @@ import { FilterBar } from '@/components/ui/FilterBar'
 import { exportToExcel } from '@/lib/exportExcel'
 import { Package, AlertTriangle, TrendingDown, DollarSign, ShoppingBag, AlertCircle, PackageOpen, ChevronUp, ChevronDown } from 'lucide-react'
 import { OrderModal } from '@/components/ui/OrderModal'
+import { useDateRange } from '@/components/ui/DateRangePicker'
 
 interface OrderRow {
   sku_ms: string
@@ -61,8 +62,9 @@ export default function OrderTab() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [orderFilter, setOrderFilter] = useState<Record<string, string>>({ status: 'all', abc: 'all' })
+  const [orderFilter, setOrderFilter] = useState<Record<string, string>>({ status: 'all', abc: 'all', horizon: '60' })
   const [selectedSku, setSelectedSku] = useState<string | null>(null)
+  const { range } = useDateRange()
   const [sortKey, setSortKey] = useState<keyof OrderRow>('stock_days')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
@@ -83,11 +85,11 @@ export default function OrderTab() {
   }
 
   useEffect(() => {
-    fetch('/api/dashboard/orders')
+    fetch(`/api/dashboard/orders?from=${range.from}&to=${range.to}&horizon=${orderFilter.horizon}`)
       .then(r => r.json())
       .then((d: OrderData) => { setData(d); setLoading(false) })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
-  }, [])
+  }, [range.from, range.to, orderFilter.horizon])
 
   if (loading) return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
@@ -177,17 +179,22 @@ export default function OrderTab() {
                 { value: 'B', label: 'B' },
                 { value: 'C', label: 'C' },
               ]},
+              { label: 'Горизонт', key: 'horizon', options: [
+                { value: '60', label: '60 дней' },
+                { value: '90', label: '90 дней' },
+                { value: '30', label: '30 дней' },
+              ]},
             ]}
             values={orderFilter}
             onChange={(k, v) => setOrderFilter(f => ({ ...f, [k]: v }))}
-            onReset={() => { setOrderFilter({ status: 'all', abc: 'all' }); setSearch('') }}
+            onReset={() => { setOrderFilter({ status: 'all', abc: 'all', horizon: '60' }); setSearch('') }}
             hasActive={hasFilter}
             onExport={exportOrders}
             summary={<span className="text-xs" style={{ color: 'var(--text-muted)' }}>Запасы · {filteredRows.length}</span>}
           />
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm sticky-thead">
             <thead>
               <tr className="text-xs">
                 <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>SKU WB</th>
