@@ -87,7 +87,7 @@ export default function AnalyticsTab() {
   const [data, setData] = useState<AnalyticsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [catFilter, setCatFilter] = useState<Record<string, string>>({ margin: 'all', drr: 'all' })
+  const [catFilter, setCatFilter] = useState<Record<string, string>>({ margin: 'all', drr: 'all', min_revenue: 'all' })
   const [sortKey, setSortKey] = useState<CatSortKey>('revenue')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const { range } = useDateRange()
@@ -126,13 +126,16 @@ export default function AnalyticsTab() {
     'ДРР%': +(d.drr * 100).toFixed(1),
   }))
 
-  const hasFilter = catFilter.margin !== 'all' || catFilter.drr !== 'all'
+  const hasFilter = catFilter.margin !== 'all' || catFilter.drr !== 'all' || catFilter.min_revenue !== 'all'
   const filteredCats = (data.by_category ?? []).filter(c => {
     if (catFilter.margin === 'low' && c.margin_pct >= 0.15) return false
     if (catFilter.margin === 'mid' && (c.margin_pct < 0.15 || c.margin_pct > 0.25)) return false
     if (catFilter.margin === 'high' && c.margin_pct <= 0.25) return false
     if (catFilter.drr === 'over' && c.drr <= c.margin_pct) return false
     if (catFilter.drr === 'under' && c.drr > c.margin_pct) return false
+    if (catFilter.min_revenue === '100k' && c.revenue < 100_000) return false
+    if (catFilter.min_revenue === '500k' && c.revenue < 500_000) return false
+    if (catFilter.min_revenue === '1m' && c.revenue < 1_000_000) return false
     return true
   }).sort((a, b) => {
     const mult = sortDir === 'asc' ? 1 : -1
@@ -228,10 +231,16 @@ export default function AnalyticsTab() {
                 { value: 'over', label: 'ДРР > Маржи' },
                 { value: 'under', label: 'ДРР ≤ Маржи' },
               ]},
+              { label: 'Мин. выручка', key: 'min_revenue', options: [
+                { value: 'all', label: 'Все' },
+                { value: '100k', label: '>100К' },
+                { value: '500k', label: '>500К' },
+                { value: '1m', label: '>1М' },
+              ]},
             ]}
             values={catFilter}
             onChange={(k, v) => setCatFilter(f => ({ ...f, [k]: v }))}
-            onReset={() => setCatFilter({ margin: 'all', drr: 'all' })}
+            onReset={() => setCatFilter({ margin: 'all', drr: 'all', min_revenue: 'all' })}
             hasActive={hasFilter}
             onExport={exportCats}
             summary={<span className="text-xs" style={{ color: 'var(--text-muted)' }}>По категориям · {filteredCats.length}</span>}

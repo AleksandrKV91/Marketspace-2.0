@@ -89,7 +89,9 @@ export default function PriceTab() {
   const [error, setError] = useState<string | null>(null)
   const { range } = useDateRange()
   const [search, setSearch] = useState('')
-  const [priceFilter, setPriceFilter] = useState<Record<string, string>>({ direction: 'all', manager: 'all' })
+  const [priceFilter, setPriceFilter] = useState<Record<string, string>>({
+    direction: 'all', ctr_delta: 'all', cr_delta: 'all', cpm_delta: 'all', cpo: 'all',
+  })
   const [sortKey, setSortKey] = useState<string>('date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
@@ -130,12 +132,20 @@ export default function PriceTab() {
 
   const f = data.funnel
   const priceChanges = data.price_changes ?? []
-  const hasFilter = priceFilter.direction !== 'all' || search.trim() !== ''
+  const hasFilter = Object.values(priceFilter).some(v => v !== 'all') || search.trim() !== ''
 
   const filteredPrices = priceChanges.filter(row => {
     if (search && !row.name.toLowerCase().includes(search.toLowerCase()) && !row.sku.includes(search)) return false
     if (priceFilter.direction === 'up' && row.delta_pct <= 0) return false
     if (priceFilter.direction === 'down' && row.delta_pct >= 0) return false
+    if (priceFilter.ctr_delta === 'up' && (row.delta_ctr == null || row.delta_ctr <= 0)) return false
+    if (priceFilter.ctr_delta === 'down' && (row.delta_ctr == null || row.delta_ctr >= 0)) return false
+    if (priceFilter.cr_delta === 'up' && (row.delta_cr_order == null || row.delta_cr_order <= 0)) return false
+    if (priceFilter.cr_delta === 'down' && (row.delta_cr_order == null || row.delta_cr_order >= 0)) return false
+    if (priceFilter.cpm_delta === 'up' && (row.delta_cpm == null || row.delta_cpm <= 0)) return false
+    if (priceFilter.cpm_delta === 'down' && (row.delta_cpm == null || row.delta_cpm >= 0)) return false
+    if (priceFilter.cpo === 'over200' && (row.cpo == null || row.cpo <= 200)) return false
+    if (priceFilter.cpo === 'under200' && (row.cpo == null || row.cpo > 200)) return false
     return true
   }).sort((a, b) => {
     const mult = sortDir === 'asc' ? 1 : -1
@@ -248,15 +258,35 @@ export default function PriceTab() {
             onSearch={setSearch}
             searchPlaceholder="Поиск по названию или SKU..."
             filters={[
-              { label: 'Направление', key: 'direction', options: [
+              { label: 'Δ Цены', key: 'direction', options: [
                 { value: 'all', label: 'Все' },
-                { value: 'up', label: 'Рост цены' },
-                { value: 'down', label: 'Снижение цены' },
+                { value: 'up', label: '↑ Рост' },
+                { value: 'down', label: '↓ Снижение' },
+              ]},
+              { label: 'Δ CTR', key: 'ctr_delta', options: [
+                { value: 'all', label: 'Все' },
+                { value: 'up', label: '↑ Вырос' },
+                { value: 'down', label: '↓ Упал' },
+              ]},
+              { label: 'Δ CR заказ', key: 'cr_delta', options: [
+                { value: 'all', label: 'Все' },
+                { value: 'up', label: '↑ Вырос' },
+                { value: 'down', label: '↓ Упал' },
+              ]},
+              { label: 'Δ CPM', key: 'cpm_delta', options: [
+                { value: 'all', label: 'Все' },
+                { value: 'up', label: '↑ Вырос' },
+                { value: 'down', label: '↓ Упал' },
+              ]},
+              { label: 'CPO', key: 'cpo', options: [
+                { value: 'all', label: 'Все' },
+                { value: 'over200', label: '> 200 ₽' },
+                { value: 'under200', label: '≤ 200 ₽' },
               ]},
             ]}
             values={priceFilter}
             onChange={(k, v) => setPriceFilter(f => ({ ...f, [k]: v }))}
-            onReset={() => { setPriceFilter({ direction: 'all', manager: 'all' }); setSearch('') }}
+            onReset={() => { setPriceFilter({ direction: 'all', ctr_delta: 'all', cr_delta: 'all', cpm_delta: 'all', cpo: 'all' }); setSearch('') }}
             hasActive={hasFilter}
             onExport={exportPrices}
             summary={<span className="text-xs" style={{ color: 'var(--text-muted)' }}>Изменения цен · {filteredPrices.length}</span>}
