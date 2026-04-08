@@ -81,7 +81,7 @@ export async function GET(req: NextRequest) {
 
   const { data: dailyRows } = await dailyQ
 
-  // Aggregate funnel metrics
+  // Aggregate funnel metrics + per-date data
   const ctrArr: number[] = []
   const crCartArr: number[] = []
   const crOrderArr: number[] = []
@@ -90,7 +90,15 @@ export async function GET(req: NextRequest) {
   const adOrderArr: number[] = []
   let totalRevenue = 0
   let totalAdSpend = 0
-  const dateRevenueMap: Record<string, number> = {}
+
+  type DayAgg = {
+    ctrSum: number; ctrN: number
+    crCartSum: number; crCartN: number
+    crOrderSum: number; crOrderN: number
+    adShareSum: number; adShareN: number
+    revenue: number
+  }
+  const dateMap: Record<string, DayAgg> = {}
 
   if (dailyRows) {
     for (const r of dailyRows) {
@@ -102,8 +110,15 @@ export async function GET(req: NextRequest) {
       if (r.cpm != null) cpmArr.push(r.cpm)
       if (r.cpc != null) cpcArr.push(r.cpc)
       if (r.ad_order_share != null) adOrderArr.push(r.ad_order_share)
-      if (!dateRevenueMap[r.metric_date]) dateRevenueMap[r.metric_date] = 0
-      dateRevenueMap[r.metric_date] += r.revenue ?? 0
+
+      const d = r.metric_date
+      if (!dateMap[d]) dateMap[d] = { ctrSum: 0, ctrN: 0, crCartSum: 0, crCartN: 0, crOrderSum: 0, crOrderN: 0, adShareSum: 0, adShareN: 0, revenue: 0 }
+      const day = dateMap[d]
+      day.revenue += r.revenue ?? 0
+      if (r.ctr != null) { day.ctrSum += r.ctr; day.ctrN++ }
+      if (r.cr_cart != null) { day.crCartSum += r.cr_cart; day.crCartN++ }
+      if (r.cr_order != null) { day.crOrderSum += r.cr_order; day.crOrderN++ }
+      if (r.ad_order_share != null) { day.adShareSum += r.ad_order_share; day.adShareN++ }
     }
   }
 
@@ -119,10 +134,20 @@ export async function GET(req: NextRequest) {
     drr: totalRevenue > 0 ? totalAdSpend / totalRevenue : 0,
   }
 
-  // daily chart — revenue + drr by date
-  const daily = Object.entries(dateRevenueMap)
+  // daily chart — CTR/CR по дням + ad_revenue/organic split
+  const daily = Object.entries(dateMap)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, revenue]) => ({ date, revenue, drr: 0 }))
+    .map(([date, d]) => {
+      const adShare = d.adShareN > 0 ? d.adShareSum / d.adShareN : 0
+      return {
+        date,
+        ctr: d.ctrN > 0 ? d.ctrSum / d.ctrN : 0,
+        cr_basket: d.crCartN > 0 ? d.crCartSum / d.crCartN : 0,
+        cr_order: d.crOrderN > 0 ? d.crOrderSum / d.crOrderN : 0,
+        ad_revenue: Math.round(d.revenue * adShare),
+        organic_revenue: Math.round(d.revenue * (1 - adShare)),
+      }
+    })
 
   // Price changes with manager
   const bySkuWb: Record<number, Array<{ date: string; price: number | null; sku_ms: string | null }>> = {}
