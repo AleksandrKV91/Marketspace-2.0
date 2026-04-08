@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAll } from '@/lib/supabase/fetchAll'
 
-export const maxDuration = 30
+export const maxDuration = 60
 
 export async function GET(req: Request) {
   const supabase = createServiceClient()
@@ -27,16 +28,14 @@ export async function GET(req: Request) {
   const skuReportId = latestByType['sku_report']
   const abcId = latestByType['abc']
 
-  // dim_sku — категории
-  const { data: dimRows } = await supabase
-    .from('dim_sku')
-    .select('sku_ms, subject_wb, category_wb')
-    .limit(5000)
+  // dim_sku — категории, все строки
+  const dimRows = await fetchAll<{ sku_ms: string; subject_wb: string | null; category_wb: string | null }>(
+    (sb) => sb.from('dim_sku').select('sku_ms, subject_wb, category_wb'),
+    supabase,
+  )
 
   const dimMap: Record<string, { subject_wb: string | null; category_wb: string | null }> = {}
-  if (dimRows) {
-    for (const r of dimRows) dimMap[r.sku_ms] = r
-  }
+  for (const r of dimRows) dimMap[r.sku_ms] = r
 
   // fact_sku_snapshot — margin_rub (для расчёта маржи %)
   // margin_rub = операционная маржа на единицу × stock → используем как прокси маржинальности
@@ -90,15 +89,16 @@ export async function GET(req: Request) {
     dailyQ = dailyQ.in('metric_date', dateList)
   }
 
-  const { data: dailyRows } = await dailyQ
+  const dailyRows = await fetchAll<{ sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; drr_total: number | null; ctr: number | null; cr_order: number | null; cpm: number | null; cpc: number | null }>(
+    () => dailyQ, supabase,
+  )
 
   // Агрегация по SKU
   const skuAgg: Record<string, { revenue: number; ad_spend: number; days: Set<string> }> = {}
   // Агрегация по дате (для daily графика)
   const dateAgg: Record<string, { revenue: number; ad_spend: number }> = {}
 
-  if (dailyRows) {
-    for (const r of dailyRows) {
+  for (const r of dailyRows) {
       // По SKU
       if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0, days: new Set() }
       skuAgg[r.sku_ms].revenue += r.revenue ?? 0
@@ -109,7 +109,6 @@ export async function GET(req: Request) {
       if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0 }
       dateAgg[r.metric_date].revenue += r.revenue ?? 0
       dateAgg[r.metric_date].ad_spend += r.ad_spend ?? 0
-    }
   }
 
   const latestDate = Object.keys(dateAgg).sort().at(-1) ?? null

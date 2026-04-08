@@ -30,5 +30,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "docs", "Old parser&upload routes"]
+  "exclude": ["node_modules", "docs", "Old parser&upload routes", "05.04", "08.04"]
 }

@@ -25,6 +25,21 @@ export async function GET(req: NextRequest) {
   const abcId = latestByType['abc']
   const skuReportId = latestByType['sku_report']
 
+  // Если даты не переданы — берём последние 7 дней из fact_sku_daily
+  let effectiveFrom = fromParam
+  let effectiveTo = toParam
+  if (!effectiveFrom || !effectiveTo) {
+    const { data: maxRow } = await supabase
+      .from('fact_sku_daily').select('metric_date').order('metric_date', { ascending: false }).limit(1)
+    const maxDate = maxRow?.[0]?.metric_date
+    if (maxDate) {
+      effectiveTo = maxDate
+      const d = new Date(maxDate)
+      d.setDate(d.getDate() - 6)
+      effectiveFrom = d.toISOString().split('T')[0]
+    }
+  }
+
   // dim_sku — справочник (фильтрация по поиску) — все строки через пагинацию
   const dimRows = await fetchAll<{ sku_ms: string; sku_wb: number | null; name: string | null; brand: string | null; supplier: string | null; subject_wb: string | null; category_wb: string | null }>(
     (sb) => {
@@ -93,18 +108,16 @@ export async function GET(req: NextRequest) {
         )
       : Promise.resolve([]),
 
-    // fact_sku_daily — выручка, ДРР, CTR, CR за период (без .in() — всю таблицу за период, фильтр по sku_ms в памяти)
-    (() => {
-      let q = supabase.from('fact_sku_daily')
-        .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
-      if (fromParam && toParam) {
-        q = q.gte('metric_date', fromParam).lte('metric_date', toParam)
-      }
-      // Используем fetchAll для обхода лимита 1000 строк
-      return fetchAll<{ sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; drr_total: number | null; ctr: number | null; cr_cart: number | null; cr_order: number | null; cpm: number | null; cpc: number | null; ad_order_share: number | null }>(
-        () => q, supabase,
-      )
-    })(),
+    // fact_sku_daily — выручка, ДРР, CTR, CR за период
+    // ВСЕГДА фильтруем по дате (effectiveFrom/effectiveTo) — иначе 176k строк = таймаут
+    effectiveFrom && effectiveTo
+      ? fetchAll<{ sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; drr_total: number | null; ctr: number | null; cr_cart: number | null; cr_order: number | null; cpm: number | null; cpc: number | null; ad_order_share: number | null }>(
+          (sb) => sb.from('fact_sku_daily')
+            .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
+            .gte('metric_date', effectiveFrom!).lte('metric_date', effectiveTo!),
+          supabase,
+        )
+      : Promise.resolve([]),
   ])
 
   // Маппинги

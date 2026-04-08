@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAll } from '@/lib/supabase/fetchAll'
 
-export const maxDuration = 30
+export const maxDuration = 60
 
 export async function GET(req: Request) {
   const supabase = createServiceClient()
@@ -28,19 +29,17 @@ export async function GET(req: Request) {
   const abcId = latestByType['abc']
   const skuReportId = latestByType['sku_report']
 
-  // dim_sku for category/manager mapping
-  const { data: dimRows } = await supabase
-    .from('dim_sku')
-    .select('sku_ms, sku_wb, name, category_wb, subject_wb')
-    .limit(5000)
+  // dim_sku for category/manager mapping — все строки
+  const dimRows = await fetchAll<{ sku_ms: string; sku_wb: number | null; name: string | null; category_wb: string | null; subject_wb: string | null }>(
+    (sb) => sb.from('dim_sku').select('sku_ms, sku_wb, name, category_wb, subject_wb'),
+    supabase,
+  )
 
   const dimByMs: Record<string, { sku_wb: number | null; name: string | null; category_wb: string | null; subject_wb: string | null }> = {}
   const dimByWb: Record<number, { sku_ms: string }> = {}
-  if (dimRows) {
-    for (const r of dimRows) {
-      dimByMs[r.sku_ms] = r
-      if (r.sku_wb) dimByWb[r.sku_wb] = { sku_ms: r.sku_ms }
-    }
+  for (const r of dimRows) {
+    dimByMs[r.sku_ms] = r
+    if (r.sku_wb) dimByWb[r.sku_wb] = { sku_ms: r.sku_ms }
   }
 
   // Stock snapshot (Таблица остатков)
@@ -115,22 +114,22 @@ export async function GET(req: Request) {
     }
   }
 
-  const { data: dailyRows } = await dailyQ
+  const dailyRows = await fetchAll<{ sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null }>(
+    () => dailyQ, supabase,
+  )
 
   // Aggregate by sku_ms and by date
   const skuAgg: Record<string, { revenue: number; ad_spend: number }> = {}
   const dateAgg: Record<string, { revenue: number; ad_spend: number }> = {}
 
-  if (dailyRows) {
-    for (const r of dailyRows) {
-      if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0 }
-      skuAgg[r.sku_ms].revenue += r.revenue ?? 0
-      skuAgg[r.sku_ms].ad_spend += r.ad_spend ?? 0
+  for (const r of dailyRows) {
+    if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0 }
+    skuAgg[r.sku_ms].revenue += r.revenue ?? 0
+    skuAgg[r.sku_ms].ad_spend += r.ad_spend ?? 0
 
-      if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0 }
-      dateAgg[r.metric_date].revenue += r.revenue ?? 0
-      dateAgg[r.metric_date].ad_spend += r.ad_spend ?? 0
-    }
+    if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0 }
+    dateAgg[r.metric_date].revenue += r.revenue ?? 0
+    dateAgg[r.metric_date].ad_spend += r.ad_spend ?? 0
   }
 
   const latestDate = Object.keys(dateAgg).sort().at(-1) ?? null
