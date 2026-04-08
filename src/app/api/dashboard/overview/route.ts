@@ -31,20 +31,20 @@ export async function GET(req: Request) {
   // dim_sku for category/manager mapping
   const { data: dimRows } = await supabase
     .from('dim_sku')
-    .select('sku_ms, sku_wb, name, category_wb, subject_wb, manager')
-    .limit(3000)
+    .select('sku_ms, sku_wb, name, category_wb, subject_wb')
+    .limit(5000)
 
-  const dimByMs: Record<string, { sku_wb: number | null; name: string | null; category_wb: string | null; subject_wb: string | null; manager: string | null }> = {}
-  const dimByWb: Record<number, { sku_ms: string; name: string | null; category_wb: string | null; subject_wb: string | null }> = {}
+  const dimByMs: Record<string, { sku_wb: number | null; name: string | null; category_wb: string | null; subject_wb: string | null }> = {}
+  const dimByWb: Record<number, { sku_ms: string }> = {}
   if (dimRows) {
     for (const r of dimRows) {
       dimByMs[r.sku_ms] = r
-      if (r.sku_wb) dimByWb[r.sku_wb] = r
+      if (r.sku_wb) dimByWb[r.sku_wb] = { sku_ms: r.sku_ms }
     }
   }
 
-  // Stock snapshot
-  let stockAgg = { total_fbo: 0, total_fbs: 0, total_stock: 0, sku_count: 0 }
+  // Stock snapshot (Таблица остатков)
+  const stockAgg = { total_fbo: 0, total_fbs: 0, total_stock: 0, sku_count: 0 }
   const stockByWb: Record<number, { fbo_wb: number; fbs_pushkino: number; fbs_smolensk: number; total_stock: number; price: number | null; margin_pct: number | null }> = {}
   if (stockId) {
     const { data: stockRows } = await supabase
@@ -62,127 +62,167 @@ export async function GET(req: Request) {
     }
   }
 
-  // ABC counts + revenue
-  let abcCounts = { A: 0, B: 0, C: 0 }
-  let totalRevenue = 0
-  let totalChmd = 0
-  const abcByMs: Record<string, { abc_class: string | null; revenue: number | null; chmd: number | null; profitability: number | null }> = {}
+  // ABC — only for abc_class counts
+  const abcCounts = { A: 0, B: 0, C: 0 }
+  const abcClassByMs: Record<string, string | null> = {}
   if (abcId) {
     const { data: abcRows } = await supabase
       .from('fact_abc')
-      .select('sku_ms, abc_class, revenue, chmd, profitability')
+      .select('sku_ms, abc_class')
       .eq('upload_id', abcId)
     if (abcRows) {
       for (const r of abcRows) {
-        abcByMs[r.sku_ms] = r
+        abcClassByMs[r.sku_ms] = r.abc_class
         const cls = (r.abc_class ?? '').toUpperCase().charAt(0)
         if (cls === 'A') abcCounts.A++
         else if (cls === 'B') abcCounts.B++
         else if (cls === 'C') abcCounts.C++
-        totalRevenue += r.revenue ?? 0
-        totalChmd += r.chmd ?? 0
       }
     }
   }
 
-  // Sales trend: last 30 days from fact_stock_daily
-  const { data: maxDateRow } = await supabase
-    .from('fact_stock_daily')
-    .select('sale_date')
-    .order('sale_date', { ascending: false })
-    .limit(1)
-  const maxDate = maxDateRow?.[0]?.sale_date ?? null
-
-  const trend: Array<{ date: string; sales_qty: number }> = []
-  if (maxDate) {
-    const from30 = new Date(maxDate)
-    from30.setDate(from30.getDate() - 29)
-    const from30Str = from30.toISOString().split('T')[0]
-
-    const { data: salesRows } = await supabase
-      .from('fact_stock_daily')
-      .select('sale_date, sales_qty')
-      .gte('sale_date', from30Str)
-      .lte('sale_date', maxDate)
-      .order('sale_date', { ascending: true })
-
-    const byDate: Record<string, number> = {}
-    if (salesRows) {
-      for (const r of salesRows) {
-        byDate[r.sale_date] = (byDate[r.sale_date] ?? 0) + (r.sales_qty ?? 0)
-      }
-    }
-    for (const [date, qty] of Object.entries(byDate)) {
-      trend.push({ date, sales_qty: qty })
-    }
-    trend.sort((a, b) => a.date.localeCompare(b.date))
-  }
-
-  // Category breakdown
-  const catMap: Record<string, { revenue: number; chmd: number; sku_count: number }> = {}
-  for (const [skuMs, abc] of Object.entries(abcByMs)) {
-    const dim = dimByMs[skuMs]
-    const cat = dim?.category_wb ?? dim?.subject_wb ?? 'Без категории'
-    if (!catMap[cat]) catMap[cat] = { revenue: 0, chmd: 0, sku_count: 0 }
-    catMap[cat].revenue += abc.revenue ?? 0
-    catMap[cat].chmd += abc.chmd ?? 0
-    catMap[cat].sku_count++
-  }
-  const categories = Object.entries(catMap)
-    .map(([cat, v]) => ({ category: cat, ...v }))
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, 8)
-
-  // Manager breakdown
-  const managerMap: Record<string, { revenue: number; chmd: number; sku_count: number }> = {}
-  for (const [skuMs, abc] of Object.entries(abcByMs)) {
-    const dim = dimByMs[skuMs]
-    const manager = dim?.manager ?? 'Не указан'
-    if (!managerMap[manager]) managerMap[manager] = { revenue: 0, chmd: 0, sku_count: 0 }
-    managerMap[manager].revenue += abc.revenue ?? 0
-    managerMap[manager].chmd += abc.chmd ?? 0
-    managerMap[manager].sku_count++
-  }
-  const managers = Object.entries(managerMap)
-    .map(([manager, v]) => ({ manager, ...v, margin_pct: v.revenue > 0 ? v.chmd / v.revenue : 0 }))
-    .sort((a, b) => b.revenue - a.revenue)
-
-  // Ad spend from sku_snapshot for DRR
-  let totalAdSpend = 0
+  // fact_sku_snapshot — margin_rub (col X), chmd_5d (col Z), manager
+  const snapByMs: Record<string, { margin_rub: number | null; chmd_5d: number | null; manager: string | null; price: number | null; ad_spend: number | null }> = {}
   if (skuReportId) {
     const { data: snapRows } = await supabase
       .from('fact_sku_snapshot')
-      .select('ad_spend')
+      .select('sku_ms, margin_rub, chmd_5d, manager, price, ad_spend')
       .eq('upload_id', skuReportId)
     if (snapRows) {
-      for (const r of snapRows) totalAdSpend += r.ad_spend ?? 0
+      for (const r of snapRows) snapByMs[r.sku_ms] = r
     }
   }
+
+  // fact_sku_daily — revenue, ad_spend, drr by period (primary source)
+  let dailyQ = supabase
+    .from('fact_sku_daily')
+    .select('sku_ms, metric_date, revenue, ad_spend')
+
+  if (fromParam && toParam) {
+    dailyQ = dailyQ.gte('metric_date', fromParam).lte('metric_date', toParam)
+  } else {
+    // last 30 days based on latest date available
+    const { data: maxDateRow } = await supabase
+      .from('fact_sku_daily')
+      .select('metric_date')
+      .order('metric_date', { ascending: false })
+      .limit(1)
+    const maxDate = maxDateRow?.[0]?.metric_date ?? null
+    if (maxDate) {
+      const from30 = new Date(maxDate)
+      from30.setDate(from30.getDate() - 29)
+      dailyQ = dailyQ.gte('metric_date', from30.toISOString().split('T')[0]).lte('metric_date', maxDate)
+    }
+  }
+
+  const { data: dailyRows } = await dailyQ
+
+  // Aggregate by sku_ms and by date
+  const skuAgg: Record<string, { revenue: number; ad_spend: number }> = {}
+  const dateAgg: Record<string, { revenue: number; ad_spend: number }> = {}
+
+  if (dailyRows) {
+    for (const r of dailyRows) {
+      if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0 }
+      skuAgg[r.sku_ms].revenue += r.revenue ?? 0
+      skuAgg[r.sku_ms].ad_spend += r.ad_spend ?? 0
+
+      if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0 }
+      dateAgg[r.metric_date].revenue += r.revenue ?? 0
+      dateAgg[r.metric_date].ad_spend += r.ad_spend ?? 0
+    }
+  }
+
+  const latestDate = Object.keys(dateAgg).sort().at(-1) ?? null
+
+  // Trend from fact_sku_daily by date (revenue ₽)
+  const trend = Object.entries(dateAgg)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, d]) => ({ date, sales_qty: d.revenue, revenue: d.revenue }))
+
+  // Totals
+  let totalRevenue = 0
+  let totalAdSpend = 0
+  for (const agg of Object.values(skuAgg)) {
+    totalRevenue += agg.revenue
+    totalAdSpend += agg.ad_spend
+  }
+
+  // ЧМД: sum chmd_5d from fact_sku_snapshot (best available proxy)
+  let totalChmd = 0
+  for (const snap of Object.values(snapByMs)) {
+    totalChmd += snap.chmd_5d ?? 0
+  }
+
+  // Avg margin: weighted by revenue from fact_sku_snapshot (margin_rub / price)
+  let weightedMarginNum = 0
+  let weightedMarginDen = 0
+  for (const [skuMs, snap] of Object.entries(snapByMs)) {
+    const rev = skuAgg[skuMs]?.revenue ?? 0
+    if (snap.margin_rub != null && snap.price && snap.price > 0 && rev > 0) {
+      const pct = snap.margin_rub / snap.price
+      weightedMarginNum += pct * rev
+      weightedMarginDen += rev
+    }
+  }
+  const avgMargin = weightedMarginDen > 0 ? weightedMarginNum / weightedMarginDen : 0
 
   // OOS count
   const oosCount = Object.values(stockByWb).filter(s => (s.total_stock ?? 0) === 0).length
 
-  // Avg margin from stock snapshot
-  const marginsWithRevenue = Object.values(stockByWb).filter(s => s.margin_pct !== null && s.margin_pct !== undefined)
-  const avgMargin = marginsWithRevenue.length > 0
-    ? marginsWithRevenue.reduce((s, r) => s + (r.margin_pct ?? 0), 0) / marginsWithRevenue.length
-    : 0
+  // Category breakdown from fact_sku_daily
+  const catMap: Record<string, { revenue: number; chmd: number; sku_count: Set<string> }> = {}
+  for (const [skuMs, agg] of Object.entries(skuAgg)) {
+    const dim = dimByMs[skuMs]
+    const cat = dim?.category_wb ?? dim?.subject_wb ?? 'Без категории'
+    if (!catMap[cat]) catMap[cat] = { revenue: 0, chmd: 0, sku_count: new Set() }
+    catMap[cat].revenue += agg.revenue
+    catMap[cat].sku_count.add(skuMs)
+    const snap = snapByMs[skuMs]
+    if (snap?.chmd_5d) catMap[cat].chmd += snap.chmd_5d
+  }
+  const categories = Object.entries(catMap)
+    .map(([cat, v]) => ({ category: cat, revenue: v.revenue, chmd: v.chmd, sku_count: v.sku_count.size }))
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 8)
+
+  // Manager breakdown from fact_sku_snapshot + daily
+  const managerMap: Record<string, { revenue: number; chmd: number; sku_count: Set<string> }> = {}
+  for (const [skuMs, agg] of Object.entries(skuAgg)) {
+    const snap = snapByMs[skuMs]
+    const manager = snap?.manager ?? 'Не указан'
+    if (!managerMap[manager]) managerMap[manager] = { revenue: 0, chmd: 0, sku_count: new Set() }
+    managerMap[manager].revenue += agg.revenue
+    managerMap[manager].sku_count.add(skuMs)
+    if (snap?.chmd_5d) managerMap[manager].chmd += snap.chmd_5d
+  }
+  const managers = Object.entries(managerMap)
+    .map(([manager, v]) => ({
+      manager,
+      revenue: v.revenue,
+      chmd: v.chmd,
+      sku_count: v.sku_count.size,
+      margin_pct: v.revenue > 0 ? v.chmd / v.revenue : 0,
+    }))
+    .sort((a, b) => b.revenue - a.revenue)
 
   // Top-15 SKU by revenue
-  const top15 = Object.entries(abcByMs)
-    .map(([skuMs, abc]) => {
+  const top15 = Object.entries(skuAgg)
+    .map(([skuMs, agg]) => {
       const dim = dimByMs[skuMs]
+      const snap = snapByMs[skuMs]
       const stock = dim?.sku_wb ? stockByWb[dim.sku_wb] : null
-      const dpd = (stock?.total_stock ?? 0) > 0 ? undefined : undefined
-      const stockDays = stock?.total_stock && stock.total_stock > 0 ? 999 : 0
+      const price = snap?.price ?? stock?.price ?? null
+      const marginRub = snap?.margin_rub ?? null
+      const marginPct = marginRub != null && price && price > 0 ? marginRub / price : (stock?.margin_pct ?? 0)
       return {
         sku_ms: skuMs,
         sku_wb: dim?.sku_wb ?? null,
         name: dim?.name ?? skuMs,
-        revenue: abc.revenue ?? 0,
-        margin_pct: abc.profitability ?? (stock?.margin_pct ?? 0),
-        stock_days: stockDays,
-        abc_class: abc.abc_class ?? '—',
+        revenue: agg.revenue,
+        margin_pct: marginPct,
+        stock_days: 0,
+        abc_class: abcClassByMs[skuMs] ?? '—',
       }
     })
     .sort((a, b) => b.revenue - a.revenue)
@@ -203,6 +243,6 @@ export async function GET(req: Request) {
     trend,
     categories,
     managers,
-    latest_date: maxDate,
+    latest_date: latestDate,
   })
 }
