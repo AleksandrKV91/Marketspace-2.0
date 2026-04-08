@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAll } from '@/lib/supabase/fetchAll'
 
 export const maxDuration = 30
 
@@ -29,16 +30,15 @@ export async function GET(req: Request) {
   const chinaId = latestByType['china']
   const abcId = latestByType['abc']
 
-  // dim_sku — все SKU с сезонностью
-  const { data: dimRows } = await supabase
-    .from('dim_sku')
-    .select('sku_ms, sku_wb, name, brand, subject_wb, month_jan, month_feb, month_mar, month_apr, month_may, month_jun, month_jul, month_aug, month_sep, month_oct, month_nov, month_dec')
-    .limit(2000)
+  // dim_sku — все SKU с сезонностью (без лимита)
+  type DimRow = { sku_ms: string; sku_wb: number | null; name: string | null; brand: string | null; subject_wb: string | null; month_jan: number | null; month_feb: number | null; month_mar: number | null; month_apr: number | null; month_may: number | null; month_jun: number | null; month_jul: number | null; month_aug: number | null; month_sep: number | null; month_oct: number | null; month_nov: number | null; month_dec: number | null }
+  const dimRows = await fetchAll<DimRow>(
+    (sb) => sb.from('dim_sku').select('sku_ms, sku_wb, name, brand, subject_wb, month_jan, month_feb, month_mar, month_apr, month_may, month_jun, month_jul, month_aug, month_sep, month_oct, month_nov, month_dec'),
+    supabase,
+  )
 
-  const dimMap: Record<string, typeof dimRows extends (infer T)[] | null ? T : never> = {}
-  if (dimRows) {
-    for (const r of dimRows) dimMap[r.sku_ms] = r
-  }
+  const dimMap: Record<string, DimRow> = {}
+  for (const r of dimRows) dimMap[r.sku_ms] = r
 
   // fact_stock_snapshot — остатки
   const stockMap: Record<number, { fbo_wb: number; fbs_pushkino: number; fbs_smolensk: number; total_stock: number; snap_date: string | null }> = {}
@@ -123,7 +123,7 @@ export async function GET(req: Request) {
   }
 
   // Сборка строк
-  const rows = (dimRows ?? []).map(sku => {
+  const rows = dimRows.map(sku => {
     const skuWb = sku.sku_wb ?? 0
     const stock = stockMap[skuWb]
     const sales31 = salesMap31[skuWb]

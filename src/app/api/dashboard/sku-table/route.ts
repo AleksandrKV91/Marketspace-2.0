@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAll } from '@/lib/supabase/fetchAll'
 import { computeScore } from '@/lib/scoring'
 
-export const maxDuration = 30
+export const maxDuration = 60
 
 export async function GET(req: NextRequest) {
   const supabase = createServiceClient()
@@ -24,77 +25,114 @@ export async function GET(req: NextRequest) {
   const abcId = latestByType['abc']
   const skuReportId = latestByType['sku_report']
 
-  // dim_sku — справочник (фильтрация по поиску)
-  let dimQuery = supabase.from('dim_sku')
-    .select('sku_ms, sku_wb, name, brand, supplier, subject_wb, category_wb')
-  if (search) dimQuery = dimQuery.or(`name.ilike.%${search}%,sku_ms.ilike.%${search}%,brand.ilike.%${search}%`)
-  const { data: dimRows } = await dimQuery.limit(500)
-  if (!dimRows?.length) return NextResponse.json({ rows: [], total: 0, selected_count: 0, selected_revenue: 0 })
+  // dim_sku — справочник (фильтрация по поиску) — все строки через пагинацию
+  const dimRows = await fetchAll<{ sku_ms: string; sku_wb: number | null; name: string | null; brand: string | null; supplier: string | null; subject_wb: string | null; category_wb: string | null }>(
+    (sb) => {
+      let q = sb.from('dim_sku').select('sku_ms, sku_wb, name, brand, supplier, subject_wb, category_wb')
+      if (search) q = q.or(`name.ilike.%${search}%,sku_ms.ilike.%${search}%,brand.ilike.%${search}%`)
+      return q
+    },
+    supabase,
+  )
+  if (!dimRows.length) return NextResponse.json({ rows: [], total: 0, selected_count: 0, selected_revenue: 0 })
 
   const skuMsList = dimRows.map(r => r.sku_ms)
   const wbList = dimRows.map(r => r.sku_wb).filter((v): v is number => v !== null)
 
-  // Параллельные запросы
-  const [stockRes, abcRes, skuSnapRes, dailyRes] = await Promise.all([
-    // fact_stock_snapshot — остатки (ADC = total_stock) по sku_wb
+  // Хелпер: батчированный запрос через .in() для больших списков (>1000 элементов)
+  async function batchIn<T>(
+    table: string,
+    selectCols: string,
+    key: string,
+    ids: (string | number)[],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    extraFilter?: (q: any) => any,
+    batchSize = 500,
+  ): Promise<T[]> {
+    const results: T[] = []
+    for (let i = 0; i < ids.length; i += batchSize) {
+      const chunk = ids.slice(i, i + batchSize)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let q: any = supabase.from(table).select(selectCols).in(key, chunk)
+      if (extraFilter) q = extraFilter(q)
+      const { data } = await q
+      if (data) results.push(...(data as T[]))
+    }
+    return results
+  }
+
+  // Параллельные запросы — все через батчи
+  const [stockRows, abcRows, skuSnapRows, dailyRows] = await Promise.all([
+    // fact_stock_snapshot — остатки по sku_wb
     stockId && wbList.length
-      ? supabase.from('fact_stock_snapshot')
-          .select('sku_wb, sku_ms, fbo_wb, fbs_pushkino, fbs_smolensk, total_stock, price, margin_pct')
-          .eq('upload_id', stockId).in('sku_wb', wbList)
-      : Promise.resolve({ data: null }),
+      ? batchIn<{ sku_wb: number; sku_ms: string; fbo_wb: number; fbs_pushkino: number; fbs_smolensk: number; total_stock: number; price: number | null; margin_pct: number | null }>(
+          'fact_stock_snapshot',
+          'sku_wb, sku_ms, fbo_wb, fbs_pushkino, fbs_smolensk, total_stock, price, margin_pct',
+          'sku_wb',
+          wbList,
+          q => q.eq('upload_id', stockId!),
+        )
+      : Promise.resolve([]),
 
     // fact_abc — только abc_class как дополнение
     abcId
-      ? supabase.from('fact_abc')
-          .select('sku_ms, abc_class')
-          .eq('upload_id', abcId).in('sku_ms', skuMsList)
-      : Promise.resolve({ data: null }),
+      ? batchIn<{ sku_ms: string; abc_class: string | null }>(
+          'fact_abc', 'sku_ms, abc_class', 'sku_ms', skuMsList,
+          q => q.eq('upload_id', abcId!),
+        )
+      : Promise.resolve([]),
 
-    // fact_sku_snapshot — маржа, ЧМД, запас дней, менеджер, новинка (из Отчёта по SKU)
+    // fact_sku_snapshot — маржа, ЧМД, запас дней, менеджер
     skuReportId
-      ? supabase.from('fact_sku_snapshot')
-          .select('sku_ms, margin_rub, chmd_5d, stock_days, novelty_status, manager, price, fbo_wb, fbs_pushkino, fbs_smolensk')
-          .eq('upload_id', skuReportId).in('sku_ms', skuMsList)
-      : Promise.resolve({ data: null }),
+      ? batchIn<{ sku_ms: string; margin_rub: number | null; chmd_5d: number | null; stock_days: number | null; novelty_status: string | null; manager: string | null; price: number | null; fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null }>(
+          'fact_sku_snapshot',
+          'sku_ms, margin_rub, chmd_5d, stock_days, novelty_status, manager, price, fbo_wb, fbs_pushkino, fbs_smolensk',
+          'sku_ms',
+          skuMsList,
+          q => q.eq('upload_id', skuReportId!),
+        )
+      : Promise.resolve([]),
 
-    // fact_sku_daily — выручка, ДРР, CTR, CR за период (основной источник)
+    // fact_sku_daily — выручка, ДРР, CTR, CR за период (без .in() — всю таблицу за период, фильтр по sku_ms в памяти)
     (() => {
       let q = supabase.from('fact_sku_daily')
         .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
-        .in('sku_ms', skuMsList)
       if (fromParam && toParam) {
         q = q.gte('metric_date', fromParam).lte('metric_date', toParam)
       }
-      return q
+      // Используем fetchAll для обхода лимита 1000 строк
+      return fetchAll<{ sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; drr_total: number | null; ctr: number | null; cr_cart: number | null; cr_order: number | null; cpm: number | null; cpc: number | null; ad_order_share: number | null }>(
+        () => q, supabase,
+      )
     })(),
   ])
 
   // Маппинги
   const stockByWb: Record<number, { fbo_wb: number; fbs_pushkino: number; fbs_smolensk: number; total_stock: number; price: number | null; margin_pct: number | null }> = {}
-  if (stockRes.data) for (const r of stockRes.data) stockByWb[r.sku_wb] = r
+  for (const r of stockRows) stockByWb[r.sku_wb] = r
 
   const abcByMs: Record<string, { abc_class: string | null }> = {}
-  if (abcRes.data) for (const r of abcRes.data) abcByMs[r.sku_ms] = r
+  for (const r of abcRows) abcByMs[r.sku_ms] = r
 
   const snapByMs: Record<string, { margin_rub: number | null; chmd_5d: number | null; stock_days: number | null; novelty_status: string | null; manager: string | null; price: number | null; fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null }> = {}
-  if (skuSnapRes.data) for (const r of skuSnapRes.data) snapByMs[r.sku_ms] = r
+  for (const r of skuSnapRows) snapByMs[r.sku_ms] = r
 
-  // Агрегация daily по SKU
+  // Агрегация daily по SKU (фильтр по skuMsList в памяти)
+  const skuMsSet = new Set(skuMsList)
   type DailyAgg = { revenue: number; ad_spend: number; drr: number[]; ctr: number[]; cr_cart: number[]; cr_order: number[]; cpm: number[]; days: number }
   const dailyByMs: Record<string, DailyAgg> = {}
-  if (dailyRes.data) {
-    for (const r of dailyRes.data) {
-      if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = { revenue: 0, ad_spend: 0, drr: [], ctr: [], cr_cart: [], cr_order: [], cpm: [], days: 0 }
-      const d = dailyByMs[r.sku_ms]
-      d.revenue += r.revenue ?? 0
-      d.ad_spend += r.ad_spend ?? 0
-      if (r.drr_total != null) d.drr.push(r.drr_total)
-      if (r.ctr != null) d.ctr.push(r.ctr)
-      if (r.cr_cart != null) d.cr_cart.push(r.cr_cart)
-      if (r.cr_order != null) d.cr_order.push(r.cr_order)
-      if (r.cpm != null) d.cpm.push(r.cpm)
-      d.days++
-    }
+  for (const r of dailyRows) {
+    if (!skuMsSet.has(r.sku_ms)) continue
+    if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = { revenue: 0, ad_spend: 0, drr: [], ctr: [], cr_cart: [], cr_order: [], cpm: [], days: 0 }
+    const d = dailyByMs[r.sku_ms]
+    d.revenue += r.revenue ?? 0
+    d.ad_spend += r.ad_spend ?? 0
+    if (r.drr_total != null) d.drr.push(r.drr_total)
+    if (r.ctr != null) d.ctr.push(r.ctr)
+    if (r.cr_cart != null) d.cr_cart.push(r.cr_cart)
+    if (r.cr_order != null) d.cr_order.push(r.cr_order)
+    if (r.cpm != null) d.cpm.push(r.cpm)
+    d.days++
   }
 
   const avg = (arr: number[]) => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null

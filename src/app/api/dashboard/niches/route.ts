@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAll } from '@/lib/supabase/fetchAll'
 
 export const maxDuration = 30
 
@@ -26,13 +27,11 @@ export async function GET(req: NextRequest) {
 
   const abcId = latestByType['abc']
 
-  // dim_sku with seasonality columns
-  let query = supabase
-    .from('dim_sku')
-    .select('sku_ms, sku_wb, name, subject_wb, category_wb, month_jan, month_feb, month_mar, month_apr, month_may, month_jun, month_jul, month_aug, month_sep, month_oct, month_nov, month_dec')
-    .limit(2000)
-
-  const { data: dimRows } = await query
+  // dim_sku with seasonality columns — все строки
+  const dimRows = await fetchAll<{ sku_ms: string; sku_wb: number | null; name: string | null; subject_wb: string | null; category_wb: string | null; month_jan: number | null; month_feb: number | null; month_mar: number | null; month_apr: number | null; month_may: number | null; month_jun: number | null; month_jul: number | null; month_aug: number | null; month_sep: number | null; month_oct: number | null; month_nov: number | null; month_dec: number | null }>(
+    (sb) => sb.from('dim_sku').select('sku_ms, sku_wb, name, subject_wb, category_wb, month_jan, month_feb, month_mar, month_apr, month_may, month_jun, month_jul, month_aug, month_sep, month_oct, month_nov, month_dec'),
+    supabase,
+  )
 
   // abc data
   const abcByMs: Record<string, { abc_class: string | null; revenue: number | null; chmd: number | null; profitability: number | null }> = {}
@@ -57,8 +56,7 @@ export async function GET(req: NextRequest) {
     months: number[]
   }> = {}
 
-  if (dimRows) {
-    for (const row of dimRows) {
+  for (const row of dimRows) {
       const niche = row.subject_wb ?? row.category_wb ?? 'Не указано'
       const category = row.category_wb ?? 'Не указано'
       if (!nicheMap[niche]) {
@@ -83,8 +81,7 @@ export async function GET(req: NextRequest) {
         nicheMap[niche].chmd += abc.chmd ?? 0
         if (abc.abc_class) nicheMap[niche].abc_classes.push(abc.abc_class)
       }
-      nicheMap[niche].sku_count++
-    }
+    nicheMap[niche].sku_count++
   }
 
   let rows = Object.values(nicheMap).map(n => {

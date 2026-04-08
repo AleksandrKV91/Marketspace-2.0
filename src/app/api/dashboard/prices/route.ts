@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAll } from '@/lib/supabase/fetchAll'
 
-export const maxDuration = 30
+export const maxDuration = 60
 
 export async function GET(req: NextRequest) {
   const supabase = createServiceClient()
@@ -23,63 +24,69 @@ export async function GET(req: NextRequest) {
   }
   const skuReportId = latestByType['sku_report']
 
-  // Price changes
-  let query = supabase
-    .from('fact_price_changes')
-    .select('sku_wb, sku_ms, price_date, price')
-    .order('price_date', { ascending: false })
-    .limit(2000)
-  if (fromParam) query = query.gte('price_date', fromParam)
-  if (toParam) query = query.lte('price_date', toParam)
-  if (search) query = query.or(`sku_ms.ilike.%${search}%`)
+  // Price changes — все строки за период
+  type PriceRow = { sku_wb: number | null; sku_ms: string | null; price_date: string; price: number | null }
+  const priceRows = await fetchAll<PriceRow>(
+    (sb) => {
+      let q = sb.from('fact_price_changes')
+        .select('sku_wb, sku_ms, price_date, price')
+        .order('price_date', { ascending: false })
+      if (fromParam) q = q.gte('price_date', fromParam)
+      if (toParam) q = q.lte('price_date', toParam)
+      if (search) q = q.or(`sku_ms.ilike.%${search}%`)
+      return q
+    },
+    supabase,
+  )
 
-  const { data: priceRows, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-
-  // dim_sku for names and managers
-  const skuMsList = [...new Set((priceRows ?? []).map(r => r.sku_ms).filter(Boolean))]
+  // dim_sku for names — батчами по 500
+  const skuMsList = [...new Set(priceRows.map(r => r.sku_ms).filter((v): v is string => !!v))]
   const nameMap: Record<string, { name: string | null; brand: string | null; subject_wb: string | null }> = {}
   if (skuMsList.length) {
-    const { data: dimRows } = await supabase
-      .from('dim_sku')
-      .select('sku_ms, name, brand, subject_wb')
-      .in('sku_ms', skuMsList.slice(0, 1000))
-    if (dimRows) for (const r of dimRows) nameMap[r.sku_ms] = r
+    for (let i = 0; i < skuMsList.length; i += 500) {
+      const { data: dimRows } = await supabase
+        .from('dim_sku').select('sku_ms, name, brand, subject_wb')
+        .in('sku_ms', skuMsList.slice(i, i + 500))
+      if (dimRows) for (const r of dimRows) nameMap[r.sku_ms] = r
+    }
   }
 
-  // fact_sku_snapshot — manager per sku_ms
+  // fact_sku_snapshot — manager per sku_ms — батчами по 500
   const managerMap: Record<string, string> = {}
   if (skuReportId && skuMsList.length) {
-    const { data: snapRows } = await supabase
-      .from('fact_sku_snapshot')
-      .select('sku_ms, manager')
-      .eq('upload_id', skuReportId)
-      .in('sku_ms', skuMsList.slice(0, 1000))
-    if (snapRows) for (const r of snapRows) managerMap[r.sku_ms] = r.manager ?? ''
+    for (let i = 0; i < skuMsList.length; i += 500) {
+      const { data: snapRows } = await supabase
+        .from('fact_sku_snapshot').select('sku_ms, manager')
+        .eq('upload_id', skuReportId)
+        .in('sku_ms', skuMsList.slice(i, i + 500))
+      if (snapRows) for (const r of snapRows) managerMap[r.sku_ms] = r.manager ?? ''
+    }
   }
 
   // fact_sku_daily — funnel metrics aggregated over period (CTR/CR/CPM/CPC/ad_order_share)
-  let dailyQ = supabase
-    .from('fact_sku_daily')
-    .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
-  if (fromParam && toParam) {
-    dailyQ = dailyQ.gte('metric_date', fromParam).lte('metric_date', toParam)
-  } else if (skuMsList.length) {
-    // last available dates
+  let fromDaily = fromParam
+  let toDaily = toParam
+  if (!fromDaily || !toDaily) {
     const { data: maxDateRow } = await supabase
-      .from('fact_sku_daily')
-      .select('metric_date')
-      .order('metric_date', { ascending: false })
-      .limit(1)
+      .from('fact_sku_daily').select('metric_date').order('metric_date', { ascending: false }).limit(1)
     const maxDate = maxDateRow?.[0]?.metric_date ?? null
     if (maxDate) {
       const from7 = new Date(maxDate)
       from7.setDate(from7.getDate() - 6)
-      dailyQ = dailyQ.gte('metric_date', from7.toISOString().split('T')[0]).lte('metric_date', maxDate)
+      fromDaily = from7.toISOString().split('T')[0]
+      toDaily = maxDate
     }
   }
 
-  const { data: dailyRows } = await dailyQ
+  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; ctr: number | null; cr_cart: number | null; cr_order: number | null; cpm: number | null; cpc: number | null; ad_order_share: number | null }
+  const dailyRows = fromDaily && toDaily
+    ? await fetchAll<DailyRow>(
+        (sb) => sb.from('fact_sku_daily')
+          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
+          .gte('metric_date', fromDaily!).lte('metric_date', toDaily!),
+        supabase,
+      )
+    : []
 
   // Aggregate funnel metrics + per-date data
   const ctrArr: number[] = []
@@ -100,8 +107,7 @@ export async function GET(req: NextRequest) {
   }
   const dateMap: Record<string, DayAgg> = {}
 
-  if (dailyRows) {
-    for (const r of dailyRows) {
+  for (const r of dailyRows) {
       totalRevenue += r.revenue ?? 0
       totalAdSpend += r.ad_spend ?? 0
       if (r.ctr != null) ctrArr.push(r.ctr)
@@ -119,7 +125,6 @@ export async function GET(req: NextRequest) {
       if (r.cr_cart != null) { day.crCartSum += r.cr_cart; day.crCartN++ }
       if (r.cr_order != null) { day.crOrderSum += r.cr_order; day.crOrderN++ }
       if (r.ad_order_share != null) { day.adShareSum += r.ad_order_share; day.adShareN++ }
-    }
   }
 
   const avg = (arr: number[]) => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0
@@ -151,7 +156,7 @@ export async function GET(req: NextRequest) {
 
   // Price changes with manager
   const bySkuWb: Record<number, Array<{ date: string; price: number | null; sku_ms: string | null }>> = {}
-  for (const r of priceRows ?? []) {
+  for (const r of priceRows) {
     if (!r.sku_wb) continue
     if (!bySkuWb[r.sku_wb]) bySkuWb[r.sku_wb] = []
     bySkuWb[r.sku_wb].push({ date: r.price_date, price: r.price, sku_ms: r.sku_ms })
@@ -189,7 +194,7 @@ export async function GET(req: NextRequest) {
   }
 
   changes.sort((a, b) => b.date.localeCompare(a.date))
-  const price_changes = changes.slice(0, 1000)
+  const price_changes = changes
 
   return NextResponse.json({ funnel, daily, price_changes })
 }
