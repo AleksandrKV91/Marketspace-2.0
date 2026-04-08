@@ -3,8 +3,6 @@ import { readWorkbook, sheetToRows, norm, toNum, excelToISO } from './utils'
 export interface CatalogRow {
   sku_ms: string
   sku_wb: number | null
-  sku_warehouse: string | null
-  sku_china: string | null
   name: string | null
   brand: string | null
   supplier: string | null
@@ -12,15 +10,6 @@ export interface CatalogRow {
   subject_wb: string | null
   category_wb: string | null
   nds_pct: number | null
-  market_share: number | null
-  niche_appeal: number | null
-  availability: string | null
-  buyout_pct: number | null
-  avg_rating: number | null
-  seasonality: string | null
-  season_start: string | null
-  season_length: number | null
-  top_month: string | null
   month_jan: number | null
   month_feb: number | null
   month_mar: number | null
@@ -33,7 +22,6 @@ export interface CatalogRow {
   month_oct: number | null
   month_nov: number | null
   month_dec: number | null
-  top_phrase: string | null
 }
 
 export interface ParseCatalogResult {
@@ -56,11 +44,10 @@ const MONTH_NAMES = [
 
 const COL_MAP: Record<string, keyof CatalogRow> = {
   'артикул wb': 'sku_wb',
-  'артикул мс': 'sku_ms',       // col B в Своде = Артикул МС = sku_ms (главный ключ)
+  'артикул мс': 'sku_ms',       // Артикул МС — главный ключ для метрик
   'артикул mc': 'sku_ms',       // латинская c
-  'артикул склада': 'sku_ms',   // синоним — тоже sku_ms
-  'артикул китай': 'sku_china',
-  'номенклатура': 'name',       // col F = Номенклатура
+  'артикул склада': 'sku_ms',   // синоним (поддержка старых файлов)
+  'номенклатура': 'name',
   'название': 'name',
   'бренд': 'brand',
   'поставщик': 'supplier',
@@ -68,17 +55,6 @@ const COL_MAP: Record<string, keyof CatalogRow> = {
   'предмет wb': 'subject_wb',
   'категория wb': 'category_wb',
   'ндс, %': 'nds_pct',
-  'доля рынка': 'market_share',
-  'привлекательность ниши': 'niche_appeal',
-  'доступность': 'availability',
-  'процент выкупа': 'buyout_pct',
-  'средний рейтинг': 'avg_rating',
-  'сезонность': 'seasonality',
-  'старт сезона': 'season_start',
-  'длина сезона': 'season_length',
-  'топ месяц': 'top_month',
-  'топ-фраза по объёму': 'top_phrase',
-  'топ-фраза': 'top_phrase',
 }
 
 export function parseCatalog(buffer: ArrayBuffer): ParseCatalogResult {
@@ -116,26 +92,14 @@ export function parseCatalog(buffer: ArrayBuffer): ParseCatalogResult {
 
     const entry: CatalogRow = {
       sku_ms: skuMs,
-      sku_wb: toNum(row[colIdx['sku_wb']]),
-      sku_warehouse: row[colIdx['sku_warehouse']] != null ? String(row[colIdx['sku_warehouse']]).trim() : null,
-      sku_china: row[colIdx['sku_china']] != null ? String(row[colIdx['sku_china']]).trim() : null,
+      sku_wb: toNum(row[colIdx['sku_wb']]) || null,
       name: row[colIdx['name']] != null ? String(row[colIdx['name']]).trim() : null,
       brand: row[colIdx['brand']] != null ? String(row[colIdx['brand']]).trim() : null,
       supplier: row[colIdx['supplier']] != null ? String(row[colIdx['supplier']]).trim() : null,
       country: row[colIdx['country']] != null ? String(row[colIdx['country']]).trim() : null,
       subject_wb: row[colIdx['subject_wb']] != null ? String(row[colIdx['subject_wb']]).trim() : null,
       category_wb: row[colIdx['category_wb']] != null ? String(row[colIdx['category_wb']]).trim() : null,
-      nds_pct: toNum(row[colIdx['nds_pct']]),
-      market_share: toNum(row[colIdx['market_share']]),
-      niche_appeal: toNum(row[colIdx['niche_appeal']]),
-      availability: row[colIdx['availability']] != null ? String(row[colIdx['availability']]).trim() : null,
-      buyout_pct: toNum(row[colIdx['buyout_pct']]),
-      avg_rating: toNum(row[colIdx['avg_rating']]),
-      seasonality: row[colIdx['seasonality']] != null ? String(row[colIdx['seasonality']]).trim() : null,
-      season_start: row[colIdx['season_start']] != null ? String(row[colIdx['season_start']]).trim() : null,
-      season_length: toNum(row[colIdx['season_length']]),
-      top_month: row[colIdx['top_month']] != null ? String(row[colIdx['top_month']]).trim() : null,
-      top_phrase: row[colIdx['top_phrase']] != null ? String(row[colIdx['top_phrase']]).trim() : null,
+      nds_pct: toNum(row[colIdx['nds_pct']]) || null,
       month_jan: null, month_feb: null, month_mar: null, month_apr: null,
       month_may: null, month_jun: null, month_jul: null, month_aug: null,
       month_sep: null, month_oct: null, month_nov: null, month_dec: null,

@@ -33,9 +33,15 @@ export async function POST(req: NextRequest) {
 
   if (uploadErr) return NextResponse.json({ error: uploadErr.message }, { status: 500 })
 
-  const deduped = [...new Map(parsed.rows.map(r => [r.sku_ms, r])).values()]
+  // Дедупликация по sku_wb (PRIMARY KEY) — если нет sku_wb, пробуем по sku_ms
+  const withWb = parsed.rows.filter(r => r.sku_wb)
+  const withoutWb = parsed.rows.filter(r => !r.sku_wb)
+  const dedupedByWb = [...new Map(withWb.map(r => [r.sku_wb, r])).values()]
+  const dedupedByMs = [...new Map(withoutWb.map(r => [r.sku_ms, r])).values()]
+  const deduped = [...dedupedByWb, ...dedupedByMs]
+
   for (const batch of chunk(deduped, 500)) {
-    const { error } = await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
+    const { error } = await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_wb' })
     if (error) {
       await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', upload.id)
       return NextResponse.json({ error: error.message }, { status: 500 })
