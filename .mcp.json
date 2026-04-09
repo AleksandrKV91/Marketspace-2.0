@@ -1,12 +1,15 @@
 {
   "mcpServers": {
-    "playwright": {
-      "type": "stdio",
+    "supabase": {
       "command": "npx",
       "args": [
-        "@playwright/mcp@latest"
-      ],
-      "env": {}
+        "-y",
+        "@supabase/mcp-server-supabase@latest",
+        "--supabase-url",
+        "https://itzdjhjpfhsoeuquzjxj.supabase.co",
+        "--supabase-service-role-key",
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml0emRqaGpwZmhzb2V1cXV6anhqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTAzOTYwMSwiZXhwIjoyMDkwNjE1NjAxfQ.3s8i9_Q-7L4QHg3G7SgaKwwr5Nc0xhp9yHDTA1c0ywI"
+      ]
     }
   }
 }
