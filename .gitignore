@@ -48,3 +48,11 @@ agency-agents/
 "Таблицы/"
 "Рекомендации/"
 .claude/
+
+# internal working docs (not for repo)
+Вкладки/
+Вспомогательные документы/
+03.04/
+.playwright-mcp/
+*.xlsx
+*.png
