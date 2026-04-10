@@ -13,6 +13,8 @@ interface UploadState {
   detail?: string
   lastAt?: string
   rowsCount?: number
+  rowsSkipped?: number
+  skippedSkus?: string[]
 }
 
 interface UploadRecord {
@@ -47,7 +49,7 @@ async function uploadViaStorage(
   type: FileType,
   file: File,
   onProgress: (pct: number) => void
-): Promise<{ ok: boolean; rows_parsed?: number; error?: string }> {
+): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_skus?: string[]; error?: string }> {
   // Уникальное имя файла чтобы избежать коллизий
   const ext = file.name.split('.').pop()
   const storageKey = `${type}/${Date.now()}.${ext}`
@@ -97,7 +99,12 @@ async function uploadViaStorage(
     onProgress(90)
     const json = await res.json()
     if (res.ok && json.ok) {
-      return { ok: true, rows_parsed: json.rows_parsed }
+      return {
+        ok: true,
+        rows_parsed: json.rows_parsed,
+        rows_skipped: json.rows_skipped,
+        skipped_skus: json.diag_skipped_skus ?? [],
+      }
     }
     return { ok: false, error: json.error ?? 'Ошибка парсинга' }
   } catch (e) {
@@ -193,16 +200,43 @@ function UploadCard({
       )}
 
       {(state.status === 'ok' || state.status === 'error') && (
-        <div className="mt-3 text-xs text-gray-400 dark:text-gray-500 flex gap-4">
-          {state.lastAt && <span>{state.lastAt}</span>}
-          {state.rowsCount !== undefined && <span>{state.rowsCount} строк</span>}
-          {state.detail && (
-            <span
-              className="text-red-400 truncate max-w-xs cursor-help"
-              title={state.detail}
-            >
-              {state.detail}
-            </span>
+        <div className="mt-3 space-y-1.5">
+          <div className="text-xs text-gray-400 dark:text-gray-500 flex gap-4">
+            {state.lastAt && <span>{state.lastAt}</span>}
+            {state.rowsCount !== undefined && <span>{state.rowsCount} строк</span>}
+            {state.rowsSkipped !== undefined && state.rowsSkipped > 0 && (
+              <span className="text-amber-500">{state.rowsSkipped} пропущено</span>
+            )}
+            {state.detail && (
+              <span
+                className="text-red-400 truncate max-w-xs cursor-help"
+                title={state.detail}
+              >
+                {state.detail}
+              </span>
+            )}
+          </div>
+          {state.skippedSkus && state.skippedSkus.length > 0 && (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-amber-500 hover:text-amber-600 select-none">
+                Артикулы не найдены в справочнике ({state.skippedSkus.length})
+              </summary>
+              <div className="mt-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-800/30 px-3 py-2 max-h-32 overflow-y-auto">
+                <p className="text-amber-600 dark:text-amber-400 mb-1 text-[11px]">
+                  Эти WB-артикулы отсутствуют в Своде — загрузите актуальный Свод и повторите загрузку
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {state.skippedSkus.map(sku => (
+                    <span
+                      key={sku}
+                      className="inline-block bg-amber-100 dark:bg-amber-800/30 text-amber-700 dark:text-amber-300 rounded px-1.5 py-0.5 font-mono text-[11px]"
+                    >
+                      {sku}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </details>
           )}
         </div>
       )}
@@ -256,6 +290,8 @@ export default function UpdateTab() {
         message: 'Загружено',
         lastAt: now,
         rowsCount: result.rows_parsed,
+        rowsSkipped: result.rows_skipped,
+        skippedSkus: result.skipped_skus,
         detail: undefined,
       })
       if (historyLoaded) loadHistory()
