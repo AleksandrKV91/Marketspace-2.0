@@ -48,6 +48,7 @@ export interface ParseSkuReportResult {
   rows_parsed: number
   rows_skipped: number
   skipped_skus: string[]
+  diag_service_rows: string[]
 }
 
 /**
@@ -195,10 +196,15 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
   const snapshots: SkuSnapshotRow[] = []
   let skipped = 0
   const skippedSkus: string[] = []
+  const skippedService: string[] = []
 
   for (const row of dataRows) {
     const rawSku = String(row[skuCol] ?? '').trim()
-    if (!rawSku || rawSku.toLowerCase() === 'итого' || rawSku === 'SKU') { skipped++; continue }
+    if (!rawSku || rawSku.toLowerCase() === 'итого' || rawSku === 'SKU') {
+      skipped++
+      if (rawSku) skippedService.push(rawSku)
+      continue
+    }
     // Конвертируем WB→MS если передан маппинг
     const skuMs = skuMap ? (skuMap.get(rawSku) ?? null) : rawSku
     if (!skuMs) { skipped++; skippedSkus.push(rawSku); continue }
@@ -275,5 +281,6 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
     rows_parsed: snapshots.length,
     rows_skipped: skipped,
     skipped_skus: skippedSkus,
+    diag_service_rows: skippedService,
   }
 }

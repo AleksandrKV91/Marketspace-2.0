@@ -86,7 +86,8 @@ export async function POST(req: NextRequest) {
     skipped_no_map: parsed.skipped_skus.length,
     sku_map_size: skuMap.size,
     diag_daily: parsed.daily.slice(0, 2),
-    diag_skipped_skus: parsed.skipped_skus.slice(0, 10),
+    diag_skipped_skus: parsed.skipped_skus,
+    diag_service_rows: parsed.diag_service_rows,
     diag_sku_map_sample: [...skuMap.entries()].slice(0, 3).map(([wb, ms]) => ({ wb, ms })),
   })
 }
