@@ -89,5 +89,7 @@ export async function POST(req: NextRequest) {
     diag_skipped_skus: parsed.skipped_skus,
     diag_service_rows: parsed.diag_service_rows,
     diag_sku_map_sample: [...skuMap.entries()].slice(0, 3).map(([wb, ms]) => ({ wb, ms })),
+    diag_421992755: skuMap.get('421992755') ?? 'NOT IN MAP',
+    diag_421992756: skuMap.get('421992756') ?? 'NOT IN MAP',
   })
 }
