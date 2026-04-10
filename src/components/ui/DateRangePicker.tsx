@@ -135,6 +135,9 @@ export function DateRangePicker() {
   const [viewYear, setViewYear] = useState(() => parseISO(range.to).getFullYear())
   const [viewMonth, setViewMonth] = useState(() => parseISO(range.to).getMonth())
   const ref = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const [popupTop, setPopupTop] = useState(0)
+  const [popupLeft, setPopupLeft] = useState(0)
 
   // Close on outside click
   useEffect(() => {
@@ -145,6 +148,16 @@ export function DateRangePicker() {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
+
+  // Compute popup position when opening
+  const handleOpen = () => {
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect()
+      setPopupTop(rect.bottom + 8)
+      setPopupLeft(rect.left)
+    }
+    setOpen(v => !v)
+  }
 
   const prevMonth = () => {
     if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1) }
@@ -183,10 +196,11 @@ export function DateRangePicker() {
     <div ref={ref} className="relative">
       {/* Trigger button */}
       <motion.button
+        ref={btnRef}
         whileHover={{ y: -1, scale: 1.02 }}
         whileTap={{ scale: 0.96 }}
         transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-        onClick={() => setOpen(v => !v)}
+        onClick={handleOpen}
         className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium transition-all"
         style={{
           background: open ? 'var(--accent-glass)' : 'var(--surface)',
@@ -210,12 +224,16 @@ export function DateRangePicker() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.97 }}
             transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-            className="absolute left-0 z-[200] glass p-4"
+            className="fixed z-[200] p-4"
             style={{
-              top: 'calc(100% + 8px)',
+              top: popupTop,
+              left: popupLeft,
               borderRadius: 'var(--radius-xl)',
               width: 296,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
+              boxShadow: '0 8px 40px rgba(0,0,0,0.28)',
+              background: 'var(--surface-solid, #fff)',
+              backdropFilter: 'blur(32px) saturate(1.8)',
+              border: '1px solid var(--border)',
             }}
           >
             {/* Quick presets */}

@@ -6,7 +6,9 @@ interface KPIItem {
   label: string
   value: string
   delta?: string
-  deltaPositive?: boolean
+  deltaColor?: string      // CSS color for delta (overrides deltaPositive)
+  deltaPositive?: boolean  // legacy fallback
+  hint?: string            // interpretation text under the value
   danger?: boolean
   accent?: boolean
   icon?: string
@@ -30,70 +32,74 @@ export function KPIBar({ items, loading }: KPIBarProps) {
         className="grid"
         style={{ gridTemplateColumns: `repeat(${items.length}, 1fr)` }}
       >
-        {items.map((item, idx) => (
-          <motion.div
-            key={idx}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 28, delay: idx * 0.05 }}
-            className="relative px-5 py-4"
-            style={{
-              /* Видимый разделитель — тёмная линия */
-              borderRight: idx < items.length - 1
-                ? '1px solid var(--border-subtle)'
-                : undefined,
-              background: item.danger
-                ? 'linear-gradient(135deg, rgba(220,38,38,0.08) 0%, rgba(220,38,38,0.03) 100%)'
-                : item.accent
-                ? 'linear-gradient(135deg, rgba(59,130,246,0.10) 0%, rgba(59,130,246,0.04) 100%)'
-                : undefined,
-            }}
-          >
-            {/* Specular per-cell */}
-            <div
-              className="absolute top-0 right-0 w-1/2 h-full pointer-events-none"
-              style={{ background: 'radial-gradient(ellipse at 85% 10%, rgba(255,255,255,0.20) 0%, transparent 60%)' }}
-            />
+        {items.map((item, idx) => {
+          const dColor = item.deltaColor
+            ?? (item.deltaPositive ? 'var(--success)' : 'var(--danger)')
+          return (
+            <motion.div
+              key={idx}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 28, delay: idx * 0.05 }}
+              className="relative px-5 py-4"
+              style={{
+                borderRight: idx < items.length - 1
+                  ? '1px solid var(--border-subtle)'
+                  : undefined,
+                background: item.danger
+                  ? 'linear-gradient(135deg, rgba(220,38,38,0.08) 0%, rgba(220,38,38,0.03) 100%)'
+                  : item.accent
+                  ? 'linear-gradient(135deg, rgba(59,130,246,0.10) 0%, rgba(59,130,246,0.04) 100%)'
+                  : undefined,
+              }}
+            >
+              {/* Specular per-cell */}
+              <div
+                className="absolute top-0 right-0 w-1/2 h-full pointer-events-none"
+                style={{ background: 'radial-gradient(ellipse at 85% 10%, rgba(255,255,255,0.20) 0%, transparent 60%)' }}
+              />
 
-            {loading ? (
-              <div className="space-y-2">
-                <div className="skeleton h-2.5 w-16 rounded" />
-                <div className="skeleton h-6 w-24 rounded" />
-                <div className="skeleton h-2 w-14 rounded" />
-              </div>
-            ) : (
-              <div className="space-y-0.5 relative z-10">
-                <p
-                  className="text-[10px] uppercase tracking-widest font-semibold"
-                  style={{ color: item.danger ? 'rgba(220,38,38,0.70)' : 'var(--text-subtle)' }}
-                >
-                  {item.label}
-                </p>
-                <p
-                  className="text-xl font-bold tracking-tight leading-tight"
-                  style={{ color: item.danger ? 'var(--danger)' : item.accent ? '#3B82F6' : 'var(--text)' }}
-                >
-                  {item.value}
-                </p>
-                {item.delta ? (
-                  <p className="text-[10px] font-semibold flex items-center gap-1">
-                    <span style={{ color: item.deltaPositive ? 'var(--success)' : 'var(--danger)' }}>
-                      {item.deltaPositive ? '↑' : '↓'} {item.delta}
-                    </span>
-                    <span style={{ color: 'var(--text-subtle)', fontWeight: 400 }}>vs пред.</span>
+              {loading ? (
+                <div className="space-y-2">
+                  <div className="skeleton h-2.5 w-16 rounded" />
+                  <div className="skeleton h-6 w-24 rounded" />
+                  <div className="skeleton h-2 w-14 rounded" />
+                </div>
+              ) : (
+                <div className="space-y-0.5 relative z-10">
+                  <p
+                    className="text-[10px] uppercase tracking-widest font-semibold"
+                    style={{ color: item.danger ? 'rgba(220,38,38,0.70)' : 'var(--text-subtle)' }}
+                  >
+                    {item.label}
                   </p>
-                ) : item.danger ? (
-                  <p className="text-[10px] font-semibold" style={{ color: 'var(--danger)' }}>
-                    Критический
+                  <p
+                    className="text-xl font-bold tracking-tight leading-tight"
+                    style={{ color: item.danger ? 'var(--danger)' : item.accent ? '#3B82F6' : 'var(--text)' }}
+                  >
+                    {item.value}
                   </p>
-                ) : (
-                  /* Пустая строка для выравнивания высоты */
-                  <p className="text-[10px]" style={{ color: 'transparent' }}>—</p>
-                )}
-              </div>
-            )}
-          </motion.div>
-        ))}
+                  {item.delta ? (
+                    <p className="text-[10px] font-semibold flex items-center gap-1">
+                      <span style={{ color: dColor }}>
+                        {item.delta}
+                      </span>
+                      <span style={{ color: 'var(--text-subtle)', fontWeight: 400 }}>vs пред.</span>
+                    </p>
+                  ) : item.hint ? (
+                    <p className="text-[10px]" style={{ color: 'var(--text-subtle)' }}>{item.hint}</p>
+                  ) : item.danger ? (
+                    <p className="text-[10px] font-semibold" style={{ color: 'var(--danger)' }}>
+                      Критический
+                    </p>
+                  ) : (
+                    <p className="text-[10px]" style={{ color: 'transparent' }}>—</p>
+                  )}
+                </div>
+              )}
+            </motion.div>
+          )
+        })}
       </div>
     </motion.div>
   )

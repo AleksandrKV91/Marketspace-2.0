@@ -3,21 +3,30 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  AreaChart, Area, LineChart, Line,
+  ComposedChart, Bar, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
+  LineChart,
 } from 'recharts'
 import {
   Zap, ChevronRight, AlertCircle, AlertTriangle, TrendingDown, TrendingUp,
-  Download, ShoppingCart, Rocket,
+  Download, ShoppingCart, Rocket, Package,
 } from 'lucide-react'
 import { GlassCard } from '@/components/ui/GlassCard'
-import { AlertBox } from '@/components/ui/AlertBox'
 import { KPIBar } from '@/components/ui/KPIBar'
+import { ScoreBadge } from '@/components/ui/ScoreBadge'
+import { SkuModal } from '@/components/ui/SkuModal'
 import { usePendingFilter } from '@/app/dashboard/page'
+import { useGlobalFilters } from '@/app/dashboard/page'
 import { exportToExcel } from '@/lib/exportExcel'
 import { useDateRange } from '@/components/ui/DateRangePicker'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+interface FocusSku {
+  sku_ms: string
+  name: string
+  sku_wb: number | null
+}
 
 interface OverviewData {
   kpi: {
@@ -31,16 +40,36 @@ interface OverviewData {
     oos_count: number
     sku_count: number
   }
+  kpi_delta: {
+    revenue: number | null
+    chmd: number | null
+    avg_margin_pct: number | null
+    drr: number | null
+    ad_spend: number | null
+    cost_of_goods: number | null
+    lost_revenue: number | null
+  }
   alerts: {
     stop_ads: number
     soon_oos: number
     drr_over_margin: number
     high_ctr_low_cr: number
+    high_cpo: number
+    can_scale: number
+    novelty_risk: number
     lost_revenue: number
   }
+  focus: {
+    stop_ads: Array<FocusSku & { ad_spend: number }>
+    soon_oos: Array<FocusSku & { stock_days: number; lead_time: number; revenue_per_day: number }>
+    drr_margin: Array<FocusSku & { drr: number; margin_pct: number; revenue: number }>
+    novelty: Array<FocusSku & { revenue: number }>
+    can_scale: Array<FocusSku & { revenue: number; drr: number }>
+  }
+  margin_distribution: { neg: number; low: number; mid: number; ok: number; good: number }
   abc: { A: number; B: number; C: number }
   trend: Array<{ date: string; revenue: number; chmd: number; ad_spend: number }>
-  unit_econ: Array<{ date: string; margin_pct: number; drr_pct: number }>
+  unit_econ: Array<{ date: string; margin_pct: number; drr_pct: number; chmd_pct: number }>
   top15: Array<{
     sku_ms: string
     sku_wb: number | null
@@ -52,11 +81,13 @@ interface OverviewData {
     stock_days: number
     lead_time: number
     abc_class: string
+    novelty_status: string | null
     score: number
     is_oos: boolean
   }>
   latest_date: string | null
   period: { from: string | null; to: string | null }
+  meta: { categories: string[]; managers: string[] }
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -78,9 +109,139 @@ function fmtDate(iso: string): string {
   return d.getDate().toString().padStart(2, '0') + '.' + (d.getMonth() + 1).toString().padStart(2, '0')
 }
 
-// ── Animations ────────────────────────────────────────────────────────────────
+function fmtDelta(d: number | null | undefined): string {
+  if (d == null) return ''
+  const sign = d >= 0 ? '+' : ''
+  return sign + (d * 100).toFixed(1) + '%'
+}
 
-const fadeUp = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transition: { duration: 0.3 } } }
+function deltaColor(d: number | null | undefined, invert = false): string {
+  if (d == null) return 'var(--text-muted)'
+  const positive = invert ? d < 0 : d >= 0
+  return positive ? 'var(--success)' : 'var(--danger)'
+}
+
+// ── KPI hint ─────────────────────────────────────────────────────────────────
+
+function kpiHint(key: string, data: OverviewData): string {
+  const drr = data.kpi.drr ?? 0
+  const margin = data.kpi.avg_margin_pct
+  switch (key) {
+    case 'revenue':
+      return data.kpi.sku_count > 0 ? `${data.kpi.sku_count} SKU` : ''
+    case 'chmd':
+      return data.kpi.chmd < 0 ? 'убыток' : margin > 0 ? `маржа ${fmtPct(margin)}` : ''
+    case 'margin':
+      if (margin < 0.10) return 'ниже нормы'
+      if (margin < 0.20) return 'средняя'
+      return 'хорошая'
+    case 'drr':
+      if (drr === 0) return 'нет данных'
+      if (drr > margin && margin > 0) return 'выше маржи ⚠'
+      if (drr < margin * 0.5) return 'можно масштабировать'
+      return 'в норме'
+    case 'ad_spend':
+      return drr > 0 ? `ДРР ${(drr * 100).toFixed(1)}%` : ''
+    case 'cogs':
+      return margin > 0 ? `маржа ${fmtPct(margin)}` : ''
+    case 'lost':
+      return data.kpi.oos_count > 0 ? `OOS: ${data.kpi.oos_count} SKU` : ''
+    default: return ''
+  }
+}
+
+// ── Alert item (glass + left border) ─────────────────────────────────────────
+
+interface AlertItemProps {
+  icon: React.ReactNode
+  title: string
+  count: number
+  description: string
+  severity: 'danger' | 'warning' | 'success' | 'info'
+  onClick?: () => void
+}
+
+function AlertItem({ icon, title, count, description, severity, onClick }: AlertItemProps) {
+  const colorMap = {
+    danger:  'var(--danger)',
+    warning: 'var(--warning)',
+    success: 'var(--success)',
+    info:    '#22d3ee',
+  }
+  const color = colorMap[severity]
+  return (
+    <motion.div
+      whileHover={onClick ? { x: 2 } : undefined}
+      onClick={onClick}
+      className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
+      style={{
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderLeft: `3px solid ${color}`,
+        cursor: onClick ? 'pointer' : 'default',
+      }}
+    >
+      <span style={{ color }}>{icon}</span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold" style={{ color: 'var(--text)' }}>{title}</span>
+          {count > 0 && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md" style={{ background: color + '22', color }}>
+              {count}
+            </span>
+          )}
+        </div>
+        <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>{description}</p>
+      </div>
+      {onClick && <ChevronRight size={13} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />}
+    </motion.div>
+  )
+}
+
+// ── Focus item (weak tinted bg) ───────────────────────────────────────────────
+
+interface FocusItemProps {
+  icon: React.ReactNode
+  label: string
+  headline: string
+  detail: string
+  color: string
+  onClick?: () => void
+}
+
+// Map CSS variable names to raw RGBA for tinted backgrounds
+function tintedBg(color: string): string {
+  const map: Record<string, string> = {
+    'var(--danger)':  'rgba(220, 38, 38, 0.06)',
+    'var(--warning)': 'rgba(234,179, 8, 0.07)',
+    'var(--success)': 'rgba( 34,197, 94, 0.06)',
+    '#22d3ee':        'rgba( 34,211,238, 0.07)',
+  }
+  return map[color] ?? 'rgba(255,255,255,0.04)'
+}
+
+function FocusItem({ icon, label, headline, detail, color, onClick }: FocusItemProps) {
+  return (
+    <motion.div
+      whileHover={onClick ? { scale: 1.005, y: -1 } : undefined}
+      transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+      className="flex items-start gap-3 p-3 rounded-xl"
+      style={{
+        background: tintedBg(color),
+        cursor: onClick ? 'pointer' : 'default',
+      }}
+      onClick={onClick}
+    >
+      <span style={{ color, flexShrink: 0, marginTop: 1 }}>{icon}</span>
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] font-bold uppercase tracking-wide mb-0.5" style={{ color }}>{label}</p>
+        <p className="text-xs font-medium" style={{ color: 'var(--text)' }}>{headline}</p>
+        <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>{detail}</p>
+      </div>
+      {onClick && <ChevronRight size={13} style={{ color: 'var(--text-subtle)', flexShrink: 0, marginTop: 2 }} />}
+    </motion.div>
+  )
+}
 
 // ── Custom Tooltip ────────────────────────────────────────────────────────────
 
@@ -109,44 +270,40 @@ function ChartTip({ active, payload, label, pct }: ChartTipProps) {
   )
 }
 
-// ── SKU Score badge ───────────────────────────────────────────────────────────
-
-function ScoreBadge({ score }: { score: number }) {
-  let color: string
-  let bg: string
-  if (score >= 80) { color = 'var(--success)'; bg = 'var(--success-bg)' }
-  else if (score >= 60) { color = '#22d3ee'; bg = 'rgba(34,211,238,0.12)' }
-  else if (score >= 40) { color = 'var(--warning)'; bg = 'var(--warning-bg)' }
-  else if (score >= 20) { color = 'var(--accent)'; bg = 'rgba(var(--accent-rgb),0.12)' }
-  else { color = 'var(--danger)'; bg = 'var(--danger-bg)' }
-  return (
-    <span className="text-xs font-bold px-2 py-0.5 rounded-lg" style={{ color, background: bg }}>
-      {Math.round(score)}
-    </span>
-  )
-}
-
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function OverviewTab() {
   const [data, setData] = useState<OverviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [modalSkuMs, setModalSkuMs] = useState<string | null>(null)
   const { navigateToSku } = usePendingFilter()
+  const { filters, setMeta } = useGlobalFilters()
   const { range } = useDateRange()
 
   useEffect(() => {
     setLoading(true)
     setError(null)
-    fetch(`/api/dashboard/overview?from=${range.from}&to=${range.to}`)
+    const params = new URLSearchParams({
+      from: range.from,
+      to: range.to,
+      ...(filters.category ? { category: filters.category } : {}),
+      ...(filters.manager  ? { manager:  filters.manager  } : {}),
+      ...(filters.novelty  ? { novelty:  filters.novelty  } : {}),
+    })
+    fetch(`/api/dashboard/overview?${params}`)
       .then(r => r.json())
-      .then((d: OverviewData) => { setData(d); setLoading(false) })
+      .then((d: OverviewData) => {
+        setData(d)
+        setLoading(false)
+        if (d.meta) setMeta(d.meta)
+      })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
-  }, [range.from, range.to])
+  }, [range.from, range.to, filters.category, filters.manager, filters.novelty, setMeta])
 
-  // ── Loading state ────────────────────────────────────────────────────────
+  // ── Loading ──────────────────────────────────────────────────────────────
   if (loading) return (
-    <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
+    <div className="px-6 py-6 space-y-6">
       <KPIBar loading items={[
         { label: 'Выручка', value: '' },
         { label: 'ЧМД', value: '' },
@@ -171,7 +328,9 @@ export default function OverviewTab() {
 
   const drr = data.kpi.drr ?? 0
   const isHighDrr = data.kpi.avg_margin_pct > 0 && drr > data.kpi.avg_margin_pct
+  const d = data.kpi_delta
 
+  // ── Chart data ───────────────────────────────────────────────────────────
   const trendData = data.trend.map(r => ({
     date: fmtDate(r.date),
     'Выручка': r.revenue,
@@ -183,49 +342,132 @@ export default function OverviewTab() {
     date: fmtDate(r.date),
     'Маржа %': r.margin_pct,
     'ДРР %': r.drr_pct,
+    'ЧМД %': r.chmd_pct,
   }))
 
+  // ── Фокус дня items (конкретные детали, не дублируют алерты) ─────────────
+  const focusItems: FocusItemProps[] = []
+
+  // 1. STOP реклама — топ-3 с суммой потерь
+  if (data.focus.stop_ads.length > 0) {
+    const top = data.focus.stop_ads.slice(0, 3)
+    const totalSpend = data.focus.stop_ads.reduce((s, r) => s + r.ad_spend, 0)
+    focusItems.push({
+      icon: <AlertCircle size={15} />,
+      label: 'Стоп реклама',
+      headline: `${data.alerts.stop_ads} SKU — OOS, деньги утекают`,
+      detail: `${top.map(r => r.name.split(' ').slice(0, 2).join(' ')).join(', ')}… — выкл. рекл., потери ${fmt(totalSpend)} ₽`,
+      color: 'var(--danger)',
+      onClick: () => navigateToSku({ type: 'stop_ads', label: 'STOP реклама: OOS + активная реклама' }),
+    })
+  }
+
+  // 2. Заказать пополнение — самые критичные (минимум дней остатка)
+  if (data.focus.soon_oos.length > 0) {
+    const critical = [...data.focus.soon_oos].sort((a, b) => a.stock_days - b.stock_days)
+    const top = critical.slice(0, 2)
+    focusItems.push({
+      icon: <ShoppingCart size={15} />,
+      label: 'Срочный заказ',
+      headline: `${data.alerts.soon_oos} SKU уйдут в OOS раньше, чем придёт товар`,
+      detail: top.map(r => `${r.name.split(' ').slice(0, 2).join(' ')}: ${r.stock_days}д (плечо ${r.lead_time}д, ~${fmt(r.revenue_per_day)} ₽/д)`).join(' • '),
+      color: 'var(--warning)',
+      onClick: () => navigateToSku({ type: 'low_stock', label: 'Скоро OOS' }),
+    })
+  }
+
+  // 3. Оптимизировать рекламу — ДРР > маржа, крупнейшие по выручке
+  if (data.focus.drr_margin.length > 0) {
+    const top = [...data.focus.drr_margin].sort((a, b) => b.revenue - a.revenue).slice(0, 2)
+    focusItems.push({
+      icon: <TrendingDown size={15} />,
+      label: 'Убыточная реклама',
+      headline: `${data.alerts.drr_over_margin} SKU: ДРР превышает маржу`,
+      detail: top.map(r => `${r.name.split(' ').slice(0, 2).join(' ')}: ДРР ${(r.drr * 100).toFixed(0)}% при марже ${(r.margin_pct * 100).toFixed(0)}%`).join(' • '),
+      color: 'var(--warning)',
+      onClick: () => navigateToSku({ type: 'drr_over', label: 'ДРР > Маржа' }),
+    })
+  }
+
+  // 4. Масштабировать — конкретные SKU с запасом ДРР
+  if (data.focus.can_scale.length > 0) {
+    const top = data.focus.can_scale.slice(0, 2)
+    focusItems.push({
+      icon: <TrendingUp size={15} />,
+      label: 'Масштабировать',
+      headline: `${data.alerts.can_scale} SKU — ДРР <50% маржи, CTR/CR выше медианы`,
+      detail: top.map(r => `${r.name.split(' ').slice(0, 2).join(' ')}: ДРР ${(r.drr * 100).toFixed(0)}%, выручка ${fmt(r.revenue)} ₽`).join(' • '),
+      color: 'var(--success)',
+      onClick: () => navigateToSku({ type: 'scale', label: 'Масштабировать рекламу' }),
+    })
+  }
+
+  // 5. Новинки в зоне риска
+  if (data.focus.novelty.length > 0) {
+    const top = data.focus.novelty.slice(0, 3)
+    focusItems.push({
+      icon: <Package size={15} />,
+      label: 'Новинки под риском',
+      headline: `${data.alerts.novelty_risk} новинок не набирают выручку`,
+      detail: top.map(r => `${r.name.split(' ').slice(0, 2).join(' ')}: ${fmt(r.revenue)} ₽`).join(' • '),
+      color: '#22d3ee',
+      onClick: () => navigateToSku({ type: 'novelty_risk', label: 'Новинки: зона риска' }),
+    })
+  }
+
+  // ── Margin distribution totals ────────────────────────────────────────────
+  const md = data.margin_distribution
+  const mdTotal = md.neg + md.low + md.mid + md.ok + md.good || 1
+
   return (
-    <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
+    <div className="px-6 py-6 space-y-6">
 
       {/* ── KPI Bar ─────────────────────────────────────────────────────── */}
       <KPIBar items={[
         {
           label: 'Выручка',
           value: fmt(data.kpi.revenue),
-          delta: '—',
+          delta: d.revenue != null ? fmtDelta(d.revenue) : undefined,
+          deltaColor: deltaColor(d.revenue),
+          hint: kpiHint('revenue', data),
         },
         {
           label: 'ЧМД',
           value: fmt(data.kpi.chmd),
-          delta: '—',
+          delta: d.chmd != null ? fmtDelta(d.chmd) : undefined,
+          deltaColor: deltaColor(d.chmd),
+          hint: kpiHint('chmd', data),
           danger: data.kpi.chmd < 0,
         },
         {
           label: 'Маржа %',
           value: fmtPct(data.kpi.avg_margin_pct),
-          delta: '—',
+          hint: kpiHint('margin', data),
         },
         {
           label: 'ДРР',
           value: drr > 0 ? (drr * 100).toFixed(1) + '%' : '—',
-          delta: '—',
+          delta: d.drr != null ? fmtDelta(d.drr) : undefined,
+          deltaColor: deltaColor(d.drr, true),
+          hint: kpiHint('drr', data),
           danger: isHighDrr,
         },
         {
           label: 'Расходы',
           value: fmt(data.kpi.ad_spend),
-          delta: '—',
+          delta: d.ad_spend != null ? fmtDelta(d.ad_spend) : undefined,
+          deltaColor: deltaColor(d.ad_spend, true),
+          hint: kpiHint('ad_spend', data),
         },
         {
           label: 'Себестоимость',
           value: fmt(data.kpi.cost_of_goods),
-          delta: '—',
+          hint: kpiHint('cogs', data),
         },
         {
           label: 'Потери',
           value: data.kpi.lost_revenue > 0 ? fmt(data.kpi.lost_revenue) : '—',
-          delta: '—',
+          hint: kpiHint('lost', data),
           danger: data.kpi.lost_revenue > 0,
         },
       ]} />
@@ -233,44 +475,31 @@ export default function OverviewTab() {
       {/* ── Charts ──────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
 
-        {/* Chart 1: Динамика выручки, ЧМД и Расходов */}
+        {/* Chart 1: Динамика — bars для Выручка, line для ЧМД */}
         <GlassCard padding="lg">
           <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>
-            Динамика выручки, ЧМД и Расходов
+            Динамика выручки и ЧМД
           </p>
           {trendData.length > 0 ? (
             <ResponsiveContainer width="100%" height={240}>
-              <AreaChart data={trendData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                <defs>
-                  <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="chmdGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--success)" stopOpacity={0.20} />
-                    <stop offset="95%" stopColor="var(--success)" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="spendGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--danger)" stopOpacity={0.20} />
-                    <stop offset="95%" stopColor="var(--danger)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
+              <ComposedChart data={trendData} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} />
+                <YAxis yAxisId="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} />
                 <Tooltip content={<ChartTip />} />
                 <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
-                <Area type="monotone" dataKey="Выручка" stroke="var(--accent)" strokeWidth={2} fill="url(#revGrad)" dot={false} activeDot={{ r: 4 }} />
-                <Area type="monotone" dataKey="ЧМД" stroke="var(--success)" strokeWidth={2} fill="url(#chmdGrad)" dot={false} activeDot={{ r: 4 }} />
-                <Area type="monotone" dataKey="Расходы" stroke="var(--danger)" strokeWidth={1.5} fill="url(#spendGrad)" dot={false} activeDot={{ r: 4 }} strokeDasharray="4 2" />
-              </AreaChart>
+                <Bar yAxisId="left" dataKey="Выручка" fill="var(--accent)" fillOpacity={0.25} stroke="var(--accent)" strokeWidth={1} radius={[3, 3, 0, 0]} />
+                <Bar yAxisId="left" dataKey="Расходы" fill="var(--danger)" fillOpacity={0.18} stroke="var(--danger)" strokeWidth={1} radius={[3, 3, 0, 0]} />
+                <Line yAxisId="right" type="monotone" dataKey="ЧМД" stroke="var(--success)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+              </ComposedChart>
             </ResponsiveContainer>
           ) : (
             <div className="flex items-center justify-center h-56 text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных</div>
           )}
         </GlassCard>
 
-        {/* Chart 2: Unit-экономика — Маржа% vs ДРР% */}
+        {/* Chart 2: Unit-экономика — Маржа%, ДРР%, ЧМД% */}
         <GlassCard padding="lg">
           <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>
             Unit-экономика по дням
@@ -285,6 +514,7 @@ export default function OverviewTab() {
                 <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
                 <Line type="monotone" dataKey="Маржа %" stroke="var(--success)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
                 <Line type="monotone" dataKey="ДРР %" stroke="var(--danger)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} strokeDasharray="5 3" />
+                <Line type="monotone" dataKey="ЧМД %" stroke="#22d3ee" strokeWidth={1.5} dot={false} activeDot={{ r: 4 }} strokeDasharray="3 2" />
               </LineChart>
             </ResponsiveContainer>
           ) : (
@@ -293,30 +523,57 @@ export default function OverviewTab() {
         </GlassCard>
       </div>
 
-      {/* ── Alerts + Фокус дня ─────────────────────────────────────────── */}
+      {/* ── Маржинальность + Алерты + Фокус дня ─────────────────────────── */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
 
+        {/* Маржинальность */}
+        <GlassCard padding="lg">
+          <p className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>Маржинальность SKU</p>
+          <div className="space-y-2.5">
+            {([
+              { key: 'neg',  label: '< 0%',    color: 'var(--danger)', count: md.neg  },
+              { key: 'low',  label: '0–10%',   color: 'var(--warning)', count: md.low  },
+              { key: 'mid',  label: '10–20%',  color: '#22d3ee', count: md.mid  },
+              { key: 'ok',   label: '20–30%',  color: 'var(--success)', count: md.ok   },
+              { key: 'good', label: '≥ 30%',   color: '#34d399', count: md.good },
+            ] as const).map(b => (
+              <div key={b.key}>
+                <div className="flex justify-between text-[11px] mb-1">
+                  <span style={{ color: 'var(--text-muted)' }}>{b.label}</span>
+                  <span style={{ color: 'var(--text)' }} className="font-medium">{b.count} SKU</span>
+                </div>
+                <div className="h-1.5 rounded-full" style={{ background: 'var(--border)' }}>
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{ width: `${(b.count / mdTotal * 100).toFixed(1)}%`, background: b.color }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </GlassCard>
+
         {/* Алерты */}
-        <GlassCard padding="lg" className="xl:col-span-1">
+        <GlassCard padding="lg">
           <p className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>Алерты</p>
           <div className="space-y-2">
-            <AlertBox
+            <AlertItem
               icon={<AlertCircle size={14} />}
               title="STOP реклама"
               count={data.alerts.stop_ads}
-              severity="critical"
-              description={data.alerts.stop_ads > 0 ? ('Потеря: ' + fmt(data.alerts.lost_revenue) + ' ₽') : 'OOS + активная реклама'}
-              onClick={data.alerts.stop_ads > 0 ? () => navigateToSku({ type: 'stop_ads', label: 'STOP реклама: OOS + активная реклама' }) : undefined}
+              severity="danger"
+              description={data.alerts.stop_ads > 0 ? `OOS + реклама → потеря ${fmt(data.alerts.lost_revenue)} ₽` : 'OOS + активная реклама'}
+              onClick={data.alerts.stop_ads > 0 ? () => navigateToSku({ type: 'stop_ads', label: 'STOP реклама' }) : undefined}
             />
-            <AlertBox
+            <AlertItem
               icon={<AlertTriangle size={14} />}
               title="Скоро OOS"
               count={data.alerts.soon_oos}
               severity="warning"
               description="Запас < логистического плеча"
-              onClick={data.alerts.soon_oos > 0 ? () => navigateToSku({ type: 'low_stock', label: 'Скоро OOS: запас < лог. плеча' }) : undefined}
+              onClick={data.alerts.soon_oos > 0 ? () => navigateToSku({ type: 'low_stock', label: 'Скоро OOS' }) : undefined}
             />
-            <AlertBox
+            <AlertItem
               icon={<TrendingDown size={14} />}
               title="ДРР > Маржа"
               count={data.alerts.drr_over_margin}
@@ -324,128 +581,54 @@ export default function OverviewTab() {
               description="Реклама работает в убыток"
               onClick={data.alerts.drr_over_margin > 0 ? () => navigateToSku({ type: 'drr_over', label: 'ДРР > Маржа' }) : undefined}
             />
-            <AlertBox
+            <AlertItem
               icon={<Rocket size={14} />}
               title="Высокий CTR / низкий CR"
               count={data.alerts.high_ctr_low_cr}
+              severity="info"
+              description="Потенциал — проблема в карточке/цене"
+              onClick={data.alerts.high_ctr_low_cr > 0 ? () => navigateToSku({ type: 'potential', label: 'Высокий CTR / низкий CR' }) : undefined}
+            />
+            <AlertItem
+              icon={<TrendingDown size={14} />}
+              title="Высокий CPO"
+              count={data.alerts.high_cpo}
+              severity="danger"
+              description="ДРР > 35% — стоимость заказа высокая"
+              onClick={data.alerts.high_cpo > 0 ? () => navigateToSku({ type: 'high_cpo', label: 'Высокий CPO' }) : undefined}
+            />
+            <AlertItem
+              icon={<TrendingUp size={14} />}
+              title="Можно масштабировать"
+              count={data.alerts.can_scale}
               severity="success"
-              description="Потенциал: проблема в карточке/цене"
-              onClick={data.alerts.high_ctr_low_cr > 0 ? () => navigateToSku({ type: 'potential', label: 'Потенциал: высокий CTR + низкий CR' }) : undefined}
+              description="ДРР <50% маржи, CTR/CR выше медианы"
+              onClick={data.alerts.can_scale > 0 ? () => navigateToSku({ type: 'scale', label: 'Масштабировать' }) : undefined}
+            />
+            <AlertItem
+              icon={<Package size={14} />}
+              title="Новинки под риском"
+              count={data.alerts.novelty_risk}
+              severity="info"
+              description="Новинка с выручкой < 10 000 ₽ за период"
+              onClick={data.alerts.novelty_risk > 0 ? () => navigateToSku({ type: 'novelty_risk', label: 'Новинки: зона риска' }) : undefined}
             />
           </div>
         </GlassCard>
 
         {/* Фокус дня */}
-        <GlassCard padding="lg" className="xl:col-span-2">
-          <div className="flex items-center gap-2 mb-4">
+        <GlassCard padding="lg">
+          <div className="flex items-center gap-2 mb-3">
             <Zap size={14} style={{ color: 'var(--accent)' }} />
             <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Фокус дня</p>
           </div>
           <div className="space-y-2">
-
-            {/* 1. STOP реклама */}
-            {data.alerts.stop_ads > 0 && (
-              <motion.div
-                whileHover={{ scale: 1.01, y: -2 }}
-                className="flex items-start gap-3 p-3 rounded-xl cursor-pointer"
-                style={{ background: 'var(--danger-bg)' }}
-                onClick={() => navigateToSku({ type: 'stop_ads', label: 'STOP реклама' })}
-              >
-                <AlertCircle size={15} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: 1 }} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold" style={{ color: 'var(--danger)' }}>Стоп реклама</p>
-                  <p className="text-sm" style={{ color: 'var(--text)' }}>
-                    {data.alerts.stop_ads} SKU — нет стока, активная реклама.{' '}
-                    <span style={{ color: 'var(--danger)' }}>Потеря: {fmt(data.alerts.lost_revenue)} ₽</span>
-                  </p>
-                </div>
-                <ChevronRight size={14} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
-              </motion.div>
-            )}
-
-            {/* 2. Заказать пополнение */}
-            {data.alerts.soon_oos > 0 && (
-              <motion.div
-                whileHover={{ scale: 1.01, y: -2 }}
-                className="flex items-start gap-3 p-3 rounded-xl cursor-pointer"
-                style={{ background: 'var(--warning-bg)' }}
-                onClick={() => navigateToSku({ type: 'low_stock', label: 'Скоро OOS' })}
-              >
-                <ShoppingCart size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold" style={{ color: 'var(--warning)' }}>Срочный заказ</p>
-                  <p className="text-sm" style={{ color: 'var(--text)' }}>
-                    {data.alerts.soon_oos} SKU — запас ниже логистического плеча
-                  </p>
-                </div>
-                <ChevronRight size={14} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
-              </motion.div>
-            )}
-
-            {/* 3. ДРР > Маржа — оптимизировать рекламу */}
-            {data.alerts.drr_over_margin > 0 && (
-              <motion.div
-                whileHover={{ scale: 1.01, y: -2 }}
-                className="flex items-start gap-3 p-3 rounded-xl cursor-pointer"
-                style={{ background: 'var(--warning-bg)' }}
-                onClick={() => navigateToSku({ type: 'drr_over', label: 'ДРР > Маржа' })}
-              >
-                <TrendingDown size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold" style={{ color: 'var(--warning)' }}>Оптимизировать рекламу</p>
-                  <p className="text-sm" style={{ color: 'var(--text)' }}>
-                    {data.alerts.drr_over_margin} SKU — ДРР превышает маржу
-                  </p>
-                </div>
-                <ChevronRight size={14} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
-              </motion.div>
-            )}
-
-            {/* 4. Масштабировать — если ДРР низкий и запас ок */}
-            {data.kpi.drr != null && data.kpi.avg_margin_pct >= 0.20 && drr < data.kpi.avg_margin_pct * 0.5 && (
-              <motion.div
-                whileHover={{ scale: 1.01, y: -2 }}
-                className="flex items-start gap-3 p-3 rounded-xl cursor-pointer"
-                style={{ background: 'var(--success-bg)' }}
-                onClick={() => navigateToSku({ type: 'scale', label: 'Масштабировать рекламу' })}
-              >
-                <TrendingUp size={15} style={{ color: 'var(--success)', flexShrink: 0, marginTop: 1 }} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold" style={{ color: 'var(--success)' }}>Увеличить рекламу</p>
-                  <p className="text-sm" style={{ color: 'var(--text)' }}>
-                    Маржа {fmtPct(data.kpi.avg_margin_pct)}, ДРР {(drr * 100).toFixed(1)}% — есть запас для роста
-                  </p>
-                </div>
-                <ChevronRight size={14} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
-              </motion.div>
-            )}
-
-            {/* 5. Улучшить карточку */}
-            {data.alerts.high_ctr_low_cr > 0 && (
-              <motion.div
-                whileHover={{ scale: 1.01, y: -2 }}
-                className="flex items-start gap-3 p-3 rounded-xl cursor-pointer"
-                style={{ background: 'rgba(34,211,238,0.08)' }}
-                onClick={() => navigateToSku({ type: 'potential', label: 'Улучшить карточку' })}
-              >
-                <Rocket size={15} style={{ color: '#22d3ee', flexShrink: 0, marginTop: 1 }} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold" style={{ color: '#22d3ee' }}>Улучшить карточку</p>
-                  <p className="text-sm" style={{ color: 'var(--text)' }}>
-                    {data.alerts.high_ctr_low_cr} SKU — высокий CTR, низкий CR → проблема в карточке/цене
-                  </p>
-                </div>
-                <ChevronRight size={14} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
-              </motion.div>
-            )}
-
-            {/* Если нет задач */}
-            {data.alerts.stop_ads === 0 && data.alerts.soon_oos === 0
-              && data.alerts.drr_over_margin === 0 && data.alerts.high_ctr_low_cr === 0
-              && !(data.kpi.avg_margin_pct >= 0.20 && drr < data.kpi.avg_margin_pct * 0.5) && (
+            {focusItems.length === 0 ? (
               <p className="text-sm py-4 text-center" style={{ color: 'var(--text-muted)' }}>
                 Критических задач нет
               </p>
+            ) : (
+              focusItems.map((item, i) => <FocusItem key={i} {...item} />)
             )}
           </div>
         </GlassCard>
@@ -471,6 +654,7 @@ export default function OverviewTab() {
                 'Маржа%': (r.margin_pct * 100).toFixed(1),
                 'Остаток дней': r.stock_days,
                 'ABC': r.abc_class,
+                'Новинка': r.novelty_status ?? '',
               })),
               'ТОП-15'
             )}
@@ -487,26 +671,24 @@ export default function OverviewTab() {
                 <th className="text-left pb-2 font-medium w-8">#</th>
                 <th className="text-center pb-2 font-medium w-16">Score</th>
                 <th className="text-left pb-2 font-medium">Название</th>
-                <th className="text-left pb-2 font-medium">Арт. WB</th>
+                <th className="text-left pb-2 font-medium whitespace-nowrap">Арт. WB</th>
                 <th className="text-right pb-2 font-medium">Выручка</th>
                 <th className="text-right pb-2 font-medium">ЧМД</th>
                 <th className="text-right pb-2 font-medium">ДРР</th>
                 <th className="text-right pb-2 font-medium">Маржа</th>
-                <th className="text-right pb-2 font-medium">Остаток дн.</th>
+                <th className="text-right pb-2 font-medium whitespace-nowrap">Остаток дн.</th>
               </tr>
             </thead>
             <tbody>
               {(data.top15 ?? []).map((row, i) => {
-                const isLowMargin = row.margin_pct < 0.10
-                const isOos = row.is_oos
+                const isLowMargin  = row.margin_pct < 0.10
                 const isHighDrrRow = row.drr > row.margin_pct && row.margin_pct > 0
                 return (
                   <motion.tr
                     key={row.sku_ms}
-                    variants={fadeUp}
                     className="border-t cursor-pointer"
                     style={{ borderColor: 'var(--border)' }}
-                    onClick={() => navigateToSku({ type: 'sku', label: row.name })}
+                    onClick={() => setModalSkuMs(row.sku_ms)}
                     whileHover={{ backgroundColor: 'rgba(255,255,255,0.03)' }}
                   >
                     <td className="py-2 text-xs" style={{ color: 'var(--text-subtle)' }}>{i + 1}</td>
@@ -517,9 +699,14 @@ export default function OverviewTab() {
                       <span className="block truncate text-xs font-medium" style={{ color: 'var(--text)' }}>
                         {row.name}
                       </span>
-                      {isOos && (
-                        <span className="text-[10px] font-bold" style={{ color: 'var(--danger)' }}>OOS</span>
-                      )}
+                      <div className="flex items-center gap-1 mt-0.5">
+                        {row.is_oos && (
+                          <span className="text-[10px] font-bold" style={{ color: 'var(--danger)' }}>OOS</span>
+                        )}
+                        {row.novelty_status === 'Новинки' && (
+                          <span className="text-[10px] px-1 rounded" style={{ background: 'rgba(34,211,238,0.12)', color: '#22d3ee' }}>new</span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-2 pr-4 font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
                       {row.sku_wb ?? '—'}
@@ -534,7 +721,7 @@ export default function OverviewTab() {
                       <span className="text-xs px-1.5 py-0.5 rounded"
                         style={{
                           background: isHighDrrRow ? 'var(--danger-bg)' : 'var(--success-bg)',
-                          color: isHighDrrRow ? 'var(--danger)' : 'var(--success)',
+                          color:      isHighDrrRow ? 'var(--danger)'    : 'var(--success)',
                         }}
                       >
                         {(row.drr * 100).toFixed(1)}%
@@ -544,7 +731,7 @@ export default function OverviewTab() {
                       <span className="text-xs px-1.5 py-0.5 rounded"
                         style={{
                           background: isLowMargin ? 'var(--danger-bg)' : 'var(--success-bg)',
-                          color: isLowMargin ? 'var(--danger)' : 'var(--success)',
+                          color:      isLowMargin ? 'var(--danger)'    : 'var(--success)',
                         }}
                       >
                         {(row.margin_pct * 100).toFixed(1)}%
@@ -568,6 +755,12 @@ export default function OverviewTab() {
           </table>
         </div>
       </GlassCard>
+
+      {/* ── SKU Modal ────────────────────────────────────────────────────── */}
+      <SkuModal
+        skuMs={modalSkuMs}
+        onClose={() => setModalSkuMs(null)}
+      />
 
     </div>
   )

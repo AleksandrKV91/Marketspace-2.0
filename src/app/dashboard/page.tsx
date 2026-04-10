@@ -1,12 +1,12 @@
 'use client'
 
-import React, { useState } from 'react'
+import React, { useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, Table2, TrendingUp, BarChart2,
-  Globe, ShoppingCart, Upload, Moon, Sun, Monitor
+  Globe, ShoppingCart, Upload, Moon, Sun, Monitor, X
 } from 'lucide-react'
-import { DateRangeProvider, DateRangePicker } from '@/components/ui/DateRangePicker'
+import { DateRangeProvider, DateRangePicker, useDateRange } from '@/components/ui/DateRangePicker'
 import SvodTab      from '@/components/tabs/OverviewTab'
 import SkuTab       from '@/components/tabs/SkuTableTab'
 import PriceTab     from '@/components/tabs/PriceTab'
@@ -20,10 +20,163 @@ const PendingFilterContext = React.createContext<{
   pending: SkuFilter | null
   setPending: (f: SkuFilter | null) => void
   navigateToSku: (f: SkuFilter) => void
-}>({ pending: null, setPending: () => {}, navigateToSku: () => {} })
+  navigateToTab: (tab: Tab, f: SkuFilter) => void
+}>({ pending: null, setPending: () => {}, navigateToSku: () => {}, navigateToTab: () => {} })
 
 export function usePendingFilter() {
   return React.useContext(PendingFilterContext)
+}
+
+// ── Global Filters ────────────────────────────────────────────────────────────
+
+export interface GlobalFilters {
+  category: string
+  manager: string
+  novelty: string
+}
+
+const GlobalFiltersContext = React.createContext<{
+  filters: GlobalFilters
+  setFilters: (f: GlobalFilters) => void
+  meta: { categories: string[]; managers: string[] }
+  setMeta: (m: { categories: string[]; managers: string[] }) => void
+}>({
+  filters: { category: '', manager: '', novelty: '' },
+  setFilters: () => {},
+  meta: { categories: [], managers: [] },
+  setMeta: () => {},
+})
+
+export function useGlobalFilters() {
+  return React.useContext(GlobalFiltersContext)
+}
+
+// ── Period shortcuts ──────────────────────────────────────────────────────────
+
+function toISO(d: Date) { return d.toISOString().split('T')[0] }
+
+function PeriodButtons() {
+  const { setRange } = useDateRange()
+  const periods = [
+    { label: '7д', days: 7 },
+    { label: '14д', days: 14 },
+    { label: '30д', days: 30 },
+    { label: '60д', days: 60 },
+  ]
+  return (
+    <div className="flex items-center gap-0.5">
+      {periods.map(p => (
+        <button
+          key={p.label}
+          onClick={() => {
+            const to = new Date()
+            const from = new Date(); from.setDate(from.getDate() - (p.days - 1))
+            setRange({ from: toISO(from), to: toISO(to) })
+          }}
+          className="px-2 py-1 rounded-lg text-[11px] font-medium transition-all"
+          style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            color: 'var(--text-muted)',
+          }}
+          onMouseEnter={e => {
+            ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)'
+            ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'
+          }}
+          onMouseLeave={e => {
+            ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)'
+            ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
+          }}
+        >
+          {p.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ── Mini dropdown ─────────────────────────────────────────────────────────────
+
+function FilterDropdown({
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  value: string
+  onChange: (v: string) => void
+  options: string[]
+  placeholder: string
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-medium whitespace-nowrap transition-all"
+        style={{
+          background: value ? 'var(--accent-glass)' : 'var(--surface)',
+          border: '1px solid ' + (value ? 'var(--accent)' : 'var(--border)'),
+          color: value ? 'var(--accent)' : 'var(--text-muted)',
+          boxShadow: 'var(--shadow-sm)',
+        }}
+      >
+        {value || placeholder}
+        <span style={{ fontSize: 9, opacity: 0.7 }}>▼</span>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: 4, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 2, scale: 0.97 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+            className="absolute left-0 top-[calc(100%+4px)] z-[300] py-1 min-w-[140px] max-h-48 overflow-y-auto"
+            style={{
+              background: 'var(--surface-solid, #fff)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-xl)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+              backdropFilter: 'blur(24px)',
+            }}
+          >
+            <button
+              onClick={() => { onChange(''); setOpen(false) }}
+              className="w-full text-left px-3 py-1.5 text-[11px] transition-colors"
+              style={{ color: !value ? 'var(--accent)' : 'var(--text-muted)' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent-glass)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
+            >
+              Все
+            </button>
+            {options.map(o => (
+              <button
+                key={o}
+                onClick={() => { onChange(o); setOpen(false) }}
+                className="w-full text-left px-3 py-1.5 text-[11px] transition-colors"
+                style={{ color: value === o ? 'var(--accent)' : 'var(--text)' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent-glass)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
+              >
+                {o}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
 }
 
 type Tab = 'svod' | 'sku' | 'price' | 'analytics' | 'niche' | 'orders' | 'update'
@@ -83,21 +236,31 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<Tab>('svod')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [pendingFilter, setPendingFilter] = useState<SkuFilter | null>(null)
+  const [globalFilters, setGlobalFilters] = useState<GlobalFilters>({ category: '', manager: '', novelty: '' })
+  const [meta, setMeta] = useState<{ categories: string[]; managers: string[] }>({ categories: [], managers: [] })
 
   const navigateToSku = (f: SkuFilter) => {
     setPendingFilter(f)
     setActiveTab('sku')
   }
 
+  const navigateToTab = useCallback((tab: Tab, f: SkuFilter) => {
+    setPendingFilter(f)
+    setActiveTab(tab)
+  }, [])
+
+  const hasFilters = globalFilters.category !== '' || globalFilters.manager !== '' || globalFilters.novelty !== ''
+  const resetFilters = () => setGlobalFilters({ category: '', manager: '', novelty: '' })
+
   return (
-    <PendingFilterContext.Provider value={{ pending: pendingFilter, setPending: setPendingFilter, navigateToSku }}>
+    <PendingFilterContext.Provider value={{ pending: pendingFilter, setPending: setPendingFilter, navigateToSku, navigateToTab }}>
+    <GlobalFiltersContext.Provider value={{ filters: globalFilters, setFilters: setGlobalFilters, meta, setMeta }}>
     <DateRangeProvider>
     <div className="min-h-screen relative" style={{ background: 'var(--bg)' }}>
 
       {/* ── Liquid Glass sticky header ── */}
-      <header
-        className="top-nav sticky top-0 z-50 flex flex-col px-4 lg:px-6 py-2 gap-1"
-      >
+      <header className="top-nav sticky top-0 z-50 px-4 lg:px-6 py-2">
+        <div className="max-w-[1440px] mx-auto w-full flex flex-col gap-1">
         {/* Row 1: Logo + Nav + Actions */}
         <div className="flex items-center gap-4 h-[52px]">
           {/* Logo */}
@@ -192,10 +355,47 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Row 2: DateRangePicker under logo */}
-        <div className="flex items-center h-[28px]">
+        {/* Row 2: DateRangePicker + global filters */}
+        <div className="flex items-center gap-2 h-[28px] flex-wrap">
           <DateRangePicker />
+          <PeriodButtons />
+          <div className="w-px h-4 shrink-0" style={{ background: 'var(--border)' }} />
+          <FilterDropdown
+            value={globalFilters.category}
+            onChange={v => setGlobalFilters(f => ({ ...f, category: v }))}
+            options={meta.categories}
+            placeholder="Категория ▼"
+          />
+          <FilterDropdown
+            value={globalFilters.novelty}
+            onChange={v => setGlobalFilters(f => ({ ...f, novelty: v }))}
+            options={['Новинки', 'Не новинки']}
+            placeholder="Новинка ▼"
+          />
+          <FilterDropdown
+            value={globalFilters.manager}
+            onChange={v => setGlobalFilters(f => ({ ...f, manager: v }))}
+            options={meta.managers}
+            placeholder="Менеджер ▼"
+          />
+          {hasFilters && (
+            <motion.button
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              onClick={resetFilters}
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-all"
+              style={{
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-muted)',
+              }}
+            >
+              <X size={10} /> Сбросить
+            </motion.button>
+          )}
         </div>
+        </div>{/* /max-w wrapper */}
       </header>
 
       {/* Mobile dropdown */}
@@ -254,6 +454,7 @@ export default function DashboardPage() {
       </main>
     </div>
     </DateRangeProvider>
+    </GlobalFiltersContext.Provider>
     </PendingFilterContext.Provider>
   )
 }
