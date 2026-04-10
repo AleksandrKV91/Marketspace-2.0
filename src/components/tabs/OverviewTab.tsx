@@ -76,6 +76,9 @@ interface OverviewData {
     name: string
     revenue: number
     chmd: number
+    ad_spend: number
+    cost_of_goods: number
+    total_stock: number
     drr: number
     margin_pct: number
     stock_days: number
@@ -489,12 +492,12 @@ export default function OverviewTab() {
               <ComposedChart data={trendData} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
                 <defs>
                   <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="var(--accent)"  stopOpacity={0.20} />
-                    <stop offset="95%" stopColor="var(--accent)"  stopOpacity={0} />
+                    <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.20} />
+                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="chmdGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="var(--success)" stopOpacity={0.15} />
-                    <stop offset="95%" stopColor="var(--success)" stopOpacity={0} />
+                    <stop offset="5%"  stopColor="#22c55e" stopOpacity={0.15} />
+                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
@@ -523,8 +526,8 @@ export default function OverviewTab() {
               <LineChart data={unitEconData} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis yAxisId="left" orientation="left" tick={{ fontSize: 10, fill: '#ef4444' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => (v as number).toFixed(0) + '%'} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#22d3ee' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => (v as number).toFixed(0) + '%'} />
+                <YAxis yAxisId="left" orientation="left" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#ef4444' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => (v as number).toFixed(1) + '%'} />
+                <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#22d3ee' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => (v as number).toFixed(1) + '%'} />
                 <Tooltip content={<ChartTip pct />} />
                 <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
                 <Line yAxisId="left"  type="monotone" dataKey="ДРР %"  stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
@@ -655,6 +658,40 @@ export default function OverviewTab() {
         </GlassCard>
       </div>
 
+      {/* ── Score formula ─────────────────────────────────────────────── */}
+      <GlassCard padding="lg">
+        <p className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>Формула SKU Score</p>
+        <div className="flex flex-wrap gap-2 mb-2">
+          {[
+            { label: 'Маржа', max: 25, color: '#22c55e', hint: '<10% → 0; 10–15% → 0–12.5; ≥15% → до 25' },
+            { label: 'ДРР', max: 20, color: '#3b82f6', hint: '1 − ДРР/Маржа × 20; нет рекламы → 20' },
+            { label: 'Рост выручки', max: 10, color: '#a78bfa', hint: 'sigmoid(growth×4) × 10; нейтраль = 5' },
+            { label: 'Конверсия', max: 10, color: '#f59e0b', hint: 'CR / медиана по акк. × 10' },
+            { label: 'Остаток', max: 20, color: '#22d3ee', hint: '< плечо → 0–10; плечо..2×плечо → 10–20' },
+          ].map(c => (
+            <div key={c.label} title={c.hint}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg cursor-help"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+            >
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: c.color }} />
+              <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{c.label}</span>
+              <span className="text-xs font-bold" style={{ color: c.color }}>{c.max}</span>
+            </div>
+          ))}
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg"
+            style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+          >
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Штрафы:</span>
+            <span className="text-xs" style={{ color: 'var(--danger)' }}>OOS → 0</span>
+            <span className="text-xs" style={{ color: 'var(--text-subtle)' }}>•</span>
+            <span className="text-xs" style={{ color: 'var(--danger)' }}>ДРР&gt;Маржа → ×0.5</span>
+            <span className="text-xs" style={{ color: 'var(--text-subtle)' }}>•</span>
+            <span className="text-xs" style={{ color: 'var(--warning)' }}>Новинка &lt;10К → −10</span>
+          </div>
+        </div>
+        <p className="text-[11px]" style={{ color: 'var(--text-subtle)' }}>Наведи на компонент для расшифровки</p>
+      </GlassCard>
+
       {/* ── TOP-15 SKU by Score ────────────────────────────────────────── */}
       <GlassCard padding="lg">
         <div className="flex items-center justify-between mb-4">
@@ -671,8 +708,11 @@ export default function OverviewTab() {
                 'Score': Math.round(r.score),
                 'Выручка': r.revenue,
                 'ЧМД': Math.round(r.chmd),
+                'Расходы': Math.round(r.ad_spend),
+                'Себестоимость': Math.round(r.cost_of_goods),
                 'ДРР%': (r.drr * 100).toFixed(1),
                 'Маржа%': (r.margin_pct * 100).toFixed(1),
+                'Остаток шт.': r.total_stock,
                 'Остаток дней': r.stock_days,
                 'ABC': r.abc_class,
                 'Новинка': r.novelty_status ?? '',
@@ -695,9 +735,12 @@ export default function OverviewTab() {
                 <th className="text-left pb-2 font-medium whitespace-nowrap">Арт. WB</th>
                 <th className="text-right pb-2 font-medium">Выручка</th>
                 <th className="text-right pb-2 font-medium">ЧМД</th>
+                <th className="text-right pb-2 font-medium whitespace-nowrap">Расходы</th>
+                <th className="text-right pb-2 font-medium whitespace-nowrap">Себест.</th>
                 <th className="text-right pb-2 font-medium">ДРР</th>
                 <th className="text-right pb-2 font-medium">Маржа</th>
-                <th className="text-right pb-2 font-medium whitespace-nowrap">Остаток дн.</th>
+                <th className="text-right pb-2 font-medium whitespace-nowrap">Ост. шт.</th>
+                <th className="text-right pb-2 font-medium whitespace-nowrap">Ост. дн.</th>
               </tr>
             </thead>
             <tbody>
@@ -738,6 +781,12 @@ export default function OverviewTab() {
                     <td className="py-2 text-right text-xs" style={{ color: row.chmd < 0 ? 'var(--danger)' : 'var(--success)' }}>
                       {fmt(row.chmd)}
                     </td>
+                    <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {fmt(row.ad_spend)}
+                    </td>
+                    <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {fmt(row.cost_of_goods)}
+                    </td>
                     <td className="py-2 text-right">
                       <span className="text-xs px-1.5 py-0.5 rounded"
                         style={{
@@ -757,6 +806,9 @@ export default function OverviewTab() {
                       >
                         {(row.margin_pct * 100).toFixed(1)}%
                       </span>
+                    </td>
+                    <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {row.total_stock}
                     </td>
                     <td className="py-2 text-right text-xs"
                       style={{

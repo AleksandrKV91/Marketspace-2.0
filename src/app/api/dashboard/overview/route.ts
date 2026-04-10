@@ -498,6 +498,7 @@ export async function GET(req: Request) {
       const score = computeScore({
         margin_pct: marginPct,
         drr,
+        revenue: s.revenue,
         revenue_growth: revenueGrowth,
         cr_order: avgCr,
         median_cr: medianCr,
@@ -510,6 +511,7 @@ export async function GET(req: Request) {
 
       // ЧМД per-SKU
       const chmd = s.revenue * marginPct - s.ad_spend
+      const costOfGoods = s.revenue * (1 - marginPct)
 
       return {
         sku_ms: ms,
@@ -517,6 +519,9 @@ export async function GET(req: Request) {
         name: dim?.name ?? ms,
         revenue: s.revenue,
         chmd,
+        ad_spend: s.ad_spend,
+        cost_of_goods: costOfGoods,
+        total_stock: totalStock,
         drr,
         margin_pct: marginPct,
         stock_days: stockDays,
