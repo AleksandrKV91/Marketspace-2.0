@@ -344,7 +344,6 @@ export default function OverviewTab() {
 
   const unitEconData = data.unit_econ.map(r => ({
     date: fmtDate(r.date),
-    'Маржа %': r.margin_pct,
     'ДРР %': r.drr_pct,
     'ЧМД %': r.chmd_pct,
   }))
@@ -504,9 +503,9 @@ export default function OverviewTab() {
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} />
                 <Tooltip content={<ChartTip />} />
                 <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
-                <Area yAxisId="left"  type="monotone" dataKey="Выручка" stroke="var(--accent)"  fill="url(#revGrad)"  strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-                <Area yAxisId="left"  type="monotone" dataKey="ЧМД"    stroke="var(--success)" fill="url(#chmdGrad)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-                <Line yAxisId="right" type="monotone" dataKey="Расходы" stroke="var(--danger)" strokeWidth={1.5} dot={false} activeDot={{ r: 4 }} strokeDasharray="4 2" />
+                <Area yAxisId="left"  type="monotone" dataKey="Выручка" stroke="#3b82f6"        fill="url(#revGrad)"  strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                <Area yAxisId="left"  type="monotone" dataKey="ЧМД"    stroke="#22c55e"        fill="url(#chmdGrad)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                <Line yAxisId="right" type="monotone" dataKey="Расходы" stroke="#ef4444"       strokeWidth={1.5} dot={false} activeDot={{ r: 4 }} strokeDasharray="4 2" />
               </ComposedChart>
             </ResponsiveContainer>
           ) : (
@@ -521,15 +520,15 @@ export default function OverviewTab() {
           </p>
           {unitEconData.length > 0 ? (
             <ResponsiveContainer width="100%" height={240}>
-              <LineChart data={unitEconData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <LineChart data={unitEconData} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => (v as number).toFixed(0) + '%'} />
+                <YAxis yAxisId="left" orientation="left" tick={{ fontSize: 10, fill: '#ef4444' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => (v as number).toFixed(0) + '%'} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#22d3ee' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => (v as number).toFixed(0) + '%'} />
                 <Tooltip content={<ChartTip pct />} />
                 <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
-                <Line type="monotone" dataKey="Маржа %" stroke="var(--success)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-                <Line type="monotone" dataKey="ДРР %" stroke="var(--danger)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} strokeDasharray="5 3" />
-                <Line type="monotone" dataKey="ЧМД %" stroke="#22d3ee" strokeWidth={1.5} dot={false} activeDot={{ r: 4 }} strokeDasharray="3 2" />
+                <Line yAxisId="left"  type="monotone" dataKey="ДРР %"  stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                <Line yAxisId="right" type="monotone" dataKey="ЧМД %"  stroke="#22d3ee" strokeWidth={2} dot={false} activeDot={{ r: 4 }} strokeDasharray="5 3" />
               </LineChart>
             </ResponsiveContainer>
           ) : (
