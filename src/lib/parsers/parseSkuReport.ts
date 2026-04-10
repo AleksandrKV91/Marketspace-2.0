@@ -20,6 +20,7 @@ export interface SkuDailyRow {
 
 export interface SkuSnapshotRow {
   sku_ms: string
+  sku_wb: number | null          // артикул WB (колонка A отчёта по SKU)
   snap_date: string
   fbo_wb: number | null
   fbs_pushkino: number | null
@@ -29,6 +30,7 @@ export interface SkuSnapshotRow {
   days_to_arrival: number | null
   ots_reserve_days: number | null
   margin_rub: number | null
+  margin_pct: number | null   // колонка Y «Маржа, %» → делённая на 100 (17.3 → 0.173)
   chmd_5d: number | null
   spend_plan: number | null
   drr_plan: number | null
@@ -133,6 +135,8 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
   const daysArrivalCol = fc('дней до прихода')
   const otsReserveCol = fcs(['запас дней до out to stock', 'запас дней до oos', 'запас дней'])
   const marginRubCol = fcs(['маржа опер', 'маржа, руб', 'маржа руб'])
+  // Колонка Y «Маржа, %» — маржинальность выручки в процентах (17.3 → хранить как 0.173)
+  const marginPctCol = fcs(['маржа, %', 'маржа,%', 'маржа %'])
   const chmd5dCol = fcs(['чмд за пять', 'чмд за 5'])
   const spendPlanCol = fcs(['затраты план', 'spend plan'])
   const drrPlanCol = fcs(['дрр план', 'drr план'])
@@ -231,8 +235,12 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
 
     // Снапшот
     const rawNovelty = noveltyCol >= 0 ? String(row[noveltyCol] ?? '').trim() : null
+    // rawSku = WB артикул (колонка A), skuMap мог конвертировать его в sku_ms
+    const skuWbNum = skuMap ? (Number(rawSku) || null) : null
+
     snapshots.push({
       sku_ms: skuMs,
+      sku_wb: skuWbNum,
       snap_date: snapDateISO,
       fbo_wb: fboWbCol >= 0 ? toNum(row[fboWbCol]) : null,
       fbs_pushkino: fbsPushkinoCol >= 0 ? toNum(row[fbsPushkinoCol]) : null,
@@ -242,6 +250,13 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
       days_to_arrival: daysArrivalCol >= 0 ? toNum(row[daysArrivalCol]) : null,
       ots_reserve_days: otsReserveCol >= 0 ? toNum(row[otsReserveCol]) : null,
       margin_rub: marginRubCol >= 0 ? toNum(row[marginRubCol]) : null,
+      margin_pct: (() => {
+        if (marginPctCol < 0) return null
+        const v = toNum(row[marginPctCol])
+        if (v == null) return null
+        // Значение в % (напр. 17.3) → переводим в долю (0.173)
+        return v / 100
+      })(),
       chmd_5d: chmd5dCol >= 0 ? toNum(row[chmd5dCol]) : null,
       spend_plan: spendPlanCol >= 0 ? toNum(row[spendPlanCol]) : null,
       drr_plan: drrPlanCol >= 0 ? toNum(row[drrPlanCol]) : null,

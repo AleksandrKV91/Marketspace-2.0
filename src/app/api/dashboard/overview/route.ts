@@ -77,7 +77,6 @@ export async function GET(req: Request) {
     if (!latestByType[u.file_type]) latestByType[u.file_type] = u.id
   }
 
-  const stockId  = latestByType['stock']
   const abcId    = latestByType['abc']
   const skuRepId = latestByType['sku_report']
   const chinaId  = latestByType['china']
@@ -99,30 +98,21 @@ export async function GET(req: Request) {
 
   // ── 3. fact_sku_snapshot ─────────────────────────────────────────────────
   type SnapRow = {
-    sku_ms: string; margin_rub: number | null; chmd_5d: number | null
-    manager: string | null; price: number | null; stock_days: number | null
-    novelty_status: string | null; fbo_wb: number | null
-    fbs_pushkino: number | null; fbs_smolensk: number | null; snap_date: string | null
+    sku_ms: string; margin_rub: number | null; margin_pct: number | null
+    chmd_5d: number | null; manager: string | null; price: number | null
+    stock_days: number | null; novelty_status: string | null
+    fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
+    snap_date: string | null
   }
   const snapByMs: Record<string, SnapRow> = {}
   if (skuRepId) {
     const rows = await fetchAll<SnapRow>(
       (sb) => sb.from('fact_sku_snapshot')
-        .select('sku_ms, margin_rub, chmd_5d, manager, price, stock_days, novelty_status, fbo_wb, fbs_pushkino, fbs_smolensk, snap_date')
+        .select('sku_ms, margin_rub, margin_pct, chmd_5d, manager, price, stock_days, novelty_status, fbo_wb, fbs_pushkino, fbs_smolensk, snap_date')
         .eq('upload_id', skuRepId),
       supabase,
     )
     for (const r of rows) snapByMs[r.sku_ms] = r
-  }
-
-  // ── 4. fact_stock_snapshot ────────────────────────────────────────────────
-  type StockRow = { sku_wb: number; fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null; total_stock: number | null; price: number | null; margin_pct: number | null }
-  const stockByWb: Record<number, StockRow> = {}
-  if (stockId) {
-    const { data } = await supabase.from('fact_stock_snapshot')
-      .select('sku_wb, fbo_wb, fbs_pushkino, fbs_smolensk, total_stock, price, margin_pct')
-      .eq('upload_id', stockId)
-    if (data) for (const r of data) stockByWb[r.sku_wb] = r
   }
 
   // ── 5. fact_china_supply ─────────────────────────────────────────────────
@@ -244,8 +234,8 @@ export async function GET(req: Request) {
   const medianCr  = median(allCrs)
 
   // ── 15. Набор SKU после фильтрации ───────────────────────────────────────
-  // Фильтрация идёт по dim_sku (категория) и fact_sku_snapshot (менеджер, новинка)
-  const filteredSkuMs = new Set<string>(Object.keys(skuAgg))
+  // Объединяем SKU из fact_sku_daily (с рекламой) + fact_sku_snapshot (все, включая органику)
+  const filteredSkuMs = new Set<string>([...Object.keys(skuAgg), ...Object.keys(snapByMs)])
   if (catFilter || mgrFilter || novFilter) {
     for (const ms of [...filteredSkuMs]) {
       const dim  = dimByMs[ms]
@@ -298,22 +288,18 @@ export async function GET(req: Request) {
   const focusCanScale: Array<{ sku_ms: string; name: string; revenue: number; drr: number; sku_wb: number | null }> = []
 
   for (const ms of filteredSkuMs) {
-    const s    = skuAgg[ms]
+    const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, ctr: [], cr_order: [], days: new Set<string>() }
     const snap = snapByMs[ms]
     const dim  = dimByMs[ms]
     const skuWb = dim?.sku_wb ?? null
-    const stockSnap = skuWb ? stockByWb[skuWb] : null
     const china = chinaByMs[ms]
 
-    const price     = snap?.price ?? stockSnap?.price ?? 0
-    const marginRub = snap?.margin_rub ?? null
-    // margin_pct per-SKU: приоритет stock_snapshot.margin_pct (колонка Y, маржинальность выручки %)
-    // Fallback: margin_rub / price (операционная маржа на ед. / цена) — менее точно
-    const marginPct = stockSnap?.margin_pct != null
-      ? stockSnap.margin_pct
-      : (marginRub != null && price > 0 ? marginRub / price : 0)
+    const price      = snap?.price ?? 0
+    // margin_pct из колонки Y «Маржа, %» отчёта по SKU (парсер делит на 100: 22 → 0.22)
+    const marginPct  = snap?.margin_pct ?? 0
 
-    const totalStock = stockSnap?.total_stock ?? 0
+    // Остаток = FBO WB + FBS Пушкино + FBS Смоленск
+    const totalStock = (snap?.fbo_wb ?? 0) + (snap?.fbs_pushkino ?? 0) + (snap?.fbs_smolensk ?? 0)
     const leadTime   = getLeadTime(dim?.country, china?.lead_time_days)
 
     const sd  = skuWb ? stockDailyByWb[skuWb] : null
@@ -420,8 +406,7 @@ export async function GET(req: Request) {
 
   }
 
-  // ── 17. Margin distribution по ВСЕМ SKU из snapshot (не только с продажами) ──
-  // Сбрасываем buckets и считаем заново по всем SKU в snapByMs
+  // ── 17. Margin distribution по ВСЕМ SKU из snapshot ─────────────────────
   marginBuckets.neg = 0; marginBuckets.low = 0; marginBuckets.mid = 0
   marginBuckets.ok = 0; marginBuckets.good = 0
   for (const [ms, snap] of Object.entries(snapByMs)) {
@@ -429,14 +414,7 @@ export async function GET(req: Request) {
     if (mgrFilter && (snap.manager ?? '') !== mgrFilter) continue
     if (novFilter === 'Новинки' && snap.novelty_status !== 'Новинки') continue
     if (novFilter === 'Не новинки' && snap.novelty_status === 'Новинки') continue
-    const dim2 = dimByMs[ms]
-    const skuWb2 = dim2?.sku_wb ?? null
-    const stockSnap2 = skuWb2 ? stockByWb[skuWb2] : null
-    const marginRub2 = snap.margin_rub ?? null
-    const price2 = snap.price ?? stockSnap2?.price ?? null
-    const mp = stockSnap2?.margin_pct != null
-      ? stockSnap2.margin_pct
-      : (marginRub2 != null && price2 && price2 > 0 ? marginRub2 / price2 : null)
+    const mp = snap.margin_pct
     if (mp == null) continue
     if (mp < 0) marginBuckets.neg++
     else if (mp < 0.10) marginBuckets.low++
@@ -448,18 +426,11 @@ export async function GET(req: Request) {
   // ── 18. Средневзвешенная маржа (для unitEcon графика) ────────────────────
   let wMarginNum = 0, wMarginDen = 0
   for (const ms of filteredSkuMs) {
-    const s    = skuAgg[ms]
+    const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, ctr: [], cr_order: [], days: new Set<string>() }
     const snap = snapByMs[ms]
-    const dim  = dimByMs[ms]
-    const skuWb = dim?.sku_wb ?? null
-    const stockSnap = skuWb ? stockByWb[skuWb] : null
-    const price = snap?.price ?? stockSnap?.price ?? null
-    const marginRub = snap?.margin_rub ?? null
-    const marginPct = stockSnap?.margin_pct != null
-      ? stockSnap.margin_pct
-      : (marginRub != null && price && price > 0 ? marginRub / price : null)
-    if (marginPct != null && s.revenue > 0) {
-      wMarginNum += marginPct * s.revenue
+    const mp   = snap?.margin_pct ?? null
+    if (mp != null && s.revenue > 0) {
+      wMarginNum += mp * s.revenue
       wMarginDen += s.revenue
     }
   }
@@ -505,20 +476,14 @@ export async function GET(req: Request) {
   // ── 21. Top-15 SKU по Score ───────────────────────────────────────────────
   const top15 = [...filteredSkuMs]
     .map(ms => {
-      const s    = skuAgg[ms]
+      const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, ctr: [], cr_order: [], days: new Set<string>() }
       const snap = snapByMs[ms]
       const dim  = dimByMs[ms]
       const skuWb = dim?.sku_wb ?? null
-      const stockSnap = skuWb ? stockByWb[skuWb] : null
       const china = chinaByMs[ms]
 
-      const price     = snap?.price ?? stockSnap?.price ?? 0
-      const marginRub = snap?.margin_rub ?? null
-      const marginPct = stockSnap?.margin_pct != null
-        ? stockSnap.margin_pct
-        : (marginRub != null && price > 0 ? marginRub / price : 0)
-
-      const totalStock = stockSnap?.total_stock ?? 0
+      const marginPct  = snap?.margin_pct ?? 0
+      const totalStock = (snap?.fbo_wb ?? 0) + (snap?.fbs_pushkino ?? 0) + (snap?.fbs_smolensk ?? 0)
       const leadTime   = getLeadTime(dim?.country, china?.lead_time_days)
       const sd  = skuWb ? stockDailyByWb[skuWb] : null
       const dpd = sd && sd.days_with_sales > 0 ? sd.total_qty / periodDays : 0
@@ -592,9 +557,8 @@ export async function GET(req: Request) {
       cost_of_goods: totalCostOfGoods,
       lost_revenue:  lostRevenue,
       oos_count: [...filteredSkuMs].filter(ms => {
-        const dim = dimByMs[ms]
-        const skuWb = dim?.sku_wb ?? null
-        return skuWb ? (stockByWb[skuWb]?.total_stock ?? 0) === 0 : false
+        const snap = snapByMs[ms]
+        return ((snap?.fbo_wb ?? 0) + (snap?.fbs_pushkino ?? 0) + (snap?.fbs_smolensk ?? 0)) === 0
       }).length,
       sku_count: filteredSkuMs.size,
     },
