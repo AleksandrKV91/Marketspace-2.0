@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  ComposedChart, Bar, Line,
+  ComposedChart, Area, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
   LineChart,
 } from 'recharts'
@@ -88,6 +88,7 @@ interface OverviewData {
   latest_date: string | null
   period: { from: string | null; to: string | null }
   meta: { categories: string[]; managers: string[] }
+  lost_detail?: Array<{ sku_ms: string; name: string; sku_wb: number | null; lost_oos: number; lost_ads: number; total: number }>
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -159,9 +160,10 @@ interface AlertItemProps {
   description: string
   severity: 'danger' | 'warning' | 'success' | 'info'
   onClick?: () => void
+  tooltip?: string
 }
 
-function AlertItem({ icon, title, count, description, severity, onClick }: AlertItemProps) {
+function AlertItem({ icon, title, count, description, severity, onClick, tooltip }: AlertItemProps) {
   const colorMap = {
     danger:  'var(--danger)',
     warning: 'var(--warning)',
@@ -173,6 +175,7 @@ function AlertItem({ icon, title, count, description, severity, onClick }: Alert
     <motion.div
       whileHover={onClick ? { x: 2 } : undefined}
       onClick={onClick}
+      title={tooltip}
       className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
       style={{
         background: 'var(--surface)',
@@ -277,6 +280,7 @@ export default function OverviewTab() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [modalSkuMs, setModalSkuMs] = useState<string | null>(null)
+  const [showLostModal, setShowLostModal] = useState(false)
   const { navigateToSku } = usePendingFilter()
   const { filters, setMeta } = useGlobalFilters()
   const { range } = useDateRange()
@@ -469,29 +473,40 @@ export default function OverviewTab() {
           value: data.kpi.lost_revenue > 0 ? fmt(data.kpi.lost_revenue) : '—',
           hint: kpiHint('lost', data),
           danger: data.kpi.lost_revenue > 0,
+          onClick: data.kpi.lost_revenue > 0 ? () => setShowLostModal(true) : undefined,
         },
       ]} />
 
       {/* ── Charts ──────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
 
-        {/* Chart 1: Динамика — bars для Выручка, line для ЧМД */}
+        {/* Chart 1: Динамика — Area для Выручка+ЧМД, Line для Расходов */}
         <GlassCard padding="lg">
           <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>
             Динамика выручки и ЧМД
           </p>
           {trendData.length > 0 ? (
             <ResponsiveContainer width="100%" height={240}>
-              <ComposedChart data={trendData} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
+              <ComposedChart data={trendData} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%"  stopColor="var(--accent)"  stopOpacity={0.20} />
+                    <stop offset="95%" stopColor="var(--accent)"  stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="chmdGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%"  stopColor="var(--success)" stopOpacity={0.15} />
+                    <stop offset="95%" stopColor="var(--success)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis yAxisId="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} />
+                <YAxis yAxisId="left" orientation="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} />
                 <Tooltip content={<ChartTip />} />
                 <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
-                <Bar yAxisId="left" dataKey="Выручка" fill="var(--accent)" fillOpacity={0.25} stroke="var(--accent)" strokeWidth={1} radius={[3, 3, 0, 0]} />
-                <Bar yAxisId="left" dataKey="Расходы" fill="var(--danger)" fillOpacity={0.18} stroke="var(--danger)" strokeWidth={1} radius={[3, 3, 0, 0]} />
-                <Line yAxisId="right" type="monotone" dataKey="ЧМД" stroke="var(--success)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                <Area yAxisId="left"  type="monotone" dataKey="Выручка" stroke="var(--accent)"  fill="url(#revGrad)"  strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                <Area yAxisId="left"  type="monotone" dataKey="ЧМД"    stroke="var(--success)" fill="url(#chmdGrad)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                <Line yAxisId="right" type="monotone" dataKey="Расходы" stroke="var(--danger)" strokeWidth={1.5} dot={false} activeDot={{ r: 4 }} strokeDasharray="4 2" />
               </ComposedChart>
             </ResponsiveContainer>
           ) : (
@@ -562,7 +577,8 @@ export default function OverviewTab() {
               title="STOP реклама"
               count={data.alerts.stop_ads}
               severity="danger"
-              description={data.alerts.stop_ads > 0 ? `OOS + реклама → потеря ${fmt(data.alerts.lost_revenue)} ₽` : 'OOS + активная реклама'}
+              description="OOS + активная реклама"
+              tooltip="Условие: stock = 0 AND ad_spend > 0 за период"
               onClick={data.alerts.stop_ads > 0 ? () => navigateToSku({ type: 'stop_ads', label: 'STOP реклама' }) : undefined}
             />
             <AlertItem
@@ -571,6 +587,7 @@ export default function OverviewTab() {
               count={data.alerts.soon_oos}
               severity="warning"
               description="Запас < логистического плеча"
+              tooltip="Условие: stock_days < lead_time_days AND stock > 0"
               onClick={data.alerts.soon_oos > 0 ? () => navigateToSku({ type: 'low_stock', label: 'Скоро OOS' }) : undefined}
             />
             <AlertItem
@@ -579,6 +596,7 @@ export default function OverviewTab() {
               count={data.alerts.drr_over_margin}
               severity="warning"
               description="Реклама работает в убыток"
+              tooltip="Условие: ad_spend / revenue > margin_pct"
               onClick={data.alerts.drr_over_margin > 0 ? () => navigateToSku({ type: 'drr_over', label: 'ДРР > Маржа' }) : undefined}
             />
             <AlertItem
@@ -587,6 +605,7 @@ export default function OverviewTab() {
               count={data.alerts.high_ctr_low_cr}
               severity="info"
               description="Потенциал — проблема в карточке/цене"
+              tooltip="Условие: CTR > median_CTR × 1.5 AND CR < median_CR × 0.7"
               onClick={data.alerts.high_ctr_low_cr > 0 ? () => navigateToSku({ type: 'potential', label: 'Высокий CTR / низкий CR' }) : undefined}
             />
             <AlertItem
@@ -595,6 +614,7 @@ export default function OverviewTab() {
               count={data.alerts.high_cpo}
               severity="danger"
               description="ДРР > 35% — стоимость заказа высокая"
+              tooltip="Условие: ad_spend / revenue > 0.35"
               onClick={data.alerts.high_cpo > 0 ? () => navigateToSku({ type: 'high_cpo', label: 'Высокий CPO' }) : undefined}
             />
             <AlertItem
@@ -603,6 +623,7 @@ export default function OverviewTab() {
               count={data.alerts.can_scale}
               severity="success"
               description="ДРР <50% маржи, CTR/CR выше медианы"
+              tooltip="Условие: drr < margin_pct × 0.5 AND cr_order > median_cr"
               onClick={data.alerts.can_scale > 0 ? () => navigateToSku({ type: 'scale', label: 'Масштабировать' }) : undefined}
             />
             <AlertItem
@@ -611,6 +632,7 @@ export default function OverviewTab() {
               count={data.alerts.novelty_risk}
               severity="info"
               description="Новинка с выручкой < 10 000 ₽ за период"
+              tooltip="Условие: novelty_status = 'Новинки' AND revenue < 10 000 ₽"
               onClick={data.alerts.novelty_risk > 0 ? () => navigateToSku({ type: 'novelty_risk', label: 'Новинки: зона риска' }) : undefined}
             />
           </div>
@@ -761,6 +783,68 @@ export default function OverviewTab() {
         skuMs={modalSkuMs}
         onClose={() => setModalSkuMs(null)}
       />
+
+      {/* ── Потери Modal ─────────────────────────────────────────────────── */}
+      {showLostModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' }}
+          onClick={() => setShowLostModal(false)}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+            className="glass w-full max-w-2xl mx-4 rounded-2xl overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
+              <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Упущенная выручка — топ SKU</p>
+              <button
+                onClick={() => setShowLostModal(false)}
+                className="text-xs px-2 py-1 rounded-lg"
+                style={{ color: 'var(--text-muted)', background: 'var(--surface)' }}
+              >✕</button>
+            </div>
+            <div className="px-6 py-4 overflow-y-auto max-h-[70vh]">
+              {!data.lost_detail?.length ? (
+                <p className="text-sm py-8 text-center" style={{ color: 'var(--text-muted)' }}>Нет данных об OOS-потерях</p>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr style={{ color: 'var(--text-subtle)', borderBottom: '1px solid var(--border)' }}>
+                      <th className="text-left pb-2 font-medium">Название</th>
+                      <th className="text-right pb-2 font-medium whitespace-nowrap">OOS потери</th>
+                      <th className="text-right pb-2 font-medium whitespace-nowrap">Слитый бюджет</th>
+                      <th className="text-right pb-2 font-medium">Итого</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.lost_detail.map((r, i) => (
+                      <tr key={r.sku_ms} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td className="py-2 pr-4 max-w-[240px]">
+                          <span className="block truncate font-medium" style={{ color: 'var(--text)' }}>{r.name}</span>
+                          {r.sku_wb && <span className="font-mono" style={{ color: 'var(--text-muted)' }}>{r.sku_wb}</span>}
+                        </td>
+                        <td className="py-2 text-right" style={{ color: r.lost_oos > 0 ? 'var(--danger)' : 'var(--text-muted)' }}>
+                          {r.lost_oos > 0 ? fmt(r.lost_oos) : '—'}
+                        </td>
+                        <td className="py-2 text-right" style={{ color: r.lost_ads > 0 ? 'var(--warning)' : 'var(--text-muted)' }}>
+                          {r.lost_ads > 0 ? fmt(r.lost_ads) : '—'}
+                        </td>
+                        <td className="py-2 text-right font-semibold" style={{ color: 'var(--danger)' }}>
+                          {fmt(r.total)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </motion.div>
+        </div>
+      )}
 
     </div>
   )

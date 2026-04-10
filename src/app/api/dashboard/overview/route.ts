@@ -265,6 +265,7 @@ export async function GET(req: Request) {
   let totalChmd     = 0
   let totalCostOfGoods = 0
   let lostRevenue   = 0
+  const lostDetailMap: Record<string, { sku_ms: string; name: string; sku_wb: number | null; lost_oos: number; lost_ads: number }> = {}
 
   // Для Δ предыдущего периода
   let prevRevenue  = 0
@@ -306,10 +307,11 @@ export async function GET(req: Request) {
 
     const price     = snap?.price ?? stockSnap?.price ?? 0
     const marginRub = snap?.margin_rub ?? null
-    // margin_pct per-SKU: приоритет snapshot.margin_rub/price, потом stock.margin_pct
-    const marginPct = marginRub != null && price > 0
-      ? marginRub / price
-      : (stockSnap?.margin_pct ?? 0)
+    // margin_pct per-SKU: приоритет stock_snapshot.margin_pct (колонка Y, маржинальность выручки %)
+    // Fallback: margin_rub / price (операционная маржа на ед. / цена) — менее точно
+    const marginPct = stockSnap?.margin_pct != null
+      ? stockSnap.margin_pct
+      : (marginRub != null && price > 0 ? marginRub / price : 0)
 
     const totalStock = stockSnap?.total_stock ?? 0
     const leadTime   = getLeadTime(dim?.country, china?.lead_time_days)
@@ -342,12 +344,19 @@ export async function GET(req: Request) {
     }
 
     // Упущенная выручка OOS
+    let skuLostOos = 0
+    let skuLostAds = 0
     if (totalStock === 0 && dpd > 0 && price > 0) {
       const daysOos = Math.max(0, periodDays - (sd?.days_with_sales ?? 0))
-      lostRevenue += dpd * daysOos * price
+      skuLostOos = dpd * daysOos * price
+      lostRevenue += skuLostOos
     }
     if (totalStock === 0 && s.ad_spend > 0) {
-      lostRevenue += s.ad_spend  // слитый бюджет на OOS
+      skuLostAds = s.ad_spend
+      lostRevenue += skuLostAds  // слитый бюджет на OOS
+    }
+    if (skuLostOos > 0 || skuLostAds > 0) {
+      lostDetailMap[ms] = { sku_ms: ms, name: dim?.name ?? ms, sku_wb: skuWb, lost_oos: skuLostOos, lost_ads: skuLostAds }
     }
 
     // ── Alerts ──────────────────────────────────────────────────────────────
@@ -409,15 +418,34 @@ export async function GET(req: Request) {
       })
     }
 
-    // ── Margin distribution ──────────────────────────────────────────────────
-    if (marginPct < 0) marginBuckets.neg++
-    else if (marginPct < 0.10) marginBuckets.low++
-    else if (marginPct < 0.20) marginBuckets.mid++
-    else if (marginPct < 0.30) marginBuckets.ok++
+  }
+
+  // ── 17. Margin distribution по ВСЕМ SKU из snapshot (не только с продажами) ──
+  // Сбрасываем buckets и считаем заново по всем SKU в snapByMs
+  marginBuckets.neg = 0; marginBuckets.low = 0; marginBuckets.mid = 0
+  marginBuckets.ok = 0; marginBuckets.good = 0
+  for (const [ms, snap] of Object.entries(snapByMs)) {
+    if (catFilter && (dimByMs[ms]?.category_wb ?? '') !== catFilter) continue
+    if (mgrFilter && (snap.manager ?? '') !== mgrFilter) continue
+    if (novFilter === 'Новинки' && snap.novelty_status !== 'Новинки') continue
+    if (novFilter === 'Не новинки' && snap.novelty_status === 'Новинки') continue
+    const dim2 = dimByMs[ms]
+    const skuWb2 = dim2?.sku_wb ?? null
+    const stockSnap2 = skuWb2 ? stockByWb[skuWb2] : null
+    const marginRub2 = snap.margin_rub ?? null
+    const price2 = snap.price ?? stockSnap2?.price ?? null
+    const mp = stockSnap2?.margin_pct != null
+      ? stockSnap2.margin_pct
+      : (marginRub2 != null && price2 && price2 > 0 ? marginRub2 / price2 : null)
+    if (mp == null) continue
+    if (mp < 0) marginBuckets.neg++
+    else if (mp < 0.10) marginBuckets.low++
+    else if (mp < 0.20) marginBuckets.mid++
+    else if (mp < 0.30) marginBuckets.ok++
     else marginBuckets.good++
   }
 
-  // ── 17. Средневзвешенная маржа (для unitEcon графика) ────────────────────
+  // ── 18. Средневзвешенная маржа (для unitEcon графика) ────────────────────
   let wMarginNum = 0, wMarginDen = 0
   for (const ms of filteredSkuMs) {
     const s    = skuAgg[ms]
@@ -427,8 +455,9 @@ export async function GET(req: Request) {
     const stockSnap = skuWb ? stockByWb[skuWb] : null
     const price = snap?.price ?? stockSnap?.price ?? null
     const marginRub = snap?.margin_rub ?? null
-    const marginPct = marginRub != null && price && price > 0
-      ? marginRub / price : (stockSnap?.margin_pct ?? null)
+    const marginPct = stockSnap?.margin_pct != null
+      ? stockSnap.margin_pct
+      : (marginRub != null && price && price > 0 ? marginRub / price : null)
     if (marginPct != null && s.revenue > 0) {
       wMarginNum += marginPct * s.revenue
       wMarginDen += s.revenue
@@ -485,8 +514,9 @@ export async function GET(req: Request) {
 
       const price     = snap?.price ?? stockSnap?.price ?? 0
       const marginRub = snap?.margin_rub ?? null
-      const marginPct = marginRub != null && price > 0
-        ? marginRub / price : (stockSnap?.margin_pct ?? 0)
+      const marginPct = stockSnap?.margin_pct != null
+        ? stockSnap.margin_pct
+        : (marginRub != null && price > 0 ? marginRub / price : 0)
 
       const totalStock = stockSnap?.total_stock ?? 0
       const leadTime   = getLeadTime(dim?.country, china?.lead_time_days)
@@ -545,6 +575,12 @@ export async function GET(req: Request) {
     if (r.manager) managersSet.add(r.manager)
   }
 
+  // ── lost_detail: топ-10 SKU по упущенной выручке ─────────────────────────
+  const lostDetail = Object.values(lostDetailMap)
+    .map(d => ({ ...d, total: d.lost_oos + d.lost_ads }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 10)
+
   // ── Ответ ─────────────────────────────────────────────────────────────────
   return NextResponse.json({
     kpi: {
@@ -590,6 +626,12 @@ export async function GET(req: Request) {
     meta: {
       categories: [...categoriesSet].sort(),
       managers:   [...managersSet].sort(),
+    },
+    lost_detail: lostDetail,
+    debug: {
+      daily_rows_count: dailyRows.length,
+      sku_with_revenue: Object.values(skuAgg).filter(s => s.revenue > 0).length,
+      sku_no_revenue:   Object.values(skuAgg).filter(s => s.revenue === 0).length,
     },
   })
 }

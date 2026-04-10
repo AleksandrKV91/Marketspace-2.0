@@ -12,6 +12,7 @@ interface KPIItem {
   danger?: boolean
   accent?: boolean
   icon?: string
+  onClick?: () => void
 }
 
 interface KPIBarProps {
@@ -42,6 +43,7 @@ export function KPIBar({ items, loading }: KPIBarProps) {
               animate={{ opacity: 1, y: 0 }}
               transition={{ type: 'spring', stiffness: 400, damping: 28, delay: idx * 0.05 }}
               className="relative px-5 py-4"
+              onClick={item.onClick}
               style={{
                 borderRight: idx < items.length - 1
                   ? '1px solid var(--border-subtle)'
@@ -51,6 +53,7 @@ export function KPIBar({ items, loading }: KPIBarProps) {
                   : item.accent
                   ? 'linear-gradient(135deg, rgba(59,130,246,0.10) 0%, rgba(59,130,246,0.04) 100%)'
                   : undefined,
+                cursor: item.onClick ? 'pointer' : undefined,
               }}
             >
               {/* Specular per-cell */}
@@ -79,22 +82,21 @@ export function KPIBar({ items, loading }: KPIBarProps) {
                   >
                     {item.value}
                   </p>
-                  {item.delta ? (
+                  {item.delta && (
                     <p className="text-[10px] font-semibold flex items-center gap-1">
-                      <span style={{ color: dColor }}>
-                        {item.delta}
-                      </span>
+                      <span style={{ color: dColor }}>{item.delta}</span>
                       <span style={{ color: 'var(--text-subtle)', fontWeight: 400 }}>vs пред.</span>
                     </p>
-                  ) : item.hint ? (
+                  )}
+                  {item.hint ? (
                     <p className="text-[10px]" style={{ color: 'var(--text-subtle)' }}>{item.hint}</p>
-                  ) : item.danger ? (
+                  ) : !item.delta && item.danger ? (
                     <p className="text-[10px] font-semibold" style={{ color: 'var(--danger)' }}>
                       Критический
                     </p>
-                  ) : (
+                  ) : !item.delta ? (
                     <p className="text-[10px]" style={{ color: 'transparent' }}>—</p>
-                  )}
+                  ) : null}
                 </div>
               )}
             </motion.div>
