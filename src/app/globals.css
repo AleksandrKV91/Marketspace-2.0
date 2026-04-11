@@ -105,6 +105,9 @@
 
 /* ── Base ───────────────────────────────────────────────────── */
 html { font-family: 'Plus Jakarta Sans', 'Lato', sans-serif; }
+table, tr, td, th { outline: none !important; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:focus:not(:focus-visible) { outline: none; }
 
 body {
   background: var(--bg);

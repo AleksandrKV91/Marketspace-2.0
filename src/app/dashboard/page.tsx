@@ -284,7 +284,7 @@ export default function DashboardPage() {
           </motion.div>
 
           {/* Desktop nav */}
-          <nav className="hidden lg:flex items-center gap-0.5 flex-1 overflow-x-auto">
+          <nav className="hidden lg:flex items-center gap-0.5 flex-1 justify-center overflow-x-auto">
             {NAV_TABS.map((tab, i) => {
               const Icon = tab.icon
               const active = activeTab === tab.id
@@ -364,19 +364,19 @@ export default function DashboardPage() {
             value={globalFilters.category}
             onChange={v => setGlobalFilters(f => ({ ...f, category: v }))}
             options={meta.categories}
-            placeholder="Категория ▼"
+            placeholder="Категория"
           />
           <FilterDropdown
             value={globalFilters.novelty}
             onChange={v => setGlobalFilters(f => ({ ...f, novelty: v }))}
             options={['Новинки', 'Не новинки']}
-            placeholder="Новинка ▼"
+            placeholder="Новинка"
           />
           <FilterDropdown
             value={globalFilters.manager}
             onChange={v => setGlobalFilters(f => ({ ...f, manager: v }))}
             options={meta.managers}
-            placeholder="Менеджер ▼"
+            placeholder="Менеджер"
           />
           {hasFilters && (
             <motion.button
@@ -443,7 +443,7 @@ export default function DashboardPage() {
       </AnimatePresence>
 
       {/* Main content */}
-      <main className="max-w-[1440px] mx-auto relative z-10">
+      <main className="max-w-[1440px] mx-auto px-4 lg:px-6 relative z-10">
         {activeTab === 'svod'      && <SvodTab />}
         {activeTab === 'sku'       && <SkuTab />}
         {activeTab === 'price'     && <PriceTab />}

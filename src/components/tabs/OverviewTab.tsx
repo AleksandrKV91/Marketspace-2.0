@@ -81,7 +81,7 @@ interface OverviewData {
     total_stock: number
     drr: number
     margin_pct: number
-    stock_days: number
+    stock_days: number | null
     lead_time: number
     abc_class: string
     novelty_status: string | null
@@ -310,7 +310,7 @@ export default function OverviewTab() {
 
   // ── Loading ──────────────────────────────────────────────────────────────
   if (loading) return (
-    <div className="px-6 py-6 space-y-6">
+    <div className="py-6 space-y-6">
       <KPIBar loading items={[
         { label: 'Выручка', value: '' },
         { label: 'ЧМД', value: '' },
@@ -328,7 +328,7 @@ export default function OverviewTab() {
   )
 
   if (error) return (
-    <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
+    <div className="py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
   )
 
   if (!data) return null
@@ -426,7 +426,7 @@ export default function OverviewTab() {
   const mdTotal = md.neg + md.low + md.mid + md.ok + md.good || 1
 
   return (
-    <div className="px-6 py-6 space-y-6">
+    <div className="py-6 space-y-6">
 
       {/* ── KPI Bar ─────────────────────────────────────────────────────── */}
       <KPIBar items={[
@@ -812,14 +812,16 @@ export default function OverviewTab() {
                     </td>
                     <td className="py-2 text-right text-xs"
                       style={{
-                        color: row.stock_days < row.lead_time
+                        color: row.stock_days == null
+                          ? 'var(--text-subtle)'
+                          : row.stock_days < row.lead_time
                           ? 'var(--danger)'
                           : row.stock_days < row.lead_time * 1.5
                           ? 'var(--warning)'
                           : 'var(--text-muted)',
                       }}
                     >
-                      {row.stock_days >= 999 ? '∞' : row.stock_days}
+                      {row.stock_days == null ? '—' : row.stock_days}
                     </td>
                   </motion.tr>
                 )

@@ -305,7 +305,7 @@ export async function GET(req: Request) {
     const sd  = skuWb ? stockDailyByWb[skuWb] : null
     const dpd = sd && sd.days_with_sales > 0 ? sd.total_qty / periodDays : 0
     const stockDays = snap?.stock_days
-      ?? (dpd > 0 && totalStock > 0 ? Math.round(totalStock / dpd) : (totalStock > 0 ? 999 : 0))
+      ?? (dpd > 0 && totalStock > 0 ? Math.round(totalStock / dpd) : (totalStock > 0 ? null : 0))
 
     const drr    = s.revenue > 0 ? s.ad_spend / s.revenue : 0
     const avgCtr = s.ctr.length ? s.ctr.reduce((a, b) => a + b, 0) / s.ctr.length : 0
@@ -436,6 +436,19 @@ export async function GET(req: Request) {
   }
   const avgMarginPct = wMarginDen > 0 ? wMarginNum / wMarginDen : 0
 
+  // Предыдущая средневзвешенная маржа (по тем же snapshot + prev revenue)
+  let prevWMarginNum = 0, prevWMarginDen = 0
+  for (const ms of filteredSkuMs) {
+    const prev = prevSkuAgg[ms]
+    const snap = snapByMs[ms]
+    const mp   = snap?.margin_pct ?? null
+    if (mp != null && prev && prev.revenue > 0) {
+      prevWMarginNum += mp * prev.revenue
+      prevWMarginDen += prev.revenue
+    }
+  }
+  const prevAvgMarginPct = prevWMarginDen > 0 ? prevWMarginNum / prevWMarginDen : 0
+
   // ── 18. KPI Δ ─────────────────────────────────────────────────────────────
   function pct(curr: number, prev: number): number | null {
     if (prev === 0) return null
@@ -446,7 +459,7 @@ export async function GET(req: Request) {
   const kpiDelta = {
     revenue:       pct(totalRevenue, prevRevenue),
     chmd:          pct(totalChmd, prevChmd),
-    avg_margin_pct: null as number | null,  // маржа не сравнивается с prev (нет исторических данных)
+    avg_margin_pct: prevAvgMarginPct > 0 ? pct(avgMarginPct, prevAvgMarginPct) : null as number | null,
     drr: totalRevenue > 0 && prevRevenue > 0
       ? pct(totalRevenue > 0 ? totalAdSpend / totalRevenue : 0, prevRevenue > 0 ? prevTotalAdSpend / prevRevenue : 0)
       : null,
@@ -488,7 +501,7 @@ export async function GET(req: Request) {
       const sd  = skuWb ? stockDailyByWb[skuWb] : null
       const dpd = sd && sd.days_with_sales > 0 ? sd.total_qty / periodDays : 0
       const stockDays = snap?.stock_days
-        ?? (dpd > 0 && totalStock > 0 ? Math.round(totalStock / dpd) : (totalStock > 0 ? 999 : 0))
+        ?? (dpd > 0 && totalStock > 0 ? Math.round(totalStock / dpd) : (totalStock > 0 ? null : 0))
 
       const drr   = s.revenue > 0 ? s.ad_spend / s.revenue : 0
       const avgCr = s.cr_order.length ? s.cr_order.reduce((a, b) => a + b, 0) / s.cr_order.length : 0
