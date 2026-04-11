@@ -9,7 +9,7 @@ export interface ScoreParams {
   revenue_growth: number   // доля к пред. периоду, напр. 0.25 = +25%
   cr_order:       number   // коэф. конверсии, напр. 0.03 = 3%
   median_cr?:     number   // медианный CR по аккаунту (для нормировки)
-  stock_days:     number   // дней остатка
+  stock_days:     number | null   // дней остатка (null = нет данных)
   lead_time_days?: number  // логистическое плечо (дней)
   is_oos:         boolean
   drr_over_margin: boolean // drr > margin_pct
@@ -63,13 +63,14 @@ export function computeScore(p: ScoreParams): number {
   // OOS → 0 (уже отработано выше)
   // = lead_time → 0.5 × 20 = 10; ≥ 2 × lead_time → 1.0 × 20 = 20
   const lt = (p.lead_time_days && p.lead_time_days > 0) ? p.lead_time_days : 30
+  const sd = p.stock_days ?? lt  // нет данных — считаем как "ровно плечо" (нейтральный балл)
   let stockNorm: number
-  if (p.stock_days <= 0) {
+  if (sd <= 0) {
     stockNorm = 0
-  } else if (p.stock_days < lt) {
-    stockNorm = (p.stock_days / lt) * 0.5   // 0 → 0.5
-  } else if (p.stock_days < 2 * lt) {
-    stockNorm = 0.5 + ((p.stock_days - lt) / lt) * 0.5  // 0.5 → 1.0
+  } else if (sd < lt) {
+    stockNorm = (sd / lt) * 0.5
+  } else if (sd < 2 * lt) {
+    stockNorm = 0.5 + ((sd - lt) / lt) * 0.5
   } else {
     stockNorm = 1.0
   }
