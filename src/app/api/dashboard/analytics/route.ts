@@ -58,9 +58,13 @@ export interface AnalyticsResponse {
     revenue: number
     prev_revenue: number
     chmd: number
+    prev_chmd: number
     margin_pct: number
+    prev_margin_pct: number
     drr: number
+    prev_drr: number
     cpo: number | null
+    prev_cpo: number | null
     forecast_30d_revenue: number
     sku_count: number
     period_days: number
@@ -286,13 +290,34 @@ export async function GET(req: Request) {
     : null
   const forecast30dRevenue = periodDays > 0 ? (totalRevenue / periodDays) * 30 : 0
 
+  // Previous period aggregates for deltas
+  let prevChmd = 0, prevAdSpend = 0
+  for (const ms of allSkuMs) {
+    const prevRev = prevSkuRev[ms] ?? 0
+    const snap = snapByMs[ms]
+    const marginPctSku = snap?.margin_pct ?? 0
+    const agg = skuAgg[ms]
+    const drr_sku = (agg?.revenue ?? 0) > 0 ? (agg?.ad_spend ?? 0) / agg!.revenue : 0
+    prevChmd += prevRev * marginPctSku - (drr_sku * prevRev)
+    prevAdSpend += drr_sku * prevRev
+  }
+  const prevMarginPct = prevRevenue > 0 ? prevChmd / prevRevenue : 0
+  const prevDrr = prevRevenue > 0 ? prevAdSpend / prevRevenue : 0
+  const prevCpo = avgPrice > 0 && prevAdSpend > 0
+    ? prevAdSpend / (prevRevenue / avgPrice)
+    : null
+
   const kpi = {
     revenue: totalRevenue,
     prev_revenue: prevRevenue,
     chmd: totalChmd,
+    prev_chmd: prevChmd,
     margin_pct: marginPct,
+    prev_margin_pct: prevMarginPct,
     drr,
+    prev_drr: prevDrr,
     cpo,
+    prev_cpo: prevCpo,
     forecast_30d_revenue: forecast30dRevenue,
     sku_count: allSkuMs.size,
     period_days: periodDays,

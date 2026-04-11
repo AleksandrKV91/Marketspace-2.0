@@ -75,7 +75,7 @@ function SortTh({ label, sortKey, current, dir, onClick, align = 'right' }: {
 // ── CSV export ────────────────────────────────────────────────────────────────
 
 function exportCsv(hierarchy: CategoryNode[]) {
-  const rows: string[] = ['Категория,Предмет,SKU MS,SKU WB,Название,Выручка,Δ%,ЧМД,Маржа%,ДРР%,Остаток(руб),Прогноз30д(шт)']
+  const rows: string[] = ['Категория,Предмет,SKU WB,SKU MS,Название,Выручка,Δ%,ЧМД,Маржа%,ДРР%,Остаток(руб),Прогноз30д(шт)']
   for (const cat of hierarchy) {
     for (const subj of cat.subjects) {
       for (const sku of subj.skus) {
@@ -172,8 +172,21 @@ export default function AnalyticsTab() {
   const { kpi, hierarchy, daily_chart, daily_margin_drr } = data
 
   // Delta helpers
-  const deltaRev = kpi.prev_revenue > 0
-    ? ((kpi.revenue - kpi.prev_revenue) / kpi.prev_revenue * 100).toFixed(1) + '%'
+  function calcDelta(curr: number, prev: number): string | undefined {
+    if (prev === 0) return undefined
+    const d = (curr - prev) / Math.abs(prev) * 100
+    return (d >= 0 ? '+' : '') + d.toFixed(1) + '%'
+  }
+  const deltaRev      = calcDelta(kpi.revenue, kpi.prev_revenue)
+  const deltaChmd     = calcDelta(kpi.chmd, kpi.prev_chmd)
+  const deltaMargin   = (kpi.prev_margin_pct > 0)
+    ? ((kpi.margin_pct - kpi.prev_margin_pct) * 100).toFixed(1) + 'п.п.'
+    : undefined
+  const deltaDrr      = (kpi.prev_drr > 0)
+    ? ((kpi.drr - kpi.prev_drr) * 100).toFixed(1) + 'п.п.'
+    : undefined
+  const deltaCpo      = kpi.cpo != null && kpi.prev_cpo != null
+    ? calcDelta(kpi.cpo, kpi.prev_cpo)
     : undefined
 
   // Chart data
@@ -219,6 +232,21 @@ export default function AnalyticsTab() {
     }
   }
 
+  // Auto-expand categories/subjects that match the current filter
+  const hasFilter = search !== '' || deltaFilter !== 'all'
+  const matchingCats = new Set<string>()
+  const matchingSubjs = new Set<string>()
+  if (hasFilter) {
+    for (const cat of hierarchy) {
+      for (const subj of cat.subjects) {
+        if (filterSkus(subj.skus).length > 0) {
+          matchingCats.add(cat.category)
+          matchingSubjs.add(`${cat.category}::${subj.subject}`)
+        }
+      }
+    }
+  }
+
   return (
     <div className="py-6 space-y-6">
 
@@ -230,15 +258,36 @@ export default function AnalyticsTab() {
           delta: deltaRev,
           deltaPositive: kpi.revenue >= kpi.prev_revenue,
         },
-        { label: 'ЧМД',    value: fmt(kpi.chmd) },
-        { label: 'Маржа %', value: fmtPct(kpi.margin_pct), danger: kpi.margin_pct < 0.10 },
-        { label: 'ДРР',     value: fmtPct(kpi.drr) },
-        { label: 'CPO',     value: kpi.cpo != null ? fmt(kpi.cpo) + ' ₽' : '—' },
+        {
+          label: 'ЧМД',
+          value: fmt(kpi.chmd),
+          delta: deltaChmd,
+          deltaPositive: kpi.chmd >= kpi.prev_chmd,
+        },
+        {
+          label: 'Маржа %',
+          value: fmtPct(kpi.margin_pct),
+          delta: deltaMargin,
+          deltaPositive: kpi.margin_pct >= kpi.prev_margin_pct,
+          danger: kpi.margin_pct < 0.10,
+        },
+        {
+          label: 'ДРР',
+          value: fmtPct(kpi.drr),
+          delta: deltaDrr,
+          deltaPositive: kpi.drr <= kpi.prev_drr,
+        },
+        {
+          label: 'CPO',
+          value: kpi.cpo != null ? fmt(kpi.cpo) + ' ₽' : '—',
+          delta: deltaCpo,
+          deltaPositive: kpi.cpo != null && kpi.prev_cpo != null ? kpi.cpo <= kpi.prev_cpo : undefined,
+        },
         {
           label: 'Прогноз 30д',
           value: fmt(kpi.forecast_30d_revenue),
           accent: true,
-          hint: 'Кликните для сортировки',
+          hint: `(Выручка / ${kpi.period_days}д) × 30. Кликните для сортировки.`,
           onClick: handleForecastClick,
         },
       ]} />
@@ -299,7 +348,12 @@ export default function AnalyticsTab() {
 
         {/* Chart 3 — Margin% vs DRR% */}
         <GlassCard padding="lg">
-          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Маржа % vs ДРР % по дням</p>
+          <div className="mb-4">
+            <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Маржа % vs ДРР % по дням</p>
+            <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-subtle)' }}>
+              Маржа% — средняя за период (исторические данные недоступны)
+            </p>
+          </div>
           {marginDrrData.length > 0 ? (
             <ResponsiveContainer width="100%" height={210}>
               <ComposedChart data={marginDrrData} margin={{ top: 4, right: 40, bottom: 0, left: 0 }}>
@@ -323,7 +377,7 @@ export default function AnalyticsTab() {
       <div ref={tableRef}>
         <GlassCard padding="none">
           {/* Table filter row */}
-          <div className="flex items-center gap-2 px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex items-center gap-2 px-4 py-2.5 border-b flex-wrap" style={{ borderColor: 'var(--border)' }}>
             {/* Search */}
             <div className="relative flex-1 max-w-xs">
               <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
@@ -364,6 +418,41 @@ export default function AnalyticsTab() {
                 <X size={9} /> Сбросить
               </button>
             )}
+
+            {/* Expand/Collapse all + summary + download */}
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setExpandedCats(new Set(hierarchy.map(c => c.category)))
+                  setExpandedSubjs(new Set(hierarchy.flatMap(c => c.subjects.map(s => `${c.category}::${s.subject}`))))
+                }}
+                className="px-2 py-1 rounded-lg text-[11px]"
+                style={{ color: 'var(--text-muted)', border: '1px solid var(--border)', background: 'var(--surface)' }}
+              >
+                Развернуть
+              </button>
+              <button
+                onClick={() => { setExpandedCats(new Set()); setExpandedSubjs(new Set()) }}
+                className="px-2 py-1 rounded-lg text-[11px]"
+                style={{ color: 'var(--text-muted)', border: '1px solid var(--border)', background: 'var(--surface)' }}
+              >
+                Свернуть
+              </button>
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                <strong style={{ color: 'var(--text)' }}>{visibleSkuCount}</strong> SKU
+                &nbsp;•&nbsp;
+                <strong style={{ color: 'var(--text)' }}>{fmt(visibleRevenue)}</strong> ₽
+              </span>
+              <button
+                onClick={() => exportCsv(hierarchy)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all"
+                style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
+              >
+                <Download size={12} /> CSV
+              </button>
+            </div>
           </div>
 
           {/* Table */}
@@ -371,21 +460,34 @@ export default function AnalyticsTab() {
             <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: 'var(--surface)', position: 'sticky', top: 0, zIndex: 10 }}>
-                  <th className="text-left pl-4 pr-2 py-2.5 font-medium" style={{ color: 'var(--text-subtle)', minWidth: 160 }}>Категория / Предмет / SKU</th>
-                  <th className="text-left px-2 py-2.5 font-medium" style={{ color: 'var(--text-subtle)', minWidth: 160 }}>Название</th>
+                  <th className="text-left pl-4 pr-2 py-2.5 font-medium" style={{ color: 'var(--text-subtle)', minWidth: 280 }}>Категория / Предмет / SKU</th>
                   <SortTh label="Выручка"       sortKey="revenue"          current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="Δ%"            sortKey="delta_pct"        current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="ЧМД"           sortKey="chmd"             current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="Маржа%"        sortKey="margin_pct"       current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="ДРР%"          sortKey="drr"              current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="Остаток (₽)"   sortKey="stock_rub"        current={sortKey} dir={sortDir} onClick={toggleSort} />
-                  <SortTh label="Прогноз 30д"   sortKey="forecast_30d_qty" current={sortKey} dir={sortDir} onClick={toggleSort} />
+                  <th
+                    className="pb-2 font-medium cursor-pointer select-none whitespace-nowrap text-right"
+                    style={{ color: sortKey === 'forecast_30d_qty' ? 'var(--accent)' : 'var(--text-subtle)', fontSize: 11 }}
+                    onClick={() => toggleSort('forecast_30d_qty')}
+                  >
+                    <span
+                      className="inline-flex items-center gap-0.5 justify-end"
+                      title="Прогноз продаж в штуках на 30 дней: (Выручка / Дней периода × 30) / Цена. Красный — прогноз выше текущего остатка (риск OOS)."
+                    >
+                      Прогноз 30д <span style={{ color: 'var(--accent)', fontSize: 9 }}>?</span>
+                      {sortKey === 'forecast_30d_qty'
+                        ? (sortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />)
+                        : <ChevronDown size={10} style={{ opacity: 0.25 }} />}
+                    </span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {hierarchy.map(cat => {
                   const catKey = cat.category
-                  const catExpanded = expandedCats.has(catKey)
+                  const catExpanded = expandedCats.has(catKey) || matchingCats.has(catKey)
                   // Filter subjects to only those with visible SKUs
                   const visibleSubjects = cat.subjects
                     .map(subj => ({ subj, skus: filterSkus(subj.skus) }))
@@ -413,7 +515,6 @@ export default function AnalyticsTab() {
                           {cat.category}
                         </span>
                       </td>
-                      <td className="px-2 py-2.5" style={{ color: 'var(--text-muted)' }}></td>
                       <td className="px-2 py-2.5 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmt(cat.revenue)}</td>
                       <td className="px-2 py-2.5 text-right">
                         {cat.delta_pct != null && (
@@ -429,14 +530,18 @@ export default function AnalyticsTab() {
                         </span>
                       </td>
                       <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(cat.drr)}</td>
-                      <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>—</td>
-                      <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>—</td>
+                      <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>
+                        {fmt(cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + sku.stock_rub, 0), 0))}
+                      </td>
+                      <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>
+                        {(() => { const total = cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + (sku.forecast_30d_qty ?? 0), 0), 0); return total > 0 ? total : '—' })()}
+                      </td>
                     </tr>,
 
                     // Subject rows (if expanded)
                     ...(catExpanded ? visibleSubjects.map(({ subj, skus }) => {
                       const subjKey = `${catKey}::${subj.subject}`
-                      const subjExpanded = expandedSubjs.has(subjKey)
+                      const subjExpanded = expandedSubjs.has(subjKey) || matchingSubjs.has(subjKey)
                       return [
                         // Subject row
                         <tr
@@ -457,7 +562,6 @@ export default function AnalyticsTab() {
                               {subj.subject}
                             </span>
                           </td>
-                          <td className="px-2 py-2" style={{ color: 'var(--text-muted)' }}></td>
                           <td className="px-2 py-2 text-right" style={{ color: 'var(--text)' }}>{fmt(subj.revenue)}</td>
                           <td className="px-2 py-2 text-right">
                             {subj.delta_pct != null && (
@@ -469,8 +573,12 @@ export default function AnalyticsTab() {
                           <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(subj.chmd)}</td>
                           <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(subj.margin_pct)}</td>
                           <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(subj.drr)}</td>
-                          <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>—</td>
-                          <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>—</td>
+                          <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>
+                            {fmt(subj.skus.reduce((s, sku) => s + sku.stock_rub, 0))}
+                          </td>
+                          <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>
+                            {(() => { const total = subj.skus.reduce((s, sku) => s + (sku.forecast_30d_qty ?? 0), 0); return total > 0 ? total : '—' })()}
+                          </td>
                         </tr>,
 
                         // SKU rows (if subject expanded)
@@ -486,10 +594,10 @@ export default function AnalyticsTab() {
                               onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = 'rgba(59,130,246,0.04)'}
                               onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'}
                             >
-                              <td className="pl-14 pr-2 py-1.5" style={{ color: 'var(--text-muted)' }}>
-                                {sku.sku_wb ?? sku.sku_ms}
+                              <td className="pl-14 pr-2 py-1.5 max-w-[320px]" style={{ color: 'var(--text)' }}>
+                                <div className="truncate" title={sku.name}>{sku.name}</div>
+                                <div className="text-[10px]" style={{ color: 'var(--text-subtle)' }}>{sku.sku_wb ?? sku.sku_ms}</div>
                               </td>
-                              <td className="px-2 py-1.5 max-w-[220px] truncate" style={{ color: 'var(--text)' }} title={sku.name}>{sku.name}</td>
                               <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text)' }}>{fmt(sku.revenue)}</td>
                               <td className="px-2 py-1.5 text-right">
                                 {sku.delta_pct != null ? (
@@ -516,23 +624,6 @@ export default function AnalyticsTab() {
             </table>
           </div>
 
-          {/* Summary bar */}
-          <div className="flex items-center justify-between px-4 py-2.5 border-t" style={{ borderColor: 'var(--border)' }}>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              Выбрано: <strong style={{ color: 'var(--text)' }}>{visibleSkuCount}</strong> SKU
-              &nbsp;•&nbsp;
-              Выручка: <strong style={{ color: 'var(--text)' }}>{fmt(visibleRevenue)}</strong>
-            </p>
-            <button
-              onClick={() => exportCsv(hierarchy)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all"
-              style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
-            >
-              <Download size={12} /> Скачать CSV
-            </button>
-          </div>
         </GlassCard>
       </div>
 

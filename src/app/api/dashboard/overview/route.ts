@@ -561,7 +561,7 @@ export async function GET(req: Request) {
   const lostDetail = Object.values(lostDetailMap)
     .map(d => ({ ...d, total: d.lost_oos + d.lost_ads }))
     .sort((a, b) => b.total - a.total)
-    .slice(0, 10)
+    // no slice — show all SKUs with losses
 
   // ── Ответ ─────────────────────────────────────────────────────────────────
   return NextResponse.json({

@@ -356,7 +356,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Row 2: DateRangePicker + global filters */}
-        <div className="flex items-center gap-2 h-[28px] flex-wrap">
+        <div className="flex items-center justify-center gap-2 h-[28px] flex-wrap">
           <DateRangePicker />
           <PeriodButtons />
           <div className="w-px h-4 shrink-0" style={{ background: 'var(--border)' }} />

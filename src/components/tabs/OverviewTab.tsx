@@ -448,6 +448,8 @@ export default function OverviewTab() {
         {
           label: 'Маржа %',
           value: fmtPct(data.kpi.avg_margin_pct),
+          delta: d.avg_margin_pct != null ? fmtDelta(d.avg_margin_pct) : undefined,
+          deltaColor: deltaColor(d.avg_margin_pct),
           hint: kpiHint('margin', data),
         },
         {
@@ -488,7 +490,7 @@ export default function OverviewTab() {
             Динамика выручки и ЧМД
           </p>
           {trendData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={240}>
+            <ResponsiveContainer width="100%" height={280}>
               <ComposedChart data={trendData} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
                 <defs>
                   <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
@@ -522,7 +524,7 @@ export default function OverviewTab() {
             Unit-экономика по дням
           </p>
           {unitEconData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={240}>
+            <ResponsiveContainer width="100%" height={280}>
               <LineChart data={unitEconData} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
@@ -545,7 +547,7 @@ export default function OverviewTab() {
 
         {/* Маржинальность */}
         <GlassCard padding="lg">
-          <p className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>Маржинальность SKU</p>
+          <p className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>Маржинальность SKU ({data.kpi.sku_count} шт.)</p>
           <div className="space-y-2.5">
             {([
               { key: 'neg',  label: '< 0%',    color: 'var(--danger)', count: md.neg  },
@@ -853,7 +855,7 @@ export default function OverviewTab() {
             onClick={e => e.stopPropagation()}
           >
             <div className="px-6 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
-              <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Упущенная выручка — топ SKU</p>
+              <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Упущенная выручка — все SKU с потерями</p>
               <button
                 onClick={() => setShowLostModal(false)}
                 className="text-xs px-2 py-1 rounded-lg"
@@ -868,8 +870,22 @@ export default function OverviewTab() {
                   <thead>
                     <tr style={{ color: 'var(--text-subtle)', borderBottom: '1px solid var(--border)' }}>
                       <th className="text-left pb-2 font-medium">Название</th>
-                      <th className="text-right pb-2 font-medium whitespace-nowrap">OOS потери</th>
-                      <th className="text-right pb-2 font-medium whitespace-nowrap">Слитый бюджет</th>
+                      <th className="text-right pb-2 font-medium whitespace-nowrap">
+                        <span
+                          title="Упущенная выручка из-за отсутствия товара на складе. Рассчитывается как: среднедневные продажи × дни OOS × цена."
+                          className="cursor-help inline-flex items-center gap-1"
+                        >
+                          OOS потери <span style={{ color: 'var(--accent)', fontSize: 10 }}>?</span>
+                        </span>
+                      </th>
+                      <th className="text-right pb-2 font-medium whitespace-nowrap">
+                        <span
+                          title="Рекламные расходы в период нулевых остатков — деньги потрачены, но продаж не было из-за OOS."
+                          className="cursor-help inline-flex items-center gap-1"
+                        >
+                          Слитый бюджет <span style={{ color: 'var(--accent)', fontSize: 10 }}>?</span>
+                        </span>
+                      </th>
                       <th className="text-right pb-2 font-medium">Итого</th>
                     </tr>
                   </thead>
