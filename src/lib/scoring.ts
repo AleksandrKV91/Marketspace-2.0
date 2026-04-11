@@ -1,11 +1,10 @@
 // SKU Score 0–100
-// 6 компонентов: margin(25) + drr(20) + revenue(15) + growth(10) + cr(10) + stock(20)
+// 5 компонентов: margin(25) + drr(20) + growth(10) + cr(10) + stock(20) = 65 max (без штрафов)
 // Penalties: OOS→return 0; DRR>Margin→×0.5; novelty_low→−10
 
 export interface ScoreParams {
   margin_pct:     number   // доля, напр. 0.18 = 18%
   drr:            number   // доля, напр. 0.12 = 12%
-  revenue:        number   // выручка ₽ за период
   revenue_growth: number   // доля к пред. периоду, напр. 0.25 = +25%
   cr_order:       number   // коэф. конверсии, напр. 0.03 = 3%
   median_cr?:     number   // медианный CR по аккаунту (для нормировки)

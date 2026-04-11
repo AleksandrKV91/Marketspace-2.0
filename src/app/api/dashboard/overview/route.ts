@@ -511,7 +511,6 @@ export async function GET(req: Request) {
       const score = computeScore({
         margin_pct: marginPct,
         drr,
-        revenue: s.revenue,
         revenue_growth: revenueGrowth,
         cr_order: avgCr,
         median_cr: medianCr,
