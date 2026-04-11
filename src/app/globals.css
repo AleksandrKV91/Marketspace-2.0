@@ -9,6 +9,7 @@
   /* Glass surfaces — более прозрачные чтобы фон просвечивал */
   --surface: rgba(255, 255, 255, 0.52);
   --surface-solid: rgba(255, 255, 255, 0.82);
+  --surface-popup: rgba(255, 255, 255, 0.97);
   --surface-hover: rgba(255, 255, 255, 0.70);
   --surface-deep: rgba(255, 255, 255, 0.28);
 
@@ -71,6 +72,7 @@
 
   --surface: rgba(255, 255, 255, 0.07);
   --surface-solid: rgba(255, 255, 255, 0.10);
+  --surface-popup: rgba(17, 24, 39, 0.97);
   --surface-hover: rgba(255, 255, 255, 0.13);
   --surface-deep: rgba(255, 255, 255, 0.04);
 

@@ -144,7 +144,7 @@ function FilterDropdown({
             transition={{ type: 'spring', stiffness: 400, damping: 28 }}
             className="absolute left-0 top-[calc(100%+4px)] z-[300] py-1 min-w-[140px] max-h-48 overflow-y-auto"
             style={{
-              background: 'var(--surface-solid, #fff)',
+              background: 'var(--surface-popup, rgba(255,255,255,0.97))',
               border: '1px solid var(--border)',
               borderRadius: 'var(--radius-xl)',
               boxShadow: '0 8px 32px rgba(0,0,0,0.18)',

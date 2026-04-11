@@ -238,8 +238,8 @@ export function DateRangePicker() {
               borderRadius: 'var(--radius-xl)',
               width: 296,
               boxShadow: '0 8px 40px rgba(0,0,0,0.28)',
-              background: 'var(--surface-solid, #fff)',
-              backdropFilter: 'blur(32px) saturate(1.8)',
+              background: 'var(--surface-popup, rgba(255,255,255,0.97))',
+              backdropFilter: 'blur(40px) saturate(2)',
               border: '1px solid var(--border)',
             }}
           >
