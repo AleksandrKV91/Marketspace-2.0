@@ -354,7 +354,7 @@ export async function GET(req: Request) {
     }
 
     // Скоро OOS: запас < lead_time
-    if (totalStock > 0 && stockDays < leadTime) {
+    if (totalStock > 0 && stockDays != null && stockDays < leadTime) {
       soonOosCount++
       if (focusSoonOos.length < 5) focusSoonOos.push({
         sku_ms: ms, name: dim?.name ?? ms,
