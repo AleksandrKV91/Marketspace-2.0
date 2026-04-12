@@ -52,7 +52,7 @@ function ChartTip({ active, payload, label }: { active?: boolean; payload?: Arra
 
 // ── Sort helper ───────────────────────────────────────────────────────────────
 
-type SortKey = 'revenue' | 'delta_pct' | 'chmd' | 'margin_pct' | 'drr' | 'stock_rub' | 'forecast_30d_qty'
+type SortKey = 'revenue' | 'delta_pct' | 'chmd' | 'margin_pct' | 'drr' | 'stock_rub' | 'stock_qty' | 'forecast_30d_qty' | 'forecast_30d_rev'
 
 function SortTh({ label, sortKey, current, dir, onClick, align = 'right' }: {
   label: string; sortKey: SortKey; current: SortKey; dir: 'asc' | 'desc'; onClick: (k: SortKey) => void; align?: 'left' | 'right'
@@ -77,15 +77,16 @@ function SortTh({ label, sortKey, current, dir, onClick, align = 'right' }: {
 // ── CSV export ────────────────────────────────────────────────────────────────
 
 function exportCsv(hierarchy: CategoryNode[]) {
-  const rows: string[] = ['Категория,Предмет,SKU WB,SKU MS,Название,Выручка,Δ%,ЧМД,Маржа%,ДРР%,Остаток(руб),Прогноз30д(шт)']
+  const rows: string[] = ['Категория,Предмет,SKU WB,SKU MS,Название,Выручка,Δ%,ЧМД,Маржа%,ДРР%,Остаток(руб),Остаток(шт),Прогноз30д(шт),Прогноз30д(руб)']
   for (const cat of hierarchy) {
     for (const subj of cat.subjects) {
       for (const sku of subj.skus) {
+        const fcRev = sku.forecast_30d_qty != null ? Math.round(sku.forecast_30d_qty * sku.price) : ''
         rows.push([
           cat.category, subj.subject, sku.sku_ms, sku.sku_wb ?? '', `"${sku.name}"`,
           sku.revenue, sku.delta_pct != null ? (sku.delta_pct * 100).toFixed(1) : '',
           sku.chmd, (sku.margin_pct * 100).toFixed(1), (sku.drr * 100).toFixed(1),
-          sku.stock_rub, sku.forecast_30d_qty ?? '',
+          sku.stock_rub, sku.stock_qty, sku.forecast_30d_qty ?? '', fcRev,
         ].join(','))
       }
     }
@@ -258,8 +259,14 @@ export default function AnalyticsTab() {
       if (deltaFilter === 'decline' && (s.delta_pct == null || s.delta_pct >= 0)) return false
       return true
     }).sort((a, b) => {
-      const av = (a[sortKey] as number | null) ?? -Infinity
-      const bv = (b[sortKey] as number | null) ?? -Infinity
+      let av: number, bv: number
+      if (sortKey === 'forecast_30d_rev') {
+        av = a.forecast_30d_qty != null ? a.forecast_30d_qty * a.price : -Infinity
+        bv = b.forecast_30d_qty != null ? b.forecast_30d_qty * b.price : -Infinity
+      } else {
+        av = (a[sortKey as keyof SkuNode] as number | null) ?? -Infinity
+        bv = (b[sortKey as keyof SkuNode] as number | null) ?? -Infinity
+      }
       return sortDir === 'asc' ? (av < bv ? -1 : 1) : (av > bv ? -1 : 1)
     })
   }
@@ -297,7 +304,7 @@ export default function AnalyticsTab() {
       if (sortKey === 'delta_pct') {
         av = a.delta_pct ?? -Infinity
         bv = b.delta_pct ?? -Infinity
-      } else if (sortKey === 'stock_rub' || sortKey === 'forecast_30d_qty') {
+      } else if (sortKey === 'stock_rub' || sortKey === 'stock_qty' || sortKey === 'forecast_30d_qty' || sortKey === 'forecast_30d_rev') {
         av = -Infinity; bv = -Infinity // not on cat/subj — keep original order
       } else {
         av = (a[sortKey as keyof T] as number) ?? -Infinity
@@ -600,6 +607,7 @@ export default function AnalyticsTab() {
                   <SortTh label="Маржа%"        sortKey="margin_pct"       current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="ДРР%"          sortKey="drr"              current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="Остаток (₽)"   sortKey="stock_rub"        current={sortKey} dir={sortDir} onClick={toggleSort} />
+                  <SortTh label="Остаток (шт.)" sortKey="stock_qty"        current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <th
                     className="pb-2 font-medium cursor-pointer select-none whitespace-nowrap text-right"
                     style={{ color: sortKey === 'forecast_30d_qty' ? 'var(--accent)' : 'var(--text-subtle)', fontSize: 11 }}
@@ -609,12 +617,13 @@ export default function AnalyticsTab() {
                       className="inline-flex items-center gap-0.5 justify-end"
                       title="Прогноз продаж в штуках на 30 дней: (Выручка / Дней периода × 30) / Цена. Красный — прогноз выше текущего остатка (риск OOS)."
                     >
-                      Прогноз 30д <span style={{ color: 'var(--accent)', fontSize: 9 }}>?</span>
+                      Прогноз (шт.) <span style={{ color: 'var(--accent)', fontSize: 9 }}>?</span>
                       {sortKey === 'forecast_30d_qty'
                         ? (sortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />)
                         : <ChevronDown size={10} style={{ opacity: 0.25 }} />}
                     </span>
                   </th>
+                  <SortTh label="Прогноз (₽)" sortKey="forecast_30d_rev" current={sortKey} dir={sortDir} onClick={toggleSort} />
                 </tr>
               </thead>
               <tbody>
@@ -667,7 +676,13 @@ export default function AnalyticsTab() {
                         {fmt(cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + sku.stock_rub, 0), 0))}
                       </td>
                       <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>
+                        {(() => { const total = cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + sku.stock_qty, 0), 0); return total > 0 ? total : '—' })()}
+                      </td>
+                      <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>
                         {(() => { const total = cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + (sku.forecast_30d_qty ?? 0), 0), 0); return total > 0 ? `${total} шт.` : '—' })()}
+                      </td>
+                      <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>
+                        {(() => { const total = cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + (sku.forecast_30d_qty != null ? sku.forecast_30d_qty * sku.price : 0), 0), 0); return total > 0 ? fmt(total) : '—' })()}
                       </td>
                     </tr>,
 
@@ -710,7 +725,13 @@ export default function AnalyticsTab() {
                             {fmt(subj.skus.reduce((s, sku) => s + sku.stock_rub, 0))}
                           </td>
                           <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>
+                            {(() => { const total = subj.skus.reduce((s, sku) => s + sku.stock_qty, 0); return total > 0 ? total : '—' })()}
+                          </td>
+                          <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>
                             {(() => { const total = subj.skus.reduce((s, sku) => s + (sku.forecast_30d_qty ?? 0), 0); return total > 0 ? `${total} шт.` : '—' })()}
+                          </td>
+                          <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>
+                            {(() => { const total = subj.skus.reduce((s, sku) => s + (sku.forecast_30d_qty != null ? sku.forecast_30d_qty * sku.price : 0), 0); return total > 0 ? fmt(total) : '—' })()}
                           </td>
                         </tr>,
 
@@ -743,8 +764,12 @@ export default function AnalyticsTab() {
                               <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(sku.margin_pct)}</td>
                               <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(sku.drr)}</td>
                               <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(sku.stock_rub)}</td>
+                              <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{sku.stock_qty > 0 ? sku.stock_qty : '—'}</td>
                               <td className="px-2 py-1.5 text-right font-semibold" style={{ color: forecast != null ? forecastColor : 'var(--text-muted)' }}>
                                 {forecast != null ? `${forecast} шт.` : '—'}
+                              </td>
+                              <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>
+                                {forecast != null ? fmt(forecast * sku.price) : '—'}
                               </td>
                             </tr>
                           )
