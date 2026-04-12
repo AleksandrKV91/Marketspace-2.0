@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import {
   ComposedChart, AreaChart, Area, Line, Bar, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, CartesianGrid, Legend, BarChart,
+  ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { KPIBar } from '@/components/ui/KPIBar'
@@ -41,7 +41,9 @@ function ChartTip({ active, payload, label }: { active?: boolean; payload?: Arra
         <div key={p.name} className="flex items-center gap-2 mb-1">
           <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
           <span style={{ color: 'var(--text-muted)' }}>{p.name}:</span>
-          <span className="font-bold ml-auto">{typeof p.value === 'number' && p.value < 2 ? fmtPct(p.value) : fmt(p.value)}</span>
+          <span className="font-bold ml-auto">
+            {p.name.includes('%') ? `${p.value.toFixed(1)}%` : fmt(p.value)}
+          </span>
         </div>
       ))}
     </div>
@@ -130,9 +132,9 @@ export default function AnalyticsTab() {
   const handleForecastClick = useCallback(() => {
     // Expand all categories, sort by forecast
     if (data) {
-      setExpandedCats(new Set(data.hierarchy.map(c => c.category)))
+      setExpandedCats(new Set(data.hierarchy.map((c: CategoryNode) => c.category)))
       setExpandedSubjs(new Set(
-        data.hierarchy.flatMap(c => c.subjects.map(s => `${c.category}::${s.subject}`))
+        data.hierarchy.flatMap((c: CategoryNode) => c.subjects.map((s: SubjectNode) => `${c.category}::${s.subject}`))
       ))
     }
     setSortKey('forecast_30d_qty')
@@ -169,7 +171,7 @@ export default function AnalyticsTab() {
   if (error) return <div className="py-16 text-center text-sm" style={{ color: 'var(--danger)' }}>{error}</div>
   if (!data) return null
 
-  const { kpi, hierarchy, daily_chart, daily_margin_drr } = data
+  const { kpi, hierarchy, daily_chart, daily_chart_prev } = data
 
   // Delta helpers
   function calcDelta(curr: number, prev: number): string | undefined {
@@ -179,12 +181,8 @@ export default function AnalyticsTab() {
   }
   const deltaRev      = calcDelta(kpi.revenue, kpi.prev_revenue)
   const deltaChmd     = calcDelta(kpi.chmd, kpi.prev_chmd)
-  const deltaMargin   = (kpi.prev_margin_pct > 0)
-    ? ((kpi.margin_pct - kpi.prev_margin_pct) * 100).toFixed(1) + 'п.п.'
-    : undefined
-  const deltaDrr      = (kpi.prev_drr > 0)
-    ? ((kpi.drr - kpi.prev_drr) * 100).toFixed(1) + 'п.п.'
-    : undefined
+  const deltaMargin   = calcDelta(kpi.margin_pct, kpi.prev_margin_pct)
+  const deltaDrr      = calcDelta(kpi.drr, kpi.prev_drr)
   const deltaCpo      = kpi.cpo != null && kpi.prev_cpo != null
     ? calcDelta(kpi.cpo, kpi.prev_cpo)
     : undefined
@@ -198,11 +196,22 @@ export default function AnalyticsTab() {
     'ДРР%':  +(d.drr * 100).toFixed(1),
   }))
 
-  const marginDrrData = daily_margin_drr.map(d => ({
-    date:    fmtDate(d.date),
+  const marginDrrData = daily_chart.map(d => ({
+    date:     fmtDate(d.date),
     'Маржа%': +(d.margin_pct * 100).toFixed(1),
     'ДРР%':   +(d.drr * 100).toFixed(1),
   }))
+
+  // Comparison chart: current + prev period normalized by day index
+  const compData: Array<{ day: number; 'Текущий период': number; 'Пред. период'?: number }> = []
+  const maxDays = Math.max(daily_chart.length, daily_chart_prev?.length ?? 0)
+  for (let i = 0; i < maxDays; i++) {
+    compData.push({
+      day: i + 1,
+      'Текущий период': daily_chart[i]?.revenue ?? 0,
+      'Пред. период':   daily_chart_prev?.[i]?.revenue,
+    })
+  }
 
   // Apply search + delta filter to SKU nodes, recompute rollup for display
   function filterSkus(skus: SkuNode[]): SkuNode[] {
@@ -246,6 +255,27 @@ export default function AnalyticsTab() {
       }
     }
   }
+
+  // Sort hierarchy: categories and subjects within each category by sortKey
+  function sortNodes<T extends { revenue: number; delta_pct: number | null; chmd: number; margin_pct: number; drr: number }>(nodes: T[]): T[] {
+    return [...nodes].sort((a, b) => {
+      let av: number, bv: number
+      if (sortKey === 'delta_pct') {
+        av = a.delta_pct ?? -Infinity
+        bv = b.delta_pct ?? -Infinity
+      } else if (sortKey === 'stock_rub' || sortKey === 'forecast_30d_qty') {
+        av = -Infinity; bv = -Infinity // not on cat/subj — keep original order
+      } else {
+        av = (a[sortKey as keyof T] as number) ?? -Infinity
+        bv = (b[sortKey as keyof T] as number) ?? -Infinity
+      }
+      return sortDir === 'asc' ? (av < bv ? -1 : 1) : (av > bv ? -1 : 1)
+    })
+  }
+  const sortedHierarchy = sortNodes(hierarchy).map(cat => ({
+    ...cat,
+    subjects: sortNodes(cat.subjects),
+  }))
 
   return (
     <div className="py-6 space-y-6">
@@ -297,7 +327,7 @@ export default function AnalyticsTab() {
         <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Выручка / ЧМД / Расходы / ДРР по дням</p>
         {chartData.length > 0 ? (
           <ResponsiveContainer width="100%" height={240}>
-            <ComposedChart data={chartData} margin={{ top: 4, right: 40, bottom: 0, left: 0 }}>
+            <ComposedChart data={chartData} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="aRevG" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.22} />
@@ -311,12 +341,12 @@ export default function AnalyticsTab() {
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
               <YAxis yAxisId="left"  tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
-              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => `${v}%`} domain={['auto', 'auto']} />
+              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
               <Tooltip content={<ChartTip />} />
               <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
               <Area yAxisId="left"  type="monotone" dataKey="Выручка" stroke="#3b82f6" strokeWidth={2} fill="url(#aRevG)"  dot={false} />
-              <Area yAxisId="left"  type="monotone" dataKey="ЧМД"     stroke="#22c55e" strokeWidth={2} fill="url(#aChmdG)" dot={false} />
-              <Line  yAxisId="left"  type="monotone" dataKey="Расходы" stroke="#ef4444" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+              <Area yAxisId="right" type="monotone" dataKey="ЧМД"     stroke="#22c55e" strokeWidth={2} fill="url(#aChmdG)" dot={false} />
+              <Line  yAxisId="right" type="monotone" dataKey="Расходы" stroke="#ef4444" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
               <Line  yAxisId="right" type="monotone" dataKey="ДРР%"    stroke="#f59e0b" strokeWidth={2}   dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -325,21 +355,50 @@ export default function AnalyticsTab() {
         )}
       </GlassCard>
 
+      {/* Chart 1.5 — Comparison: current vs prev period */}
+      {compData.length > 0 && (
+        <GlassCard padding="lg">
+          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Сравнение периодов по дням</p>
+          <ResponsiveContainer width="100%" height={200}>
+            <ComposedChart data={compData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+              <defs>
+                <linearGradient id="aCurrG" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.25} />
+                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="aPrevG" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%"  stopColor="#94a3b8" stopOpacity={0.18} />
+                  <stop offset="95%" stopColor="#94a3b8" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} />
+              <XAxis dataKey="day" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} tickFormatter={v => `День ${v}`} interval={Math.max(0, Math.floor(compData.length / 10) - 1)} />
+              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
+              <Tooltip content={<ChartTip />} />
+              <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+              <Area type="monotone" dataKey="Текущий период" stroke="#3b82f6" strokeWidth={2} fill="url(#aCurrG)" dot={false} />
+              <Area type="monotone" dataKey="Пред. период"   stroke="#94a3b8" strokeWidth={1.5} fill="url(#aPrevG)" dot={false} strokeDasharray="4 3" />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </GlassCard>
+      )}
+
       {/* Charts 2+3 — side by side */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {/* Chart 2 — by category bar */}
+        {/* Chart 2 — Revenue by day with Expenses line */}
         <GlassCard padding="lg">
           <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Выручка по дням</p>
           {chartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={210}>
-              <BarChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <ComposedChart data={chartData} margin={{ top: 4, right: 44, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
-                <Tooltip content={<ChartTip />} />
-                <Bar dataKey="Выручка" fill="#3b82f6" fillOpacity={0.75} radius={[3, 3, 0, 0]} />
-                <Bar dataKey="Расходы" fill="#ef4444" fillOpacity={0.60} radius={[3, 3, 0, 0]} />
-              </BarChart>
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval={chartData.length > 14 ? 1 : 0} />
+                <YAxis yAxisId="left"  tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
+                <Tooltip content={<ChartTip />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                <Bar  yAxisId="left"  dataKey="Выручка" fill="#3b82f6" fillOpacity={0.75} radius={[3, 3, 0, 0]} activeBar={{ fill: 'rgba(59,130,246,0.25)', stroke: 'none' }} />
+                <Line yAxisId="right" type="monotone" dataKey="Расходы" stroke="#ef4444" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+              </ComposedChart>
             </ResponsiveContainer>
           ) : (
             <div className="flex items-center justify-center h-52 text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных</div>
@@ -377,7 +436,16 @@ export default function AnalyticsTab() {
       <div ref={tableRef}>
         <GlassCard padding="none">
           {/* Table filter row */}
-          <div className="flex items-center gap-2 px-4 py-2.5 border-b flex-wrap" style={{ borderColor: 'var(--border)' }}>
+          <div
+            className="flex items-center gap-2 px-4 py-2.5 border-b flex-wrap"
+            style={{
+              position: 'sticky',
+              top: 'var(--header-h)',
+              zIndex: 20,
+              background: 'var(--surface-popup)',
+              borderColor: 'var(--border)',
+            }}
+          >
             {/* Search */}
             <div className="relative flex-1 max-w-xs">
               <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
@@ -423,8 +491,8 @@ export default function AnalyticsTab() {
             <div className="ml-auto flex items-center gap-2">
               <button
                 onClick={() => {
-                  setExpandedCats(new Set(hierarchy.map(c => c.category)))
-                  setExpandedSubjs(new Set(hierarchy.flatMap(c => c.subjects.map(s => `${c.category}::${s.subject}`))))
+                  setExpandedCats(new Set(sortedHierarchy.map(c => c.category)))
+                  setExpandedSubjs(new Set(sortedHierarchy.flatMap(c => c.subjects.map(s => `${c.category}::${s.subject}`))))
                 }}
                 className="px-2 py-1 rounded-lg text-[11px]"
                 style={{ color: 'var(--text-muted)', border: '1px solid var(--border)', background: 'var(--surface)' }}
@@ -456,10 +524,10 @@ export default function AnalyticsTab() {
           </div>
 
           {/* Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+          <div style={{ overflowX: 'auto', overflowY: 'visible' }}>
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse', minWidth: 800 }}>
               <thead>
-                <tr style={{ background: 'var(--surface)', position: 'sticky', top: 0, zIndex: 10 }}>
+                <tr style={{ background: 'var(--surface)', position: 'sticky', top: 'calc(var(--header-h) + 44px)', zIndex: 10 }}>
                   <th className="text-left pl-4 pr-2 py-2.5 font-medium" style={{ color: 'var(--text-subtle)', minWidth: 280 }}>Категория / Предмет / SKU</th>
                   <SortTh label="Выручка"       sortKey="revenue"          current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="Δ%"            sortKey="delta_pct"        current={sortKey} dir={sortDir} onClick={toggleSort} />
@@ -485,7 +553,7 @@ export default function AnalyticsTab() {
                 </tr>
               </thead>
               <tbody>
-                {hierarchy.map(cat => {
+                {sortedHierarchy.map(cat => {
                   const catKey = cat.category
                   const catExpanded = expandedCats.has(catKey) || matchingCats.has(catKey)
                   // Filter subjects to only those with visible SKUs
@@ -534,7 +602,7 @@ export default function AnalyticsTab() {
                         {fmt(cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + sku.stock_rub, 0), 0))}
                       </td>
                       <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>
-                        {(() => { const total = cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + (sku.forecast_30d_qty ?? 0), 0), 0); return total > 0 ? total : '—' })()}
+                        {(() => { const total = cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + (sku.forecast_30d_qty ?? 0), 0), 0); return total > 0 ? `${total} шт.` : '—' })()}
                       </td>
                     </tr>,
 
@@ -577,7 +645,7 @@ export default function AnalyticsTab() {
                             {fmt(subj.skus.reduce((s, sku) => s + sku.stock_rub, 0))}
                           </td>
                           <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>
-                            {(() => { const total = subj.skus.reduce((s, sku) => s + (sku.forecast_30d_qty ?? 0), 0); return total > 0 ? total : '—' })()}
+                            {(() => { const total = subj.skus.reduce((s, sku) => s + (sku.forecast_30d_qty ?? 0), 0); return total > 0 ? `${total} шт.` : '—' })()}
                           </td>
                         </tr>,
 
@@ -611,7 +679,7 @@ export default function AnalyticsTab() {
                               <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(sku.drr)}</td>
                               <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(sku.stock_rub)}</td>
                               <td className="px-2 py-1.5 text-right font-semibold" style={{ color: forecast != null ? forecastColor : 'var(--text-muted)' }}>
-                                {forecast != null ? forecast : '—'}
+                                {forecast != null ? `${forecast} шт.` : '—'}
                               </td>
                             </tr>
                           )

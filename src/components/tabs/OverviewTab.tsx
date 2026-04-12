@@ -491,7 +491,7 @@ export default function OverviewTab() {
           </p>
           {trendData.length > 0 ? (
             <ResponsiveContainer width="100%" height={280}>
-              <ComposedChart data={trendData} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
+              <ComposedChart data={trendData} margin={{ top: 4, right: 8, bottom: 0, left: -8 }}>
                 <defs>
                   <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.20} />
@@ -504,8 +504,8 @@ export default function OverviewTab() {
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis yAxisId="left" orientation="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} />
+                <YAxis yAxisId="left" orientation="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => fmt(v as number)} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => fmt(v as number)} />
                 <Tooltip content={<ChartTip />} />
                 <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
                 <Area yAxisId="left"  type="monotone" dataKey="Выручка" stroke="#3b82f6"        fill="url(#revGrad)"  strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
@@ -525,7 +525,7 @@ export default function OverviewTab() {
           </p>
           {unitEconData.length > 0 ? (
             <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={unitEconData} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
+              <LineChart data={unitEconData} margin={{ top: 4, right: 8, bottom: 0, left: -8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis yAxisId="left" orientation="left" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#ef4444' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => (v as number).toFixed(1) + '%'} />
@@ -854,13 +854,34 @@ export default function OverviewTab() {
             className="glass w-full max-w-2xl mx-4 rounded-2xl overflow-hidden"
             onClick={e => e.stopPropagation()}
           >
-            <div className="px-6 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
+            <div className="px-6 py-4 flex items-center justify-between gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
               <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Упущенная выручка — все SKU с потерями</p>
-              <button
-                onClick={() => setShowLostModal(false)}
-                className="text-xs px-2 py-1 rounded-lg"
-                style={{ color: 'var(--text-muted)', background: 'var(--surface)' }}
-              >✕</button>
+              <div className="flex items-center gap-2">
+                {data.lost_detail && data.lost_detail.length > 0 && (
+                  <button
+                    onClick={() => exportToExcel(
+                      data.lost_detail!.map(r => ({
+                        'Название': r.name,
+                        'Артикул WB': r.sku_wb ?? '',
+                        'Артикул МС': r.sku_ms,
+                        'OOS потери (₽)': Math.round(r.lost_oos),
+                        'Слитый бюджет (₽)': Math.round(r.lost_ads),
+                        'Итого (₽)': Math.round(r.total),
+                      })),
+                      'Потери'
+                    )}
+                    className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg"
+                    style={{ color: 'var(--text-muted)', background: 'var(--surface)', border: '1px solid var(--border)' }}
+                  >
+                    <Download size={12} /> Excel
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowLostModal(false)}
+                  className="text-xs px-2 py-1 rounded-lg"
+                  style={{ color: 'var(--text-muted)', background: 'var(--surface)' }}
+                >✕</button>
+              </div>
             </div>
             <div className="px-6 py-4 overflow-y-auto max-h-[70vh]">
               {!data.lost_detail?.length ? (

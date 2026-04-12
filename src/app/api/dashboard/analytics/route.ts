@@ -70,22 +70,20 @@ export interface AnalyticsResponse {
     period_days: number
   }
   hierarchy: CategoryNode[]
-  daily_chart: Array<{ date: string; revenue: number; chmd: number; ad_spend: number; drr: number }>
-  daily_margin_drr: Array<{ date: string; margin_pct: number; drr: number }>
+  daily_chart: Array<{ date: string; revenue: number; chmd: number; ad_spend: number; drr: number; margin_pct: number }>
+  daily_chart_prev: Array<{ day_index: number; date: string; revenue: number }>
   meta: { categories: string[]; managers: string[] }
 }
 
-function weightedPct(chmd: number, revenue: number): number {
-  return revenue > 0 ? chmd / revenue : 0
-}
-
-function rollup(items: Array<{ revenue: number; prev_revenue: number; chmd: number; ad_spend: number }>) {
+function rollup(items: Array<{ revenue: number; prev_revenue: number; chmd: number; ad_spend: number; margin_pct_weighted: number }>) {
   const revenue = items.reduce((s, i) => s + i.revenue, 0)
   const prev_revenue = items.reduce((s, i) => s + i.prev_revenue, 0)
   const chmd = items.reduce((s, i) => s + i.chmd, 0)
   const ad_spend = items.reduce((s, i) => s + i.ad_spend, 0)
+  // margin_pct_weighted = Σ(margin_pct × revenue) for each SKU — sum them up here
+  const margin_pct_num = items.reduce((s, i) => s + i.margin_pct_weighted, 0)
   const delta_pct = prev_revenue > 0 ? (revenue - prev_revenue) / prev_revenue : null
-  const margin_pct = weightedPct(chmd, revenue)
+  const margin_pct = revenue > 0 ? margin_pct_num / revenue : 0
   const drr = revenue > 0 ? ad_spend / revenue : 0
   return { revenue, prev_revenue, delta_pct, chmd, margin_pct, drr }
 }
@@ -174,9 +172,9 @@ export async function GET(req: Request) {
     : { prevFrom: null as string | null, prevTo: null as string | null }
 
   const prevDailyRows = prevFrom && prevTo
-    ? await fetchAll<{ sku_ms: string; revenue: number | null }>(
+    ? await fetchAll<{ sku_ms: string; metric_date: string; revenue: number | null }>(
         (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, revenue')
+          .select('sku_ms, metric_date, revenue')
           .gte('metric_date', prevFrom).lte('metric_date', prevTo),
         supabase,
       )
@@ -269,11 +267,19 @@ export async function GET(req: Request) {
   // Build hierarchy nodes
   const hierarchy: CategoryNode[] = Object.entries(catMap).map(([category, subjMap]) => {
     const subjects: SubjectNode[] = Object.entries(subjMap).map(([subject, skus]) => {
-      const r = rollup(skus.map(s => ({ revenue: s.revenue, prev_revenue: s.prev_revenue, chmd: s.chmd, ad_spend: s.drr * s.revenue })))
+      const r = rollup(skus.map(s => ({
+        revenue: s.revenue, prev_revenue: s.prev_revenue, chmd: s.chmd,
+        ad_spend: s.drr * s.revenue,
+        margin_pct_weighted: s.margin_pct * s.revenue,
+      })))
       return { subject, skus, ...r }
     }).sort((a, b) => b.revenue - a.revenue)
 
-    const r = rollup(subjects.map(s => ({ revenue: s.revenue, prev_revenue: s.prev_revenue, chmd: s.chmd, ad_spend: s.drr * s.revenue })))
+    const r = rollup(subjects.map(s => ({
+      revenue: s.revenue, prev_revenue: s.prev_revenue, chmd: s.chmd,
+      ad_spend: s.drr * s.revenue,
+      margin_pct_weighted: s.margin_pct * s.revenue,
+    })))
     return { category, subjects, ...r }
   }).sort((a, b) => b.revenue - a.revenue)
 
@@ -282,7 +288,9 @@ export async function GET(req: Request) {
   const prevRevenue   = hierarchy.reduce((s, c) => s + c.prev_revenue, 0)
   const totalChmd     = hierarchy.reduce((s, c) => s + c.chmd, 0)
   const totalAdSpend  = hierarchy.reduce((s, c) => s + c.drr * c.revenue, 0)
-  const marginPct     = weightedPct(totalChmd, totalRevenue)
+  // Weighted average margin: Σ(margin_pct × revenue) / Σrevenue (same formula as overview)
+  const marginPctNum  = hierarchy.reduce((s, c) => s + c.margin_pct * c.revenue, 0)
+  const marginPct     = totalRevenue > 0 ? marginPctNum / totalRevenue : 0
   const drr           = totalRevenue > 0 ? totalAdSpend / totalRevenue : 0
   const avgPrice      = [...allSkuMs].reduce((s, ms) => s + (snapByMs[ms]?.price ?? 0), 0) / Math.max(allSkuMs.size, 1)
   const cpo           = avgPrice > 0 && totalAdSpend > 0
@@ -290,8 +298,8 @@ export async function GET(req: Request) {
     : null
   const forecast30dRevenue = periodDays > 0 ? (totalRevenue / periodDays) * 30 : 0
 
-  // Previous period aggregates for deltas
-  let prevChmd = 0, prevAdSpend = 0
+  // Previous period aggregates for deltas (weighted margin same as current)
+  let prevChmd = 0, prevAdSpend = 0, prevMarginNum = 0
   for (const ms of allSkuMs) {
     const prevRev = prevSkuRev[ms] ?? 0
     const snap = snapByMs[ms]
@@ -300,8 +308,9 @@ export async function GET(req: Request) {
     const drr_sku = (agg?.revenue ?? 0) > 0 ? (agg?.ad_spend ?? 0) / agg!.revenue : 0
     prevChmd += prevRev * marginPctSku - (drr_sku * prevRev)
     prevAdSpend += drr_sku * prevRev
+    prevMarginNum += marginPctSku * prevRev
   }
-  const prevMarginPct = prevRevenue > 0 ? prevChmd / prevRevenue : 0
+  const prevMarginPct = prevRevenue > 0 ? prevMarginNum / prevRevenue : 0
   const prevDrr = prevRevenue > 0 ? prevAdSpend / prevRevenue : 0
   const prevCpo = avgPrice > 0 && prevAdSpend > 0
     ? prevAdSpend / (prevRevenue / avgPrice)
@@ -327,27 +336,37 @@ export async function GET(req: Request) {
   const daily_chart = Object.entries(dateAgg)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, d]) => {
-      const chmdDay = d.revenue * marginPct  // approx using period avg
+      const drrDay = d.revenue > 0 ? d.ad_spend / d.revenue : 0
+      // Per-day margin approx: weighted snapshot margin minus daily DRR
+      // (reflects that ad costs reduce margin daily, while COGS stays constant)
+      const marginPctDay = marginPct - drrDay + drr  // = marginPct + (drr - drrDay) effectively isolating COGS
+      // Simpler: marginPct_snapshot_weighted - drr_day gives real margin after ad costs per day
+      const marginPctDaySimple = marginPct > 0 ? Math.max(0, marginPct - drrDay + drr) : marginPct
+      const chmdDay = d.revenue * marginPct  // approx using period avg COGS
       return {
         date,
-        revenue:  d.revenue,
-        chmd:     chmdDay - d.ad_spend,
-        ad_spend: d.ad_spend,
-        drr:      d.revenue > 0 ? d.ad_spend / d.revenue : 0,
+        revenue:    d.revenue,
+        chmd:       chmdDay - d.ad_spend,
+        ad_spend:   d.ad_spend,
+        drr:        drrDay,
+        margin_pct: marginPctDaySimple,
       }
     })
 
-  const daily_margin_drr = daily_chart.map(d => ({
-    date:       d.date,
-    margin_pct: marginPct,  // period avg (no per-day margin data)
-    drr:        d.drr,
-  }))
+  // ── 12. Previous period daily (for comparison chart) ─────────────────────────
+  const prevDateAgg: Record<string, number> = {}
+  for (const r of prevDailyRows) {
+    prevDateAgg[r.metric_date] = (prevDateAgg[r.metric_date] ?? 0) + (r.revenue ?? 0)
+  }
+  const daily_chart_prev = Object.entries(prevDateAgg)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, revenue], i) => ({ day_index: i, date, revenue }))
 
   return NextResponse.json({
     kpi,
     hierarchy,
     daily_chart,
-    daily_margin_drr,
+    daily_chart_prev,
     meta: {
       categories: [...metaCats].sort(),
       managers:   [...metaMgrs].sort(),

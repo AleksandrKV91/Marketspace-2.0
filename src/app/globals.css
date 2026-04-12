@@ -2,6 +2,8 @@
 
 /* ── Liquid Glass Design System 2026 ────────────────────────── */
 :root {
+  --header-h: 88px;
+
   /* Backgrounds — насыщенный цветной фон чтобы стекло было видно */
   --bg: #D8E4F0;
   --bg-secondary: #C8D8EC;
