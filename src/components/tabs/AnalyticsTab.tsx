@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import {
   ComposedChart, AreaChart, Area, Line, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
@@ -100,6 +100,8 @@ export default function AnalyticsTab() {
   const { range } = useDateRange()
   const { filters, setMeta } = useGlobalFilters()
   const tableRef = useRef<HTMLDivElement>(null)
+  const filterRowRef = useRef<HTMLDivElement>(null)
+  const [stickyTop, setStickyTop] = useState({ filterRow: 88, thead: 88 + 44 })
 
   const [data, setData] = useState<AnalyticsResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -119,6 +121,20 @@ export default function AnalyticsTab() {
 
   // SKU modal
   const [modalSku, setModalSku] = useState<string | null>(null)
+
+  // Measure actual header height for sticky positioning
+  useLayoutEffect(() => {
+    function measure() {
+      const header = document.querySelector('header.top-nav') as HTMLElement | null
+      const filterRow = filterRowRef.current
+      const headerH = header ? header.getBoundingClientRect().height : 88
+      const filterH = filterRow ? filterRow.getBoundingClientRect().height : 44
+      setStickyTop({ filterRow: headerH, thead: headerH + filterH })
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -203,14 +219,32 @@ export default function AnalyticsTab() {
   }))
 
   // Comparison chart: current + prev period normalized by day index
-  const compData: Array<{ day: number; 'Текущий период': number; 'Пред. период'?: number }> = []
+  // Also compute linear forecast for current period (extrapolate from data so far)
   const maxDays = Math.max(daily_chart.length, daily_chart_prev?.length ?? 0)
+  const compData: Array<{ day: number; currDate?: string; prevDate?: string; 'Текущий период'?: number; 'Пред. период'?: number; 'Прогноз'?: number }> = []
+  // Compute avg daily revenue for current period to use as forecast beyond last actual day
+  const actualDays = daily_chart.length
+  const totalRevenueSoFar = daily_chart.reduce((s, d) => s + d.revenue, 0)
+  const avgDailyRev = actualDays > 0 ? totalRevenueSoFar / actualDays : 0
   for (let i = 0; i < maxDays; i++) {
+    const curr = daily_chart[i]
+    const prev = daily_chart_prev?.[i]
     compData.push({
       day: i + 1,
-      'Текущий период': daily_chart[i]?.revenue ?? 0,
-      'Пред. период':   daily_chart_prev?.[i]?.revenue,
+      currDate: curr?.date ? fmtDate(curr.date) : undefined,
+      prevDate: prev?.date ? fmtDate(prev.date) : undefined,
+      'Текущий период': curr?.revenue,
+      'Пред. период':   prev?.revenue,
+      // Forecast: linear extrapolation for days beyond actual data (rolling avg)
+      'Прогноз': i >= actualDays ? Math.round(avgDailyRev) : undefined,
     })
+  }
+  // Also add forecast days beyond maxDays up to period length
+  const periodTarget = kpi.period_days
+  if (actualDays < periodTarget) {
+    for (let i = maxDays; i < periodTarget; i++) {
+      compData.push({ day: i + 1, 'Прогноз': Math.round(avgDailyRev) })
+    }
   }
 
   // Apply search + delta filter to SKU nodes, recompute rollup for display
@@ -358,7 +392,7 @@ export default function AnalyticsTab() {
       {/* Chart 1.5 — Comparison: current vs prev period */}
       {compData.length > 0 && (
         <GlassCard padding="lg">
-          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Сравнение периодов по дням</p>
+          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Сравнение периодов: выручка по дням</p>
           <ResponsiveContainer width="100%" height={200}>
             <ComposedChart data={compData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <defs>
@@ -372,12 +406,42 @@ export default function AnalyticsTab() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} />
-              <XAxis dataKey="day" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} tickFormatter={v => `День ${v}`} interval={Math.max(0, Math.floor(compData.length / 10) - 1)} />
+              <XAxis
+                dataKey="day"
+                tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                tickLine={false} axisLine={false}
+                tickFormatter={v => {
+                  const idx = (v as number) - 1
+                  const d = compData[idx]
+                  return d?.currDate ?? `День ${v}`
+                }}
+                interval={Math.max(0, Math.floor(compData.length / 10) - 1)}
+              />
               <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
-              <Tooltip content={<ChartTip />} />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null
+                  const idx = (label as number) - 1
+                  const d = compData[idx]
+                  return (
+                    <div className="glass p-3 text-xs min-w-[160px]" style={{ color: 'var(--text)' }}>
+                      <p className="font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>День {label}</p>
+                      {d?.currDate && <p className="mb-1 text-[10px]" style={{ color: 'var(--text-subtle)' }}>Текущий: {d.currDate} / Пред.: {d.prevDate ?? '—'}</p>}
+                      {payload.map((p) => p.value != null && (
+                        <div key={p.name} className="flex items-center gap-2 mb-1">
+                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: p.color }} />
+                          <span style={{ color: 'var(--text-muted)' }}>{p.name}:</span>
+                          <span className="font-bold ml-auto">{fmt(p.value as number)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                }}
+              />
               <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-              <Area type="monotone" dataKey="Текущий период" stroke="#3b82f6" strokeWidth={2} fill="url(#aCurrG)" dot={false} />
-              <Area type="monotone" dataKey="Пред. период"   stroke="#94a3b8" strokeWidth={1.5} fill="url(#aPrevG)" dot={false} strokeDasharray="4 3" />
+              <Area type="monotone" dataKey="Текущий период" stroke="#3b82f6" strokeWidth={2} fill="url(#aCurrG)" dot={false} connectNulls={false} />
+              <Area type="monotone" dataKey="Пред. период"   stroke="#94a3b8" strokeWidth={1.5} fill="url(#aPrevG)" dot={false} strokeDasharray="4 3" connectNulls={false} />
+              <Line type="monotone" dataKey="Прогноз" stroke="#3b82f6" strokeWidth={1.5} dot={false} strokeDasharray="3 3" strokeOpacity={0.5} connectNulls={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </GlassCard>
@@ -437,10 +501,11 @@ export default function AnalyticsTab() {
         <GlassCard padding="none">
           {/* Table filter row */}
           <div
+            ref={filterRowRef}
             className="flex items-center gap-2 px-4 py-2.5 border-b flex-wrap"
             style={{
               position: 'sticky',
-              top: 'var(--header-h)',
+              top: stickyTop.filterRow,
               zIndex: 20,
               background: 'var(--surface-popup)',
               borderColor: 'var(--border)',
@@ -527,7 +592,7 @@ export default function AnalyticsTab() {
           <div style={{ overflowX: 'auto', overflowY: 'visible' }}>
             <table className="w-full text-xs" style={{ borderCollapse: 'collapse', minWidth: 800 }}>
               <thead>
-                <tr style={{ background: 'var(--surface)', position: 'sticky', top: 'calc(var(--header-h) + 44px)', zIndex: 10 }}>
+                <tr style={{ background: 'var(--surface)', position: 'sticky', top: stickyTop.thead, zIndex: 10 }}>
                   <th className="text-left pl-4 pr-2 py-2.5 font-medium" style={{ color: 'var(--text-subtle)', minWidth: 280 }}>Категория / Предмет / SKU</th>
                   <SortTh label="Выручка"       sortKey="revenue"          current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="Δ%"            sortKey="delta_pct"        current={sortKey} dir={sortDir} onClick={toggleSort} />
