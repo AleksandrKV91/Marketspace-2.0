@@ -57,6 +57,8 @@ export interface ParseSkuReportResult {
   rows_skipped: number
   skipped_skus: string[]
   diag_service_rows: string[]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  diag_blocks: Record<string, any>
 }
 
 /**
@@ -244,12 +246,59 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
     }
 
     // ── Изменения цен из блока CJ-CN ────────────────────────────────────────
+    // Колонки CJ-CN содержат дельты в % (напр. 10.5 = +10.5%, -5.0 = -5%)
+    // Базовая цена — из колонки «Цена» (snapshot), далее цепочка пересчёта.
+    // Если delta == 0 или null — изменения не было, пропускаем.
     if (priceChangeBlock && skuWbNum) {
-      for (let di = 0; di < priceChangeBlock.dateCols.length; di++) {
-        const dateISO = excelToISO(headerRow[priceChangeBlock.dateCols[di]] as number)
-        const price = toNum(row[priceChangeBlock.dateCols[di]])
-        if (dateISO && price != null && price > 0) {
-          priceChanges.push({ sku_ms: skuMs, sku_wb: skuWbNum, price_date: dateISO, price })
+      const basePrice = priceCol >= 0 ? toNum(row[priceCol]) : null
+      if (basePrice != null && basePrice > 0) {
+        // dateCols отсортированы от новой к старой (или наоборот — нужно определить по snapDate)
+        // snapDate = самая свежая дата основного блока (dateCols[0])
+        // Предположим priceChangeBlock.dateCols[0] — самая старая из 5 дат блока
+        // Сначала сортируем даты по возрастанию (старая→новая)
+        const priceDates = priceChangeBlock.dateCols.map(c => ({
+          col: c,
+          iso: excelToISO(headerRow[c] as number),
+        })).filter(x => x.iso).sort((a, b) => a.iso!.localeCompare(b.iso!))
+
+        // Строим цепочку: начинаем с базовой цены (самая свежая — snap)
+        // и идём от новой к старой, чтобы пересчитать цену в прошлом
+        // Но проще: идти от старой к новой, накапливая цену
+        // Цена на snap_date = basePrice. Колонки — дни ДО snap_date.
+        // delta[i] показывает изменение цены В ЭТОТ ДЕНЬ относительно предыдущего.
+        // Идём от старой к новой дате, рассчитывая цепочку:
+        //   price[i] = price[i-1] * (1 + delta[i]/100)
+        // Начальная цена (до первой даты) = basePrice / prod(1 + delta_i/100)
+        const deltas: Array<{ iso: string; delta: number }> = priceDates
+          .map(d => ({ iso: d.iso!, delta: toNum(row[d.col]) ?? 0 }))
+          .filter(d => d.delta !== 0)
+
+        if (deltas.length > 0) {
+          // Вычислить цену на момент самой старой даты (до первого изменения)
+          // basePrice — это цена НА ДАТУ ОТЧЁТА (snap_date)
+          // Нужно "откатить" все изменения назад чтобы найти начальную цену
+          let runningPrice = basePrice
+          // Идём от новейшего к старейшему, делим (откатываем)
+          const reversedDeltas = [...deltas].reverse()
+          const pricesFromNew: number[] = [runningPrice]
+          for (const { delta } of reversedDeltas) {
+            runningPrice = runningPrice / (1 + delta / 100)
+            pricesFromNew.push(runningPrice)
+          }
+          // pricesFromNew[0] = basePrice (snap_date), [1] = цена до последнего изм., ...
+          // Теперь строим записи от старой к новой
+          const pricesByDate: Array<{ iso: string; price: number }> = []
+          const sortedDeltas = deltas // уже отсортированы старая→новая
+          let p = pricesFromNew[pricesFromNew.length - 1] // самая старая цена (до всех изменений)
+          for (let i = 0; i < sortedDeltas.length; i++) {
+            const { iso, delta } = sortedDeltas[i]
+            p = p * (1 + delta / 100)
+            pricesByDate.push({ iso, price: Math.round(p) })
+          }
+
+          for (const { iso, price } of pricesByDate) {
+            priceChanges.push({ sku_ms: skuMs, sku_wb: skuWbNum, price_date: iso, price })
+          }
         }
       }
     }
@@ -287,6 +336,9 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
     })
   }
 
+  const blockDiag = (b: { headerCol: number; dateCols: number[] } | null) =>
+    b ? { headerCol: b.headerCol, dateCols: b.dateCols, dates: b.dateCols.map(c => excelToISO(headerRow[c] as number) ?? String(headerRow[c])) } : null
+
   return {
     daily,
     snapshots,
@@ -295,5 +347,14 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
     rows_skipped: skipped,
     skipped_skus: skippedSkus,
     diag_service_rows: skippedService,
+    diag_blocks: {
+      priceCol,
+      priceChangeBlock: blockDiag(priceChangeBlock),
+      revenueBlock: blockDiag(revenueBlock),
+      ctrBlock: blockDiag(ctrBlock),
+      adSpendBlock: blockDiag(adSpendBlock),
+      row0_sample: groupRow.slice(80, 95).map((v, i) => ({ col: 80 + i, val: v })),
+      row1_sample: headerRow.slice(80, 95).map((v, i) => ({ col: 80 + i, val: v })),
+    },
   }
 }

@@ -78,12 +78,20 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Записать изменения цен из блока CJ-CN (абс. цена по датам) в fact_price_changes
-  const priceChangeRows = parsed.priceChanges
-  // Дедупликация по (sku_wb, price_date) — берём последнее значение
-  const priceChangeDedup = new Map<string, typeof priceChangeRows[0]>()
-  for (const r of priceChangeRows) {
+  // Записать изменения цен из блока CJ-CN в fact_price_changes
+  // priceChanges уже содержат абсолютные цены, пересчитанные из дельт%
+  const priceChangeDedup = new Map<string, typeof parsed.priceChanges[0]>()
+  for (const r of parsed.priceChanges) {
     priceChangeDedup.set(`${r.sku_wb}|${r.price_date}`, r)
+  }
+  // Также добавляем snap_date + price (базовая цена отчёта)
+  for (const r of dedupedSnaps) {
+    if (r.sku_wb != null && r.price != null && r.snap_date) {
+      const key = `${r.sku_wb}|${r.snap_date}`
+      if (!priceChangeDedup.has(key)) {
+        priceChangeDedup.set(key, { sku_ms: r.sku_ms, sku_wb: r.sku_wb, price_date: r.snap_date, price: r.price })
+      }
+    }
   }
   const dedupedPriceChanges = [...priceChangeDedup.values()].map(r => ({
     sku_wb: r.sku_wb!,
@@ -97,30 +105,21 @@ export async function POST(req: NextRequest) {
     if (error) console.error('fact_price_changes upsert error:', error.message)
   }
 
-  // Дополнительно: snap_date + price из снапшота (текущая цена)
-  const snapPriceRows = dedupedSnaps
-    .filter(r => r.sku_wb != null && r.price != null && r.snap_date)
-    .map(r => ({ sku_wb: r.sku_wb!, sku_ms: r.sku_ms, price_date: r.snap_date, price: r.price! }))
-
-  for (const batch of chunk(snapPriceRows, 500)) {
-    const { error } = await supabase.from('fact_price_changes').upsert(batch, { onConflict: 'sku_wb,price_date' })
-    if (error) console.error('fact_price_changes snap upsert error:', error.message)
-  }
-
   return NextResponse.json({
     ok: true,
     upload_id: uploadId,
     rows_parsed: parsed.rows_parsed,
     rows_skipped: parsed.rows_skipped,
     price_change_rows: dedupedPriceChanges.length,
-    snap_price_rows: snapPriceRows.length,
+    price_changes_from_deltas: parsed.priceChanges.length,
     skipped_no_map: parsed.skipped_skus.length,
     sku_map_size: skuMap.size,
     diag_daily: parsed.daily.slice(0, 2),
-    diag_skipped_skus: parsed.skipped_skus,
+    diag_snapshots: parsed.snapshots.slice(0, 2).map(s => ({ sku_ms: s.sku_ms, sku_wb: s.sku_wb, price: s.price, snap_date: s.snap_date })),
+    diag_price_changes: parsed.priceChanges.slice(0, 5),
+    diag_skipped_skus: parsed.skipped_skus.slice(0, 5),
     diag_service_rows: parsed.diag_service_rows,
     diag_sku_map_sample: [...skuMap.entries()].slice(0, 3).map(([wb, ms]) => ({ wb, ms })),
-    diag_421992755: skuMap.get('421992755') ?? 'NOT IN MAP',
-    diag_421992756: skuMap.get('421992756') ?? 'NOT IN MAP',
+    diag_blocks: parsed.diag_blocks,
   })
 }

@@ -233,12 +233,12 @@ export default function AnalyticsTab() {
     const d = (curr - prev) / Math.abs(prev) * 100
     return (d >= 0 ? '+' : '') + d.toFixed(1) + '%'
   }
-  const deltaRev      = calcDelta(kpi.revenue, kpi.prev_revenue)
-  const deltaChmd     = calcDelta(kpi.chmd, kpi.prev_chmd)
-  const deltaMargin   = calcDelta(kpi.margin_pct, kpi.prev_margin_pct)
-  const deltaDrr      = calcDelta(kpi.drr, kpi.prev_drr)
-  const deltaCpo      = kpi.cpo != null && kpi.prev_cpo != null
-    ? calcDelta(kpi.cpo, kpi.prev_cpo)
+  const deltaRev      = calcDelta(activeKpi.revenue, activeKpi.prev_revenue)
+  const deltaChmd     = calcDelta(activeKpi.chmd, activeKpi.prev_chmd)
+  const deltaMargin   = calcDelta(activeKpi.margin_pct, activeKpi.prev_margin_pct)
+  const deltaDrr      = calcDelta(activeKpi.drr, activeKpi.prev_drr)
+  const deltaCpo      = activeKpi.cpo != null && activeKpi.prev_cpo != null
+    ? calcDelta(activeKpi.cpo, activeKpi.prev_cpo)
     : undefined
 
   // Collect visible SKU set for chart filtering (populated after filterSkus calls below)
@@ -271,39 +271,62 @@ export default function AnalyticsTab() {
   const chartData = activeChart.map(d => ({
     date:    fmtDate(d.date),
     Выручка: d.revenue,
-    ЧМД:     'chmd' in d ? d.chmd : d.revenue * kpi.margin_pct - d.ad_spend,
+    ЧМД:     'chmd' in d ? d.chmd : d.revenue * activeKpi.margin_pct - d.ad_spend,
     Расходы: d.ad_spend,
     'ДРР%':  +(d.drr * 100).toFixed(1),
   }))
 
   const marginDrrData = activeChart.map(d => ({
     date:     fmtDate(d.date),
-    'Маржа%': 'margin_pct' in d ? +((d.margin_pct as number) * 100).toFixed(1) : +(kpi.margin_pct * 100).toFixed(1),
+    'Маржа%': 'margin_pct' in d ? +((d.margin_pct as number) * 100).toFixed(1) : +(activeKpi.margin_pct * 100).toFixed(1),
     'ДРР%':   +(d.drr * 100).toFixed(1),
   }))
 
-  // Comparison chart: current + prev period normalized by day index
-  // Also compute linear forecast for current period (extrapolate from data so far)
-  const maxDays = Math.max(daily_chart.length, daily_chart_prev?.length ?? 0)
+  // Filtered KPI — пересчитываем из видимых SKU когда фильтр активен
+  const activeKpi = (() => {
+    if (!isFiltered) return kpi
+    let revenue = 0, chmd = 0, ad_spend = 0, margin_num = 0
+    for (const cat of hierarchy) {
+      for (const subj of cat.subjects) {
+        for (const sku of filterSkus(subj.skus)) {
+          revenue += sku.revenue
+          chmd += sku.chmd
+          ad_spend += sku.drr * sku.revenue
+          margin_num += sku.margin_pct * sku.revenue
+        }
+      }
+    }
+    const drr = revenue > 0 ? ad_spend / revenue : 0
+    const margin_pct = revenue > 0 ? margin_num / revenue : 0
+    const forecast_30d_revenue = kpi.period_days > 0 ? (revenue / kpi.period_days) * 30 : 0
+    return {
+      ...kpi,
+      revenue, chmd, drr, margin_pct, forecast_30d_revenue,
+      // prev не пересчитываем — нет prev_daily_by_sku
+      prev_revenue: kpi.prev_revenue, prev_chmd: kpi.prev_chmd,
+      prev_margin_pct: kpi.prev_margin_pct, prev_drr: kpi.prev_drr,
+      sku_count: visibleSkuMs.size,
+    }
+  })()
+
+  // Comparison chart — используем activeChart вместо daily_chart
+  const maxDays = Math.max(activeChart.length, daily_chart_prev?.length ?? 0)
   const compData: Array<{ day: number; currDate?: string; prevDate?: string; 'Текущий период'?: number; 'Пред. период'?: number; 'Прогноз'?: number }> = []
-  // Compute avg daily revenue for current period to use as forecast beyond last actual day
-  const actualDays = daily_chart.length
-  const totalRevenueSoFar = daily_chart.reduce((s, d) => s + d.revenue, 0)
+  const actualDays = activeChart.length
+  const totalRevenueSoFar = activeChart.reduce((s, d) => s + d.revenue, 0)
   const avgDailyRev = actualDays > 0 ? totalRevenueSoFar / actualDays : 0
   for (let i = 0; i < maxDays; i++) {
-    const curr = daily_chart[i]
+    const curr = activeChart[i]
     const prev = daily_chart_prev?.[i]
     compData.push({
       day: i + 1,
       currDate: curr?.date ? fmtDate(curr.date) : undefined,
       prevDate: prev?.date ? fmtDate(prev.date) : undefined,
       'Текущий период': curr?.revenue,
-      'Пред. период':   prev?.revenue,
-      // Forecast: linear extrapolation for days beyond actual data (rolling avg)
+      'Пред. период':   isFiltered ? undefined : prev?.revenue,
       'Прогноз': i >= actualDays ? Math.round(avgDailyRev) : undefined,
     })
   }
-  // Also add forecast days beyond maxDays up to period length
   const periodTarget = kpi.period_days
   if (actualDays < periodTarget) {
     for (let i = maxDays; i < periodTarget; i++) {
@@ -414,38 +437,38 @@ export default function AnalyticsTab() {
       <KPIBar items={[
         {
           label: 'Выручка',
-          value: fmt(kpi.revenue),
+          value: fmt(activeKpi.revenue),
           delta: deltaRev,
-          deltaPositive: kpi.revenue >= kpi.prev_revenue,
+          deltaPositive: activeKpi.revenue >= activeKpi.prev_revenue,
         },
         {
           label: 'ЧМД',
-          value: fmt(kpi.chmd),
+          value: fmt(activeKpi.chmd),
           delta: deltaChmd,
-          deltaPositive: kpi.chmd >= kpi.prev_chmd,
+          deltaPositive: activeKpi.chmd >= activeKpi.prev_chmd,
         },
         {
           label: 'Маржа %',
-          value: fmtPct(kpi.margin_pct),
+          value: fmtPct(activeKpi.margin_pct),
           delta: deltaMargin,
-          deltaPositive: kpi.margin_pct >= kpi.prev_margin_pct,
-          danger: kpi.margin_pct < 0.10,
+          deltaPositive: activeKpi.margin_pct >= activeKpi.prev_margin_pct,
+          danger: activeKpi.margin_pct < 0.10,
         },
         {
           label: 'ДРР',
-          value: fmtPct(kpi.drr),
+          value: fmtPct(activeKpi.drr),
           delta: deltaDrr,
-          deltaPositive: kpi.drr <= kpi.prev_drr,
+          deltaPositive: activeKpi.drr <= activeKpi.prev_drr,
         },
         {
           label: 'CPO',
-          value: kpi.cpo != null ? fmt(kpi.cpo) + ' ₽' : '—',
+          value: activeKpi.cpo != null ? fmt(activeKpi.cpo) + ' ₽' : '—',
           delta: deltaCpo,
-          deltaPositive: kpi.cpo != null && kpi.prev_cpo != null ? kpi.cpo <= kpi.prev_cpo : undefined,
+          deltaPositive: activeKpi.cpo != null && activeKpi.prev_cpo != null ? activeKpi.cpo <= activeKpi.prev_cpo : undefined,
         },
         {
           label: 'Прогноз 30д',
-          value: fmt(kpi.forecast_30d_revenue),
+          value: fmt(activeKpi.forecast_30d_revenue),
           accent: true,
           hint: `(Выручка / ${kpi.period_days}д) × 30. Кликните для сортировки.`,
           onClick: handleForecastClick,
