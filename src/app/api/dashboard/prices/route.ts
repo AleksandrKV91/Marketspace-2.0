@@ -34,44 +34,45 @@ export async function GET(req: NextRequest) {
   }
   const skuReportId = latestByType['sku_report']
 
-  // Price changes — все строки за период
+  // fact_sku_snapshot — все SKU (источник истины: список товаров + менеджеры + текущие цены)
+  type SnapRow = { sku_ms: string; sku_wb: number | null; manager: string | null; price: number | null }
+  const allSnapRows = skuReportId
+    ? await fetchAll<SnapRow>(
+        (sb) => sb.from('fact_sku_snapshot')
+          .select('sku_ms, sku_wb, manager, price')
+          .eq('upload_id', skuReportId),
+        supabase,
+      )
+    : []
+
+  const managerMap: Record<string, string> = {}
+  const snapPriceMap: Record<string, number> = {}   // sku_ms → текущая цена
+  const snapSkuWbMap: Record<string, number> = {}   // sku_ms → sku_wb
+  for (const r of allSnapRows) {
+    managerMap[r.sku_ms] = r.manager ?? ''
+    if (r.price != null) snapPriceMap[r.sku_ms] = r.price
+    if (r.sku_wb != null) snapSkuWbMap[r.sku_ms] = r.sku_wb
+  }
+
+  // dim_sku — имена для всех SKU из снапшота
+  const allSkuMsSnap = allSnapRows.map(r => r.sku_ms)
+  const nameMap: Record<string, { name: string | null; brand: string | null; subject_wb: string | null }> = {}
+  for (let i = 0; i < allSkuMsSnap.length; i += 500) {
+    const { data: dimRows } = await supabase
+      .from('dim_sku').select('sku_ms, name, brand, subject_wb')
+      .in('sku_ms', allSkuMsSnap.slice(i, i + 500))
+    if (dimRows) for (const r of dimRows) nameMap[r.sku_ms] = r
+  }
+
+  // fact_price_changes — ВСЯ история цен (без фильтра по дате),
+  // чтобы корректно вычислить изменения на границе периода
   type PriceRow = { sku_wb: number | null; sku_ms: string | null; price_date: string; price: number | null }
   const priceRows = await fetchAll<PriceRow>(
-    (sb) => {
-      let q = sb.from('fact_price_changes')
-        .select('sku_wb, sku_ms, price_date, price')
-        .order('price_date', { ascending: false })
-      if (fromParam) q = q.gte('price_date', fromParam)
-      if (toParam) q = q.lte('price_date', toParam)
-      if (search) q = q.or(`sku_ms.ilike.%${search}%`)
-      return q
-    },
+    (sb) => sb.from('fact_price_changes')
+      .select('sku_wb, sku_ms, price_date, price')
+      .order('price_date', { ascending: true }),
     supabase,
   )
-
-  // dim_sku for names — батчами по 500
-  const skuMsList = [...new Set(priceRows.map(r => r.sku_ms).filter((v): v is string => !!v))]
-  const nameMap: Record<string, { name: string | null; brand: string | null; subject_wb: string | null }> = {}
-  if (skuMsList.length) {
-    for (let i = 0; i < skuMsList.length; i += 500) {
-      const { data: dimRows } = await supabase
-        .from('dim_sku').select('sku_ms, name, brand, subject_wb')
-        .in('sku_ms', skuMsList.slice(i, i + 500))
-      if (dimRows) for (const r of dimRows) nameMap[r.sku_ms] = r
-    }
-  }
-
-  // fact_sku_snapshot — manager per sku_ms — батчами по 500
-  const managerMap: Record<string, string> = {}
-  if (skuReportId && skuMsList.length) {
-    for (let i = 0; i < skuMsList.length; i += 500) {
-      const { data: snapRows } = await supabase
-        .from('fact_sku_snapshot').select('sku_ms, manager')
-        .eq('upload_id', skuReportId)
-        .in('sku_ms', skuMsList.slice(i, i + 500))
-      if (snapRows) for (const r of snapRows) managerMap[r.sku_ms] = r.manager ?? ''
-    }
-  }
 
   // Определить диапазоны дат
   let fromDaily = fromParam
@@ -259,37 +260,61 @@ export async function GET(req: NextRequest) {
       }
     })
 
-  // Price changes with manager + delta metrics
+  // Построить историю цен по sku_wb: Map<sku_wb → sorted entries asc>
   const bySkuWb: Record<number, Array<{ date: string; price: number | null; sku_ms: string | null }>> = {}
   for (const r of priceRows) {
     if (!r.sku_wb) continue
     if (!bySkuWb[r.sku_wb]) bySkuWb[r.sku_wb] = []
     bySkuWb[r.sku_wb].push({ date: r.price_date, price: r.price, sku_ms: r.sku_ms })
   }
+  // Отсортировать каждую историю по дате возрастания
+  for (const entries of Object.values(bySkuWb)) {
+    entries.sort((a, b) => a.date.localeCompare(b.date))
+  }
 
   const WINDOW = 7 // дней до/после изменения цены
 
-  const changes: Array<{
+  // Для каждого sku_wb найти изменения цен, которые попали в выбранный период
+  // "Изменение" = entry[i].price !== entry[i-1].price
+  // Для строк без изменений — берём последнюю цену до/на конец периода
+  const periodFrom = fromParam ?? ''
+  const periodTo = toParam ?? ''
+
+  type ChangeRow = {
     sku: string; name: string; manager: string
     date: string; price_before: number; price_after: number; delta_pct: number
+    has_change: boolean  // true = реальное изменение цены в периоде
     delta_ctr?: number; delta_cr_basket?: number; delta_cr_order?: number
     cpo?: number; delta_cpm?: number; delta_cpc?: number
-  }> = []
+  }
+  const changes: ChangeRow[] = []
+
+  // Карта sku_wb → sku_ms из priceRows (берём первое вхождение)
+  const skuWbToSkuMs: Record<number, string> = {}
+  for (const r of priceRows) {
+    if (r.sku_wb && r.sku_ms && !skuWbToSkuMs[r.sku_wb]) skuWbToSkuMs[r.sku_wb] = r.sku_ms
+  }
+
+  // Обработать SKU у которых есть история цен
+  const processedSkuMs = new Set<string>()
 
   for (const [skuWbStr, entries] of Object.entries(bySkuWb)) {
     const skuWb = Number(skuWbStr)
-    const sorted = [...entries].sort((a, b) => b.date.localeCompare(a.date))
-    const skuMs = sorted[0]?.sku_ms ?? null
+    const skuMs = skuWbToSkuMs[skuWb] ?? null
+    if (skuMs) processedSkuMs.add(skuMs)
     const dim = skuMs ? nameMap[skuMs] : null
+    const manager = skuMs ? (managerMap[skuMs] ?? '') : ''
 
-    for (let i = 0; i < sorted.length; i++) {
-      const cur = sorted[i]
-      const prev = sorted[i + 1] ?? null
-      const delta = prev?.price && cur.price
-        ? (cur.price - prev.price) / prev.price
-        : 0
-      if (prev || i === 0) {
-        // Δ метрик: окно до и после changeDate
+    // Найти изменения цен внутри периода
+    let foundChangeInPeriod = false
+    for (let i = 1; i < entries.length; i++) {
+      const cur = entries[i]
+      const prev = entries[i - 1]
+      // Изменение: цена реально изменилась и дата попадает в период
+      if (cur.price !== prev.price && cur.date >= periodFrom && cur.date <= periodTo) {
+        foundChangeInPeriod = true
+        const delta = prev.price && cur.price ? (cur.price - prev.price) / prev.price : 0
+
         let delta_ctr: number | undefined
         let delta_cr_basket: number | undefined
         let delta_cr_order: number | undefined
@@ -331,11 +356,12 @@ export async function GET(req: NextRequest) {
         changes.push({
           sku: String(skuWb),
           name: dim?.name ?? skuMs ?? '',
-          manager: (skuMs ? managerMap[skuMs] : '') ?? '',
+          manager,
           date: cur.date,
-          price_before: prev?.price ?? cur.price ?? 0,
+          price_before: prev.price ?? 0,
           price_after: cur.price ?? 0,
           delta_pct: delta,
+          has_change: true,
           delta_ctr,
           delta_cr_basket,
           delta_cr_order,
@@ -345,23 +371,54 @@ export async function GET(req: NextRequest) {
         })
       }
     }
-  }
 
-  changes.sort((a, b) => b.date.localeCompare(a.date))
-
-  // Manager table — агрегация по менеджерам из currDailyRows
-  // Сначала нужен managerMap расширенный на все sku_ms из dailyRows
-  const allSkuMs = [...new Set(currDailyRows.map(r => r.sku_ms).filter(Boolean))]
-  const missingSkus = allSkuMs.filter(s => !managerMap[s])
-  if (skuReportId && missingSkus.length) {
-    for (let i = 0; i < missingSkus.length; i += 500) {
-      const { data: snapRows } = await supabase
-        .from('fact_sku_snapshot').select('sku_ms, manager')
-        .eq('upload_id', skuReportId)
-        .in('sku_ms', missingSkus.slice(i, i + 500))
-      if (snapRows) for (const r of snapRows) managerMap[r.sku_ms] = r.manager ?? ''
+    // Если в периоде не было изменений — добавить строку с текущей ценой (без дельты)
+    if (!foundChangeInPeriod) {
+      // Найти последнюю цену на или до конца периода
+      const lastEntry = entries.filter(e => e.date <= periodTo).slice(-1)[0]
+        ?? entries[entries.length - 1]
+      if (lastEntry) {
+        const prevEntry = entries[entries.indexOf(lastEntry) - 1] ?? null
+        changes.push({
+          sku: String(skuWb),
+          name: dim?.name ?? skuMs ?? '',
+          manager,
+          date: lastEntry.date,
+          price_before: prevEntry?.price ?? lastEntry.price ?? 0,
+          price_after: lastEntry.price ?? 0,
+          delta_pct: 0,
+          has_change: false,
+        })
+      }
     }
   }
+
+  // Добавить SKU из снапшота, которых вообще нет в fact_price_changes
+  for (const snap of allSnapRows) {
+    if (processedSkuMs.has(snap.sku_ms)) continue
+    const dim = nameMap[snap.sku_ms]
+    const skuWb = snap.sku_wb ?? snapSkuWbMap[snap.sku_ms]
+    changes.push({
+      sku: skuWb ? String(skuWb) : snap.sku_ms,
+      name: dim?.name ?? snap.sku_ms,
+      manager: managerMap[snap.sku_ms] ?? '',
+      date: '',
+      price_before: snap.price ?? 0,
+      price_after: snap.price ?? 0,
+      delta_pct: 0,
+      has_change: false,
+    })
+  }
+
+  // Сортировка: сначала строки с изменением (по дате desc), потом без изменений
+  changes.sort((a, b) => {
+    if (a.has_change && !b.has_change) return -1
+    if (!a.has_change && b.has_change) return 1
+    return b.date.localeCompare(a.date)
+  })
+
+  // Manager table — агрегация по менеджерам из currDailyRows
+  // managerMap уже полностью заполнен из полного снапшота выше
 
   type MgrAgg = {
     ctrSum: number; ctrN: number

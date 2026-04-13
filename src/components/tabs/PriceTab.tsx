@@ -42,6 +42,7 @@ interface PriceData {
     price_before: number
     price_after: number
     delta_pct: number
+    has_change: boolean
     delta_ctr?: number
     delta_cr_basket?: number
     delta_cr_order?: number
@@ -129,7 +130,7 @@ export default function PriceTab() {
   const { range } = useDateRange()
   const [search, setSearch] = useState('')
   const [priceFilter, setPriceFilter] = useState<Record<string, string>>({
-    direction: 'all', ctr_delta: 'all', cr_delta: 'all', cpo: 'all',
+    direction: 'all', ctr_delta: 'all', cr_delta: 'all', cpo: 'all', show: 'changes',
   })
   const [sortKey, setSortKey] = useState<string>('date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -175,18 +176,21 @@ export default function PriceTab() {
   const pf = data.prev_funnel
   const priceChanges = data.price_changes ?? []
   const managerTable = data.manager_table ?? []
-  const hasFilter = Object.values(priceFilter).some(v => v !== 'all') || search.trim() !== ''
+  const hasFilter = Object.entries(priceFilter).some(([k, v]) => k === 'show' ? v !== 'changes' : v !== 'all') || search.trim() !== ''
 
   const filteredPrices = priceChanges.filter(row => {
+    if (priceFilter.show === 'changes' && !row.has_change) return false
     if (search && !row.name.toLowerCase().includes(search.toLowerCase()) && !row.sku.includes(search)) return false
-    if (priceFilter.direction === 'up' && row.delta_pct <= 0) return false
-    if (priceFilter.direction === 'down' && row.delta_pct >= 0) return false
-    if (priceFilter.ctr_delta === 'up' && (row.delta_ctr == null || row.delta_ctr <= 0)) return false
-    if (priceFilter.ctr_delta === 'down' && (row.delta_ctr == null || row.delta_ctr >= 0)) return false
-    if (priceFilter.cr_delta === 'up' && (row.delta_cr_order == null || row.delta_cr_order <= 0)) return false
-    if (priceFilter.cr_delta === 'down' && (row.delta_cr_order == null || row.delta_cr_order >= 0)) return false
-    if (priceFilter.cpo === 'over200' && (row.cpo == null || row.cpo <= 200)) return false
-    if (priceFilter.cpo === 'under200' && (row.cpo == null || row.cpo > 200)) return false
+    if (row.has_change) {
+      if (priceFilter.direction === 'up' && row.delta_pct <= 0) return false
+      if (priceFilter.direction === 'down' && row.delta_pct >= 0) return false
+      if (priceFilter.ctr_delta === 'up' && (row.delta_ctr == null || row.delta_ctr <= 0)) return false
+      if (priceFilter.ctr_delta === 'down' && (row.delta_ctr == null || row.delta_ctr >= 0)) return false
+      if (priceFilter.cr_delta === 'up' && (row.delta_cr_order == null || row.delta_cr_order <= 0)) return false
+      if (priceFilter.cr_delta === 'down' && (row.delta_cr_order == null || row.delta_cr_order >= 0)) return false
+      if (priceFilter.cpo === 'over200' && (row.cpo == null || row.cpo <= 200)) return false
+      if (priceFilter.cpo === 'under200' && (row.cpo == null || row.cpo > 200)) return false
+    }
     return true
   }).sort((a, b) => {
     const mult = sortDir === 'asc' ? 1 : -1
@@ -415,6 +419,10 @@ export default function PriceTab() {
             onSearch={setSearch}
             searchPlaceholder="Поиск по названию или SKU..."
             filters={[
+              { label: 'Показать', key: 'show', options: [
+                { value: 'changes', label: 'С изменением' },
+                { value: 'all', label: 'Все SKU' },
+              ]},
               { label: 'Δ Цены', key: 'direction', options: [
                 { value: 'all', label: 'Все' },
                 { value: 'up', label: '↑ Рост' },
@@ -438,7 +446,7 @@ export default function PriceTab() {
             ]}
             values={priceFilter}
             onChange={(k, v) => setPriceFilter(f => ({ ...f, [k]: v }))}
-            onReset={() => { setPriceFilter({ direction: 'all', ctr_delta: 'all', cr_delta: 'all', cpo: 'all' }); setSearch('') }}
+            onReset={() => { setPriceFilter({ direction: 'all', ctr_delta: 'all', cr_delta: 'all', cpo: 'all', show: 'changes' }); setSearch('') }}
             hasActive={hasFilter}
             onExport={exportPrices}
             summary={<span className="text-xs" style={{ color: 'var(--text-muted)' }}>Изменения цен · {filteredPrices.length}</span>}
@@ -468,15 +476,20 @@ export default function PriceTab() {
                   <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
                     <td className="py-2 pr-2 font-mono text-xs" style={{ color: 'var(--text-muted)' }}>{row.sku}</td>
                     <td className="py-2 pr-4 max-w-[160px] truncate" style={{ color: 'var(--text)' }}>{row.name}</td>
-                    <td className="py-2 pr-4" style={{ color: 'var(--text-muted)' }}>{row.manager}</td>
-                    <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmtDate(row.date)}</td>
-                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(row.price_before)} ₽</td>
-                    <td className="py-2 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmt(row.price_after)} ₽</td>
-                    <td className="py-2 text-right"><span className="text-xs font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>{up ? '+' : ''}{row.delta_pct.toFixed(1)}%</span></td>
-                    <td className="py-2 text-right"><DeltaCell v={row.delta_ctr} /></td>
-                    <td className="py-2 text-right"><DeltaCell v={row.delta_cr_basket} /></td>
-                    <td className="py-2 text-right"><DeltaCell v={row.delta_cr_order} /></td>
-                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.cpo != null ? fmt(row.cpo) + ' ₽' : '—'}</td>
+                    <td className="py-2 pr-4" style={{ color: 'var(--text-muted)' }}>{row.manager || '—'}</td>
+                    <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{row.date ? fmtDate(row.date) : '—'}</td>
+                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.price_before ? fmt(row.price_before) + ' ₽' : '—'}</td>
+                    <td className="py-2 text-right font-semibold" style={{ color: 'var(--text)' }}>{row.price_after ? fmt(row.price_after) + ' ₽' : '—'}</td>
+                    <td className="py-2 text-right">
+                      {row.has_change
+                        ? <span className="text-xs font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>{up ? '+' : ''}{row.delta_pct.toFixed(1)}%</span>
+                        : <span style={{ color: 'var(--text-subtle)' }}>—</span>
+                      }
+                    </td>
+                    <td className="py-2 text-right">{row.has_change ? <DeltaCell v={row.delta_ctr} /> : <span style={{ color: 'var(--text-subtle)' }}>—</span>}</td>
+                    <td className="py-2 text-right">{row.has_change ? <DeltaCell v={row.delta_cr_basket} /> : <span style={{ color: 'var(--text-subtle)' }}>—</span>}</td>
+                    <td className="py-2 text-right">{row.has_change ? <DeltaCell v={row.delta_cr_order} /> : <span style={{ color: 'var(--text-subtle)' }}>—</span>}</td>
+                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.has_change && row.cpo != null ? fmt(row.cpo) + ' ₽' : '—'}</td>
                   </tr>
                 )
               })}
