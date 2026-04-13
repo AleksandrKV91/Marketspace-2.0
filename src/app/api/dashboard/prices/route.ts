@@ -347,6 +347,7 @@ export async function GET(req: NextRequest) {
     has_change: boolean  // true = реальное изменение цены в периоде
     delta_ctr?: number; delta_cr_basket?: number; delta_cr_order?: number
     cpo?: number; delta_cpm?: number; delta_cpc?: number
+    ad_spend_before?: number; ad_spend_after?: number; delta_ad_spend?: number
   }
   const changes: ChangeRow[] = []
 
@@ -414,6 +415,21 @@ export async function GET(req: NextRequest) {
           }
         }
 
+        let ad_spend_before: number | undefined
+        let ad_spend_after: number | undefined
+        let delta_ad_spend: number | undefined
+        if (skuMs) {
+          const beforeFrom = shiftDate(cur.date, -WINDOW)
+          const beforeTo = shiftDate(cur.date, -1)
+          const afterFrom = cur.date
+          const afterTo = shiftDate(cur.date, WINDOW)
+          const spBefore = avgWindow(skuMs, beforeFrom, beforeTo, 'ad_spend')
+          const spAfter = avgWindow(skuMs, afterFrom, afterTo, 'ad_spend')
+          if (spBefore != null) ad_spend_before = Math.round(spBefore * WINDOW)
+          if (spAfter != null) ad_spend_after = Math.round(spAfter * WINDOW)
+          if (ad_spend_before != null && ad_spend_after != null) delta_ad_spend = ad_spend_after - ad_spend_before
+        }
+
         changes.push({
           sku: String(skuWb),
           name: dim?.name ?? skuMs ?? '',
@@ -429,6 +445,9 @@ export async function GET(req: NextRequest) {
           cpo: change_cpo,
           delta_cpm,
           delta_cpc,
+          ad_spend_before,
+          ad_spend_after,
+          delta_ad_spend,
         })
       }
     }

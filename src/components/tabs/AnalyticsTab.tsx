@@ -12,6 +12,7 @@ import { useDateRange } from '@/components/ui/DateRangePicker'
 import { useGlobalFilters } from '@/app/dashboard/page'
 import { ChevronUp, ChevronDown, ChevronRight, Download, Search, X } from 'lucide-react'
 import type { AnalyticsResponse, CategoryNode, SubjectNode, SkuNode } from '@/app/api/dashboard/analytics/route'
+import { exportToExcelMultiSheet } from '@/lib/exportExcel'
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -109,25 +110,51 @@ function SortTh({ label, sortKey, current, dir, onClick, align = 'right' }: {
   )
 }
 
-// ── CSV export ────────────────────────────────────────────────────────────────
+// ── Excel export (two sheets) ─────────────────────────────────────────────────
 
-function exportCsv(hierarchy: CategoryNode[]) {
-  const rows: string[] = ['Категория,Предмет,SKU WB,SKU MS,Название,Выручка,Δ%,ЧМД,Маржа%,ДРР%,Остаток(руб),Остаток(шт),Прогноз30д(шт),Прогноз30д(руб)']
+function exportExcel(
+  hierarchy: CategoryNode[],
+  visibleSkuMs: Set<string>,
+  daily_by_sku: Array<{ sku_ms: string; date: string; revenue: number; ad_spend: number }> | undefined
+) {
+  const sheet1: Record<string, unknown>[] = []
   for (const cat of hierarchy) {
     for (const subj of cat.subjects) {
       for (const sku of subj.skus) {
-        const fcRev = sku.forecast_30d_qty != null ? Math.round(sku.forecast_30d_qty * sku.price) : ''
-        rows.push([
-          cat.category, subj.subject, sku.sku_ms, sku.sku_wb ?? '', `"${sku.name}"`,
-          sku.revenue, sku.delta_pct != null ? (sku.delta_pct * 100).toFixed(1) : '',
-          sku.chmd, (sku.margin_pct * 100).toFixed(1), (sku.drr * 100).toFixed(1),
-          sku.stock_rub, sku.stock_qty, sku.forecast_30d_qty ?? '', fcRev,
-        ].join(','))
+        if (!visibleSkuMs.has(sku.sku_ms)) continue
+        sheet1.push({
+          'Категория': cat.category,
+          'Предмет': subj.subject,
+          'SKU МС': sku.sku_ms,
+          'SKU WB': sku.sku_wb ?? '',
+          'Название': sku.name,
+          'Выручка, ₽': Math.round(sku.revenue),
+          'Δ%, vs пред.': sku.delta_pct != null ? +(sku.delta_pct * 100).toFixed(1) : '',
+          'ЧМД, ₽': Math.round(sku.chmd),
+          'Маржа%': +(sku.margin_pct * 100).toFixed(1),
+          'ДРР%': +(sku.drr * 100).toFixed(1),
+          'Остаток ₽': Math.round(sku.stock_rub),
+          'Остаток шт.': sku.stock_qty,
+          'Прогноз 30д шт.': sku.forecast_30d_qty ?? '',
+          'Прогноз 30д ₽': sku.forecast_30d_qty != null ? Math.round(sku.forecast_30d_qty * sku.price) : '',
+          'Цена': sku.price,
+        })
       }
     }
   }
-  const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8' })
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'Продажи_и_экономика.csv'; a.click()
+  const sheet2: Record<string, unknown>[] = (daily_by_sku ?? [])
+    .filter(r => visibleSkuMs.has(r.sku_ms))
+    .map(r => ({
+      'SKU МС': r.sku_ms,
+      'Дата': r.date,
+      'Выручка, ₽': Math.round(r.revenue),
+      'Расходы, ₽': Math.round(r.ad_spend),
+      'ДРР%': r.revenue > 0 ? +((r.ad_spend / r.revenue) * 100).toFixed(1) : '',
+    }))
+  exportToExcelMultiSheet(
+    [{ data: sheet1, name: 'Сводная' }, { data: sheet2, name: 'По дням' }],
+    'Продажи_и_экономика'
+  )
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -761,7 +788,7 @@ export default function AnalyticsTab() {
                 <strong style={{ color: 'var(--text)' }}>{fmt(visibleRevenue)}</strong> ₽
               </span>
               <button
-                onClick={() => exportCsv(hierarchy)}
+                onClick={() => exportExcel(hierarchy, visibleSkuMs, daily_by_sku)}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all"
                 style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}
                 onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)' }}

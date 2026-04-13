@@ -50,6 +50,9 @@ interface PriceData {
     cpo?: number
     delta_cpm?: number
     delta_cpc?: number
+    ad_spend_before?: number
+    ad_spend_after?: number
+    delta_ad_spend?: number
   }>
   manager_table?: Array<{
     manager: string
@@ -232,6 +235,9 @@ export default function PriceTab() {
       'Δ CR корзина (п.п.)': r.delta_cr_basket != null ? (r.delta_cr_basket * 100).toFixed(2) : '',
       'Δ CR заказ (п.п.)': r.delta_cr_order != null ? (r.delta_cr_order * 100).toFixed(2) : '',
       'CPO': r.cpo != null ? r.cpo.toFixed(0) : '',
+      'Расходы до, ₽': r.ad_spend_before ?? '',
+      'Расходы после, ₽': r.ad_spend_after ?? '',
+      'Δ расходов, ₽': r.delta_ad_spend ?? '',
     })), 'Цены_изменения')
   }
 
@@ -481,6 +487,9 @@ export default function PriceTab() {
                 <SortTh label="Δ CR корз." sk="delta_cr_basket" />
                 <SortTh label="Δ CR заказ" sk="delta_cr_order" />
                 <SortTh label="CPO" sk="cpo" />
+                <SortTh label="Расх. до" sk="ad_spend_before" />
+                <SortTh label="Расх. после" sk="ad_spend_after" />
+                <SortTh label="Δ расходов" sk="delta_ad_spend" />
               </tr>
             </thead>
             <tbody>
@@ -504,11 +513,21 @@ export default function PriceTab() {
                     <td className="py-2 text-right">{row.has_change ? <DeltaCell v={row.delta_cr_basket} /> : <span style={{ color: 'var(--text-subtle)' }}>—</span>}</td>
                     <td className="py-2 text-right">{row.has_change ? <DeltaCell v={row.delta_cr_order} /> : <span style={{ color: 'var(--text-subtle)' }}>—</span>}</td>
                     <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.has_change && row.cpo != null ? fmt(row.cpo) + ' ₽' : '—'}</td>
+                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.has_change && row.ad_spend_before != null ? fmtRub(row.ad_spend_before) : '—'}</td>
+                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.has_change && row.ad_spend_after != null ? fmtRub(row.ad_spend_after) : '—'}</td>
+                    <td className="py-2 text-right">
+                      {row.has_change && row.delta_ad_spend != null
+                        ? <span className="text-xs font-semibold" style={{ color: row.delta_ad_spend > 0 ? 'var(--danger)' : 'var(--success)' }}>
+                            {row.delta_ad_spend > 0 ? '+' : ''}{fmtRub(row.delta_ad_spend)}
+                          </span>
+                        : <span style={{ color: 'var(--text-subtle)' }}>—</span>
+                      }
+                    </td>
                   </tr>
                 )
               })}
               {filteredPrices.length === 0 && (
-                <tr><td colSpan={11} className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>Нет изменений цен за выбранный период</td></tr>
+                <tr><td colSpan={14} className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>Нет изменений цен за выбранный период</td></tr>
               )}
             </tbody>
           </table>
