@@ -9,18 +9,23 @@ import { GlassCard } from '@/components/ui/GlassCard'
 import { KPIBar } from '@/components/ui/KPIBar'
 import { FilterBar } from '@/components/ui/FilterBar'
 import { exportToExcel } from '@/lib/exportExcel'
-import { MousePointerClick, ShoppingCart, ArrowRight, DollarSign, Megaphone, Percent, ChevronUp, ChevronDown } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronRight } from 'lucide-react'
 import { useDateRange } from '@/components/ui/DateRangePicker'
 
+interface FunnelKpi {
+  ctr: number
+  cr_basket: number
+  cr_order: number
+  cpc: number
+  cpm: number
+  ad_order_share: number
+  drr: number
+  cpo: number
+}
+
 interface PriceData {
-  funnel: {
-    ctr: number
-    cr_basket: number
-    cr_order: number
-    cpc: number
-    cpm: number
-    ad_order_share: number
-  }
+  funnel: FunnelKpi
+  prev_funnel?: FunnelKpi
   daily: Array<{
     date: string
     ctr: number
@@ -44,6 +49,14 @@ interface PriceData {
     delta_cpm?: number
     delta_cpc?: number
   }>
+  manager_table?: Array<{
+    manager: string
+    ctr: number
+    cr_order: number
+    ad_order_share: number
+    revenue: number
+    sku_count: number
+  }>
 }
 
 function fmt(n: number | null | undefined) {
@@ -57,6 +70,11 @@ function fmtDate(iso: string) {
   return `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}`
 }
 
+function calcDelta(curr: number | null | undefined, prev: number | null | undefined) {
+  if (curr == null || prev == null || prev === 0) return undefined
+  return ((curr - prev) / Math.abs(prev)) * 100
+}
+
 function ChartTip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
   if (!active || !payload?.length) return null
   return (
@@ -66,10 +84,31 @@ function ChartTip({ active, payload, label }: { active?: boolean; payload?: Arra
         <div key={p.name} className="flex items-center gap-2 mb-1">
           <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
           <span style={{ color: 'var(--text-muted)' }}>{p.name}:</span>
-          <span className="font-bold ml-auto">{fmt(p.value)}</span>
+          <span className="font-bold ml-auto">
+            {p.name.includes('%') || p.name === 'CTR' || p.name === 'CR корзина' || p.name === 'CR заказ'
+              ? p.value.toFixed(2) + '%'
+              : fmt(p.value)}
+          </span>
         </div>
       ))}
     </div>
+  )
+}
+
+function DeltaBadge({ v, invert = false }: { v?: number; invert?: boolean }) {
+  if (v == null) return null
+  const isPositive = v > 0
+  const isGood = invert ? !isPositive : isPositive
+  return (
+    <span
+      className="text-[10px] font-semibold px-1 py-0.5 rounded"
+      style={{
+        color: isGood ? 'var(--success)' : 'var(--danger)',
+        background: isGood ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+      }}
+    >
+      {isPositive ? '+' : ''}{v.toFixed(1)}%
+    </span>
   )
 }
 
@@ -78,7 +117,7 @@ function DeltaCell({ v }: { v?: number }) {
   const up = v > 0
   return (
     <span className="text-xs font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>
-      {up ? '+' : ''}{v.toFixed(2)}
+      {up ? '+' : ''}{(v * 100).toFixed(2)}п.п.
     </span>
   )
 }
@@ -90,10 +129,11 @@ export default function PriceTab() {
   const { range } = useDateRange()
   const [search, setSearch] = useState('')
   const [priceFilter, setPriceFilter] = useState<Record<string, string>>({
-    direction: 'all', ctr_delta: 'all', cr_delta: 'all', cpm_delta: 'all', cpo: 'all',
+    direction: 'all', ctr_delta: 'all', cr_delta: 'all', cpo: 'all',
   })
   const [sortKey, setSortKey] = useState<string>('date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [expandedManager, setExpandedManager] = useState<string | null>(null)
 
   function toggleSort(key: string) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -112,6 +152,7 @@ export default function PriceTab() {
   }
 
   useEffect(() => {
+    setLoading(true)
     fetch(`/api/dashboard/prices?from=${range.from}&to=${range.to}`)
       .then(r => r.json())
       .then((d: PriceData) => { setData(d); setLoading(false) })
@@ -122,8 +163,8 @@ export default function PriceTab() {
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
       <KPIBar loading items={[
         { label: 'CTR', value: '' }, { label: 'CR в корзину', value: '' },
-        { label: 'CR в заказ', value: '' }, { label: 'CPC', value: '' },
-        { label: 'CPM', value: '' }, { label: 'Доля рекл.', value: '' },
+        { label: 'CR в заказ', value: '' }, { label: 'Доля рекл. заказов', value: '' },
+        { label: 'CPO', value: '' },
       ]} />
     </div>
   )
@@ -131,7 +172,9 @@ export default function PriceTab() {
   if (!data) return null
 
   const f = data.funnel
+  const pf = data.prev_funnel
   const priceChanges = data.price_changes ?? []
+  const managerTable = data.manager_table ?? []
   const hasFilter = Object.values(priceFilter).some(v => v !== 'all') || search.trim() !== ''
 
   const filteredPrices = priceChanges.filter(row => {
@@ -142,8 +185,6 @@ export default function PriceTab() {
     if (priceFilter.ctr_delta === 'down' && (row.delta_ctr == null || row.delta_ctr >= 0)) return false
     if (priceFilter.cr_delta === 'up' && (row.delta_cr_order == null || row.delta_cr_order <= 0)) return false
     if (priceFilter.cr_delta === 'down' && (row.delta_cr_order == null || row.delta_cr_order >= 0)) return false
-    if (priceFilter.cpm_delta === 'up' && (row.delta_cpm == null || row.delta_cpm <= 0)) return false
-    if (priceFilter.cpm_delta === 'down' && (row.delta_cpm == null || row.delta_cpm >= 0)) return false
     if (priceFilter.cpo === 'over200' && (row.cpo == null || row.cpo <= 200)) return false
     if (priceFilter.cpo === 'under200' && (row.cpo == null || row.cpo > 200)) return false
     return true
@@ -168,7 +209,10 @@ export default function PriceTab() {
     exportToExcel(filteredPrices.map(r => ({
       'SKU': r.sku, 'Название': r.name, 'Менеджер': r.manager, 'Дата': r.date,
       'Было': r.price_before, 'Стало': r.price_after, 'Δ%': r.delta_pct.toFixed(1),
-      'CPO': r.cpo ?? '',
+      'Δ CTR (п.п.)': r.delta_ctr != null ? (r.delta_ctr * 100).toFixed(2) : '',
+      'Δ CR корзина (п.п.)': r.delta_cr_basket != null ? (r.delta_cr_basket * 100).toFixed(2) : '',
+      'Δ CR заказ (п.п.)': r.delta_cr_order != null ? (r.delta_cr_order * 100).toFixed(2) : '',
+      'CPO': r.cpo != null ? r.cpo.toFixed(0) : '',
     })), 'Цены_изменения')
   }
 
@@ -181,18 +225,36 @@ export default function PriceTab() {
     'Органические': d.organic_revenue,
   }))
 
+  // KPI дельты
+  const dCtr = calcDelta(f.ctr, pf?.ctr)
+  const dCrBasket = calcDelta(f.cr_basket, pf?.cr_basket)
+  const dCrOrder = calcDelta(f.cr_order, pf?.cr_order)
+  const dAdShare = calcDelta(f.ad_order_share, pf?.ad_order_share)
+  const dCpo = calcDelta(f.cpo, pf?.cpo)
+
   return (
     <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
 
-      {/* KPI bar */}
-      <KPIBar items={[
-        { label: 'CTR',                value: f.ctr != null ? (f.ctr * 100).toFixed(2) + '%' : '—' },
-        { label: 'CR в корзину',       value: f.cr_basket != null ? (f.cr_basket * 100).toFixed(2) + '%' : '—' },
-        { label: 'CR в заказ',         value: f.cr_order != null ? (f.cr_order * 100).toFixed(2) + '%' : '—' },
-        { label: 'CPC',                value: f.cpc != null ? fmt(f.cpc) + ' ₽' : '—' },
-        { label: 'CPM',                value: f.cpm != null ? fmt(f.cpm) + ' ₽' : '—' },
-        { label: 'Доля рекл. заказов', value: f.ad_order_share != null ? (f.ad_order_share * 100).toFixed(1) + '%' : '—' },
-      ]} />
+      {/* KPI bar — 5 карточек */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
+        {([
+          { label: 'CTR', value: f.ctr != null ? (f.ctr * 100).toFixed(2) + '%' : '—', delta: dCtr, invert: false },
+          { label: 'CR в корзину', value: f.cr_basket != null ? (f.cr_basket * 100).toFixed(2) + '%' : '—', delta: dCrBasket, invert: false },
+          { label: 'CR в заказ', value: f.cr_order != null ? (f.cr_order * 100).toFixed(2) + '%' : '—', delta: dCrOrder, invert: false },
+          { label: 'Доля рекл. заказов', value: f.ad_order_share != null ? (f.ad_order_share * 100).toFixed(1) + '%' : '—', delta: dAdShare, invert: false },
+          { label: 'CPO', value: f.cpo != null ? fmt(f.cpo) + ' ₽' : '—', delta: dCpo, invert: true },
+        ] as const).map(item => (
+          <GlassCard key={item.label} padding="md">
+            <p className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>{item.label}</p>
+            <p className="text-xl font-bold" style={{ color: 'var(--text)' }}>{item.value}</p>
+            {item.delta != null && (
+              <div className="mt-1">
+                <DeltaBadge v={item.delta} invert={item.invert} />
+              </div>
+            )}
+          </GlassCard>
+        ))}
+      </div>
 
       {/* Charts */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -222,10 +284,10 @@ export default function PriceTab() {
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} />
-                <Tooltip content={<ChartTip />} />
+                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.04)' }} content={<ChartTip />} />
                 <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="Рекламные" fill="var(--accent)" radius={[4,4,0,0]} />
-                <Bar dataKey="Органические" fill="var(--info)" radius={[4,4,0,0]} />
+                <Bar dataKey="Рекламные" fill="var(--accent)" radius={[4,4,0,0]} activeBar={{ fill: 'rgba(99,102,241,0.5)', stroke: 'none' }} />
+                <Bar dataKey="Органические" fill="var(--info)" radius={[4,4,0,0]} activeBar={{ fill: 'rgba(59,130,246,0.5)', stroke: 'none' }} />
               </BarChart>
             </ResponsiveContainer>
           ) : <div className="flex items-center justify-center h-56 text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных</div>}
@@ -247,6 +309,101 @@ export default function PriceTab() {
               <Bar dataKey="Стало" fill="var(--accent)" radius={[0,4,4,0]} barSize={8} />
             </ComposedChart>
           </ResponsiveContainer>
+        </GlassCard>
+      )}
+
+      {/* Таблица менеджеров */}
+      {managerTable.length > 0 && (
+        <GlassCard padding="lg">
+          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>По менеджерам</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs border-b" style={{ borderColor: 'var(--border)', color: 'var(--text-subtle)' }}>
+                  <th className="text-left pb-2 font-medium">Менеджер</th>
+                  <th className="text-right pb-2 font-medium">CTR</th>
+                  <th className="text-right pb-2 font-medium">CR заказ</th>
+                  <th className="text-right pb-2 font-medium">Доля рекл.</th>
+                  <th className="text-right pb-2 font-medium">Выручка</th>
+                  <th className="text-right pb-2 font-medium">SKU</th>
+                  <th className="text-right pb-2 font-medium"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {managerTable.map(m => {
+                  const isExpanded = expandedManager === m.manager
+                  const mgrChanges = filteredPrices.filter(r => r.manager === m.manager)
+                  return (
+                    <>
+                      <tr
+                        key={m.manager}
+                        className="border-t cursor-pointer hover:bg-white/5 transition-colors"
+                        style={{ borderColor: 'var(--border)' }}
+                        onClick={() => setExpandedManager(isExpanded ? null : m.manager)}
+                      >
+                        <td className="py-2 pr-4 font-medium" style={{ color: 'var(--text)' }}>{m.manager || '—'}</td>
+                        <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{(m.ctr * 100).toFixed(2)}%</td>
+                        <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{(m.cr_order * 100).toFixed(2)}%</td>
+                        <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{(m.ad_order_share * 100).toFixed(1)}%</td>
+                        <td className="py-2 text-right font-semibold text-xs" style={{ color: 'var(--text)' }}>{fmt(m.revenue)} ₽</td>
+                        <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{m.sku_count}</td>
+                        <td className="py-2 text-right">
+                          <ChevronRight
+                            size={14}
+                            style={{
+                              color: 'var(--text-muted)',
+                              transform: isExpanded ? 'rotate(90deg)' : 'none',
+                              transition: 'transform 0.15s',
+                              display: 'inline-block',
+                            }}
+                          />
+                        </td>
+                      </tr>
+                      {isExpanded && mgrChanges.length > 0 && (
+                        <tr key={`${m.manager}-exp`} style={{ borderColor: 'var(--border)' }}>
+                          <td colSpan={7} className="pb-3 pt-0">
+                            <div className="rounded-lg overflow-x-auto" style={{ background: 'var(--surface-popup)', border: '1px solid var(--border)' }}>
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-subtle)' }}>
+                                    <th className="text-left px-3 py-2 font-medium">SKU</th>
+                                    <th className="text-left px-3 py-2 font-medium">Название</th>
+                                    <th className="text-right px-3 py-2 font-medium">Дата</th>
+                                    <th className="text-right px-3 py-2 font-medium">Было</th>
+                                    <th className="text-right px-3 py-2 font-medium">Стало</th>
+                                    <th className="text-right px-3 py-2 font-medium">Δ%</th>
+                                    <th className="text-right px-3 py-2 font-medium">Δ CTR</th>
+                                    <th className="text-right px-3 py-2 font-medium">Δ CR заказ</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {mgrChanges.slice(0, 20).map((row, i) => {
+                                    const up = row.delta_pct > 0
+                                    return (
+                                      <tr key={i} style={{ borderTop: i > 0 ? '1px solid var(--border)' : undefined }}>
+                                        <td className="px-3 py-1.5 font-mono" style={{ color: 'var(--text-muted)' }}>{row.sku}</td>
+                                        <td className="px-3 py-1.5 max-w-[160px] truncate" style={{ color: 'var(--text)' }}>{row.name}</td>
+                                        <td className="px-3 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtDate(row.date)}</td>
+                                        <td className="px-3 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(row.price_before)} ₽</td>
+                                        <td className="px-3 py-1.5 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmt(row.price_after)} ₽</td>
+                                        <td className="px-3 py-1.5 text-right"><span className="font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>{up ? '+' : ''}{row.delta_pct.toFixed(1)}%</span></td>
+                                        <td className="px-3 py-1.5 text-right"><DeltaCell v={row.delta_ctr} /></td>
+                                        <td className="px-3 py-1.5 text-right"><DeltaCell v={row.delta_cr_order} /></td>
+                                      </tr>
+                                    )
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </GlassCard>
       )}
 
@@ -273,11 +430,6 @@ export default function PriceTab() {
                 { value: 'up', label: '↑ Вырос' },
                 { value: 'down', label: '↓ Упал' },
               ]},
-              { label: 'Δ CPM', key: 'cpm_delta', options: [
-                { value: 'all', label: 'Все' },
-                { value: 'up', label: '↑ Вырос' },
-                { value: 'down', label: '↓ Упал' },
-              ]},
               { label: 'CPO', key: 'cpo', options: [
                 { value: 'all', label: 'Все' },
                 { value: 'over200', label: '> 200 ₽' },
@@ -286,7 +438,7 @@ export default function PriceTab() {
             ]}
             values={priceFilter}
             onChange={(k, v) => setPriceFilter(f => ({ ...f, [k]: v }))}
-            onReset={() => { setPriceFilter({ direction: 'all', ctr_delta: 'all', cr_delta: 'all', cpm_delta: 'all', cpo: 'all' }); setSearch('') }}
+            onReset={() => { setPriceFilter({ direction: 'all', ctr_delta: 'all', cr_delta: 'all', cpo: 'all' }); setSearch('') }}
             hasActive={hasFilter}
             onExport={exportPrices}
             summary={<span className="text-xs" style={{ color: 'var(--text-muted)' }}>Изменения цен · {filteredPrices.length}</span>}
@@ -299,7 +451,7 @@ export default function PriceTab() {
                 <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>SKU</th>
                 <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Название</th>
                 <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Менеджер</th>
-                <SortTh label="Дата" sk="date" />
+                <SortTh label="Дата" sk="date" align="right" />
                 <SortTh label="Было" sk="price_before" />
                 <SortTh label="Стало" sk="price_after" />
                 <SortTh label="Δ%" sk="delta_pct" />
@@ -307,8 +459,6 @@ export default function PriceTab() {
                 <SortTh label="Δ CR корз." sk="delta_cr_basket" />
                 <SortTh label="Δ CR заказ" sk="delta_cr_order" />
                 <SortTh label="CPO" sk="cpo" />
-                <SortTh label="Δ CPM" sk="delta_cpm" />
-                <SortTh label="Δ CPC" sk="delta_cpc" />
               </tr>
             </thead>
             <tbody>
@@ -327,13 +477,11 @@ export default function PriceTab() {
                     <td className="py-2 text-right"><DeltaCell v={row.delta_cr_basket} /></td>
                     <td className="py-2 text-right"><DeltaCell v={row.delta_cr_order} /></td>
                     <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.cpo != null ? fmt(row.cpo) + ' ₽' : '—'}</td>
-                    <td className="py-2 text-right"><DeltaCell v={row.delta_cpm} /></td>
-                    <td className="py-2 text-right"><DeltaCell v={row.delta_cpc} /></td>
                   </tr>
                 )
               })}
               {filteredPrices.length === 0 && (
-                <tr><td colSpan={13} className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>Нет изменений цен за выбранный период</td></tr>
+                <tr><td colSpan={11} className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>Нет изменений цен за выбранный период</td></tr>
               )}
             </tbody>
           </table>
