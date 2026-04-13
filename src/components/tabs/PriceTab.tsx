@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
+  Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
   BarChart, Bar, ComposedChart
 } from 'recharts'
 import { GlassCard } from '@/components/ui/GlassCard'
@@ -33,6 +33,7 @@ interface PriceData {
     cr_order: number
     ad_revenue: number
     organic_revenue: number
+    avg_price?: number | null
   }>
   price_changes: Array<{
     sku: string
@@ -113,12 +114,15 @@ function DeltaBadge({ v, invert = false }: { v?: number; invert?: boolean }) {
   )
 }
 
+// v — абсолютная разность долей (напр. 0.01 = +1 п.п.)
+// Показываем как %: +1.00п.п. → если хотим % нужна база. Показываем п.п. но с явным знаком
 function DeltaCell({ v }: { v?: number }) {
   if (v == null) return <span style={{ color: 'var(--text-subtle)' }}>—</span>
   const up = v > 0
+  const pct = (v * 100).toFixed(2)
   return (
     <span className="text-xs font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>
-      {up ? '+' : ''}{(v * 100).toFixed(2)}п.п.
+      {up ? '+' : ''}{pct}%
     </span>
   )
 }
@@ -136,7 +140,7 @@ export default function PriceTab() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [expandedManager, setExpandedManager] = useState<string | null>(null)
   const filterBarRef = useRef<HTMLDivElement>(null)
-  const [theadTop, setTheadTop] = useState(110)
+  const [stickyTop, setStickyTop] = useState({ filterRow: 88, thead: 88 + 52 })
 
   useEffect(() => {
     function measure() {
@@ -144,7 +148,7 @@ export default function PriceTab() {
       const filterBar = filterBarRef.current
       const headerH = header ? header.getBoundingClientRect().height : 88
       const filterH = filterBar ? filterBar.getBoundingClientRect().height : 52
-      setTheadTop(headerH + filterH)
+      setStickyTop({ filterRow: headerH, thead: headerH + filterH })
     }
     const t = setTimeout(() => requestAnimationFrame(measure), 100)
     window.addEventListener('resize', measure)
@@ -216,14 +220,6 @@ export default function PriceTab() {
     return String(av ?? '').localeCompare(String(bv ?? '')) * mult
   })
 
-  // Top-10 изменений для графика до/после
-  const priceBeforeAfter = filteredPrices.slice(0, 10).map(r => ({
-    name: r.name.length > 16 ? r.name.slice(0, 14) + '…' : r.name,
-    'Было': r.price_before,
-    'Стало': r.price_after,
-    delta: r.delta_pct,
-  }))
-
   function exportPrices() {
     exportToExcel(filteredPrices.map(r => ({
       'SKU': r.sku, 'Название': r.name, 'Менеджер': r.manager, 'Дата': r.date,
@@ -242,6 +238,7 @@ export default function PriceTab() {
     'CR заказ': +(d.cr_order * 100).toFixed(2),
     'Рекламные': d.ad_revenue,
     'Органические': d.organic_revenue,
+    'Цена ср.': d.avg_price ?? null,
   }))
 
   // KPI дельты
@@ -277,20 +274,23 @@ export default function PriceTab() {
 
       {/* Charts */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        {/* Воронка конверсий + средневзвешенная цена (правая ось) */}
         <GlassCard padding="lg">
           <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Воронка конверсий по дням</p>
           {dailyFmt.length > 0 ? (
             <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={dailyFmt} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <ComposedChart data={dailyFmt} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => `${v}%`} />
+                <YAxis yAxisId="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => `${v}%`} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} />
                 <Tooltip content={<ChartTip />} />
                 <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-                <Line type="monotone" dataKey="CTR" stroke="var(--info)" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="CR корзина" stroke="var(--warning)" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="CR заказ" stroke="var(--success)" strokeWidth={2} dot={false} />
-              </LineChart>
+                <Line yAxisId="left" type="monotone" dataKey="CTR" stroke="var(--info)" strokeWidth={2} dot={false} />
+                <Line yAxisId="left" type="monotone" dataKey="CR корзина" stroke="var(--warning)" strokeWidth={2} dot={false} />
+                <Line yAxisId="left" type="monotone" dataKey="CR заказ" stroke="var(--success)" strokeWidth={2} dot={false} />
+                <Line yAxisId="right" type="monotone" dataKey="Цена ср." stroke="var(--accent)" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />
+              </ComposedChart>
             </ResponsiveContainer>
           ) : <div className="flex items-center justify-center h-56 text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных</div>}
         </GlassCard>
@@ -312,24 +312,6 @@ export default function PriceTab() {
           ) : <div className="flex items-center justify-center h-56 text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных</div>}
         </GlassCard>
       </div>
-
-      {/* График до/после изменения цены */}
-      {priceBeforeAfter.length > 0 && (
-        <GlassCard padding="lg">
-          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Цена до / после — последние изменения</p>
-          <ResponsiveContainer width="100%" height={200}>
-            <ComposedChart data={priceBeforeAfter} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} horizontal={false} />
-              <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} tickFormatter={v => fmt(v as number)} />
-              <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} width={100} tickLine={false} axisLine={false} />
-              <Tooltip formatter={(v) => fmt(v as number) + ' ₽'} />
-              <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-              <Bar dataKey="Было" fill="var(--border)" radius={[0,4,4,0]} barSize={8} />
-              <Bar dataKey="Стало" fill="var(--accent)" radius={[0,4,4,0]} barSize={8} />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </GlassCard>
-      )}
 
       {/* Таблица менеджеров */}
       {managerTable.length > 0 && (
@@ -427,8 +409,21 @@ export default function PriceTab() {
       )}
 
       {/* Таблица изменений цен */}
-      <GlassCard padding="lg" style={{ isolation: 'auto' }}>
-        <div className="mb-4" ref={filterBarRef}>
+      <GlassCard padding="none" style={{ isolation: 'auto' }}>
+        {/* Sticky filter bar */}
+        <div
+          ref={filterBarRef}
+          className="px-4 py-3 border-b"
+          style={{
+            position: 'sticky',
+            top: stickyTop.filterRow,
+            zIndex: 20,
+            background: 'var(--surface-solid)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            borderColor: 'var(--border)',
+          }}
+        >
           <FilterBar
             search={search}
             onSearch={setSearch}
@@ -467,10 +462,10 @@ export default function PriceTab() {
             summary={<span className="text-xs" style={{ color: 'var(--text-muted)' }}>Изменения цен · {filteredPrices.length}</span>}
           />
         </div>
-        <div style={{ overflowX: 'clip' }}>
+        <div style={{ overflowX: 'clip', padding: '0 1rem' }}>
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-xs" style={{ position: 'sticky', top: theadTop, zIndex: 10, background: 'var(--surface-solid)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}>
+              <tr className="text-xs" style={{ position: 'sticky', top: stickyTop.thead, zIndex: 10, background: 'var(--surface-solid)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}>
                 <th className="text-left pb-3 pt-2 font-medium" style={{ color: 'var(--text-subtle)' }}>SKU</th>
                 <th className="text-left pb-3 pt-2 font-medium" style={{ color: 'var(--text-subtle)' }}>Название</th>
                 <th className="text-left pb-3 pt-2 font-medium" style={{ color: 'var(--text-subtle)' }}>Менеджер</th>

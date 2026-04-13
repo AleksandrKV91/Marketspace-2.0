@@ -268,11 +268,48 @@ export async function GET(req: NextRequest) {
     cpo: prevCpo,
   }
 
-  // daily chart — CTR/CR по дням + ad_revenue/organic split
+  // Средневзвешенная цена по дням — для каждого дня берём последнюю известную цену
+  // каждого SKU на эту дату, взвешиваем по выручке
+  // Сначала строим "последнюю цену SKU на дату" из priceRows
+  const skuWbPriceHistory: Record<number, Array<{ date: string; price: number }>> = {}
+  for (const r of priceRows) {
+    if (!r.sku_wb || r.price == null) continue
+    if (!skuWbPriceHistory[r.sku_wb]) skuWbPriceHistory[r.sku_wb] = []
+    skuWbPriceHistory[r.sku_wb].push({ date: r.price_date, price: r.price })
+  }
+  for (const arr of Object.values(skuWbPriceHistory)) arr.sort((a, b) => a.date.localeCompare(b.date))
+
+  function getPriceOnDate(skuWb: number, date: string): number | null {
+    const hist = skuWbPriceHistory[skuWb]
+    if (!hist || hist.length === 0) return null
+    // последняя запись <= date
+    let last: number | null = null
+    for (const h of hist) {
+      if (h.date <= date) last = h.price
+      else break
+    }
+    return last
+  }
+
+  // daily chart — CTR/CR по дням + ad_revenue/organic split + средневзв. цена
   const daily = Object.entries(dateMap)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, d]) => {
       const adShare = d.adShareN > 0 ? d.adShareSum / d.adShareN : 0
+      // Средневзвешенная цена: Σ(price_i × revenue_i) / Σrevenue_i
+      let priceWeightedSum = 0
+      let priceWeightTotal = 0
+      for (const r of currDailyRows) {
+        if (r.metric_date !== date) continue
+        const skuWb = snapSkuWbMap[r.sku_ms]
+        if (!skuWb) continue
+        const price = getPriceOnDate(skuWb, date)
+        if (price != null && r.revenue) {
+          priceWeightedSum += price * r.revenue
+          priceWeightTotal += r.revenue
+        }
+      }
+      const avg_price = priceWeightTotal > 0 ? Math.round(priceWeightedSum / priceWeightTotal) : null
       return {
         date,
         ctr: d.ctrN > 0 ? d.ctrSum / d.ctrN : 0,
@@ -280,6 +317,7 @@ export async function GET(req: NextRequest) {
         cr_order: d.crOrderN > 0 ? d.crOrderSum / d.crOrderN : 0,
         ad_revenue: Math.round(d.revenue * adShare),
         organic_revenue: Math.round(d.revenue * (1 - adShare)),
+        avg_price,
       }
     })
 
@@ -397,18 +435,17 @@ export async function GET(req: NextRequest) {
 
     // Если в периоде не было изменений — добавить строку с текущей ценой (без дельты)
     if (!foundChangeInPeriod) {
-      // Найти последнюю цену на или до конца периода
       const lastEntry = entries.filter(e => e.date <= periodTo).slice(-1)[0]
         ?? entries[entries.length - 1]
       if (lastEntry) {
-        const prevEntry = entries[entries.indexOf(lastEntry) - 1] ?? null
+        const currentPrice = lastEntry.price ?? (skuMs ? snapPriceMap[skuMs] ?? 0 : 0)
         changes.push({
           sku: String(skuWb),
           name: dim?.name ?? skuMs ?? '',
           manager,
           date: lastEntry.date,
-          price_before: prevEntry?.price ?? lastEntry.price ?? 0,
-          price_after: lastEntry.price ?? 0,
+          price_before: currentPrice,
+          price_after: currentPrice,
           delta_pct: 0,
           has_change: false,
         })
