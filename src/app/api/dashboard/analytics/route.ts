@@ -256,7 +256,7 @@ export async function GET(req: Request) {
       drr,
       stock_rub:       stockRub,
       stock_qty:       totalStock,
-      stock_days:      dim?.stock_days ?? null,
+      stock_days:      snap?.stock_days ?? null,
       forecast_30d_qty: forecastQty,
       price,
     }
