@@ -246,6 +246,8 @@ function UploadCard({
 
 // ── Основной компонент ────────────────────────────────────────────────────────
 
+type RefreshState = 'idle' | 'running' | 'ok' | 'error'
+
 export default function UpdateTab() {
   const [states, setStates] = useState<Record<FileType, UploadState>>({
     catalog: { status: 'idle', progress: 0, message: 'Не загружен' },
@@ -257,6 +259,8 @@ export default function UpdateTab() {
 
   const [history, setHistory] = useState<UploadRecord[]>([])
   const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [refreshState, setRefreshState] = useState<RefreshState>('idle')
+  const [refreshResult, setRefreshResult] = useState<string | null>(null)
 
   const loadHistory = async () => {
     try {
@@ -305,6 +309,29 @@ export default function UpdateTab() {
     }
   }
 
+  const handleRefreshAgg = async () => {
+    setRefreshState('running')
+    setRefreshResult(null)
+    try {
+      const res = await fetch('/api/admin/refresh-daily-agg', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const json = await res.json()
+      if (res.ok && json.ok) {
+        setRefreshState('ok')
+        setRefreshResult(`Готово: обработано ${json.rows_processed?.toLocaleString('ru-RU') ?? '?'} строк → ${json.agg_rows?.toLocaleString('ru-RU') ?? '?'} агрегатов`)
+      } else {
+        setRefreshState('error')
+        setRefreshResult(json.errors?.[0] ?? json.error ?? 'Неизвестная ошибка')
+      }
+    } catch (e) {
+      setRefreshState('error')
+      setRefreshResult(String(e))
+    }
+  }
+
   const FILE_TYPE_LABELS: Record<string, string> = {
     catalog: 'Свод',
     abc: 'АВС анализ',
@@ -333,6 +360,36 @@ export default function UpdateTab() {
             onFile={file => handleFile(config.type, file)}
           />
         ))}
+      </div>
+
+      {/* Служебные операции */}
+      <div className="rounded-xl border border-gray-100 dark:border-white/10 p-4 space-y-3">
+        <h3 className="text-sm font-semibold text-[#1A1A2E] dark:text-white">
+          Служебные операции
+        </h3>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={handleRefreshAgg}
+            disabled={refreshState === 'running'}
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+            style={{
+              background: refreshState === 'running' ? 'var(--surface)' : 'var(--accent-glass)',
+              border: '1px solid var(--accent)',
+              color: 'var(--accent)',
+              cursor: refreshState === 'running' ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {refreshState === 'running' ? '⟳ Пересчёт...' : '⟳ Пересчитать агрегаты'}
+          </button>
+          {refreshResult && (
+            <span className="text-xs" style={{ color: refreshState === 'ok' ? 'var(--success)' : 'var(--danger)' }}>
+              {refreshState === 'ok' ? '✓ ' : '✗ '}{refreshResult}
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-gray-400 dark:text-gray-500">
+          Пересчитывает агрегаты KPI и графиков по всей истории. Нужно запустить один раз после первого деплоя, затем данные обновляются автоматически при каждой загрузке отчёта по SKU.
+        </p>
       </div>
 
       <div>
