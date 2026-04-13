@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
+import { cached } from '@/lib/cache'
 
 export const maxDuration = 60
 
@@ -21,24 +22,26 @@ export async function GET(req: NextRequest) {
   const fromParam = searchParams.get('from')
   const toParam = searchParams.get('to')
 
-  // Latest upload IDs
-  const { data: lastUploads } = await supabase
-    .from('uploads')
-    .select('id, file_type')
-    .eq('status', 'ok')
-    .order('uploaded_at', { ascending: false })
-    .limit(20)
-  const latestByType: Record<string, string> = {}
-  if (lastUploads) for (const u of lastUploads) {
-    if (!latestByType[u.file_type]) latestByType[u.file_type] = u.id
-  }
+  // Latest upload IDs (TTL 60s)
+  const latestByType = await cached('latest_uploads', 60_000, async () => {
+    const { data: lastUploads } = await supabase
+      .from('uploads').select('id, file_type')
+      .eq('status', 'ok').order('uploaded_at', { ascending: false }).limit(20)
+    const result: Record<string, string> = {}
+    if (lastUploads) for (const u of lastUploads) {
+      if (!result[u.file_type]) result[u.file_type] = u.id
+    }
+    return result
+  })
   const skuReportId = latestByType['sku_report']
 
-  // fact_sku_snapshot — все SKU (источник истины: список товаров + менеджеры + текущие цены)
-  // Используем fetchAll с фильтром по upload_id
+  // Параллельно: snapshot + dim_sku (cached)
   type SnapRow = { sku_ms: string; sku_wb: number | null; manager: string | null; price: number | null }
-  const allSnapRows: SnapRow[] = []
-  if (skuReportId) {
+  type DimNameRow = { sku_ms: string; name: string | null; brand: string | null; subject_wb: string | null }
+
+  async function fetchSnapshot(): Promise<SnapRow[]> {
+    if (!skuReportId) return []
+    const rows: SnapRow[] = []
     let snapOffset = 0
     const snapPageSize = 1000
     while (true) {
@@ -48,30 +51,34 @@ export async function GET(req: NextRequest) {
         .eq('upload_id', skuReportId)
         .range(snapOffset, snapOffset + snapPageSize - 1)
       if (error || !data || data.length === 0) break
-      allSnapRows.push(...data)
+      rows.push(...data)
       if (data.length < snapPageSize) break
       snapOffset += snapPageSize
     }
+    return rows
   }
 
+  const [allSnapRows, allDimRows] = await Promise.all([
+    fetchSnapshot(),
+    cached<DimNameRow[]>('dim_sku_names', 10 * 60_000, async () =>
+      fetchAll<DimNameRow>(
+        (sb) => sb.from('dim_sku').select('sku_ms, name, brand, subject_wb'),
+        supabase,
+      )
+    ),
+  ])
+
   const managerMap: Record<string, string> = {}
-  const snapPriceMap: Record<string, number> = {}   // sku_ms → текущая цена
-  const snapSkuWbMap: Record<string, number> = {}   // sku_ms → sku_wb
+  const snapPriceMap: Record<string, number> = {}
+  const snapSkuWbMap: Record<string, number> = {}
   for (const r of allSnapRows) {
     managerMap[r.sku_ms] = r.manager ?? ''
     if (r.price != null) snapPriceMap[r.sku_ms] = r.price
     if (r.sku_wb != null) snapSkuWbMap[r.sku_ms] = r.sku_wb
   }
 
-  // dim_sku — имена для всех SKU из снапшота
-  const allSkuMsSnap = allSnapRows.map(r => r.sku_ms)
-  const nameMap: Record<string, { name: string | null; brand: string | null; subject_wb: string | null }> = {}
-  for (let i = 0; i < allSkuMsSnap.length; i += 500) {
-    const { data: dimRows } = await supabase
-      .from('dim_sku').select('sku_ms, name, brand, subject_wb')
-      .in('sku_ms', allSkuMsSnap.slice(i, i + 500))
-    if (dimRows) for (const r of dimRows) nameMap[r.sku_ms] = r
-  }
+  const nameMap: Record<string, DimNameRow> = {}
+  for (const r of allDimRows) nameMap[r.sku_ms] = r
 
   // fact_price_changes — история цен
   // Берём записи с запасом: от (from - 14 дней) чтобы иметь "предыдущую" цену перед периодом

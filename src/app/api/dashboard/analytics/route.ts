@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
+import { cached } from '@/lib/cache'
 
 export const maxDuration = 60
 
@@ -99,27 +100,29 @@ export async function GET(req: Request) {
   const mgrFilter  = url.searchParams.get('manager') ?? ''
   const novFilter  = url.searchParams.get('novelty') ?? ''
 
-  // ── 1. Latest uploads ────────────────────────────────────────────────────────
-  const { data: lastUploads } = await supabase
-    .from('uploads').select('id, file_type')
-    .eq('status', 'ok').order('uploaded_at', { ascending: false }).limit(20)
-
-  const latestByType: Record<string, string> = {}
-  if (lastUploads) for (const u of lastUploads) {
-    if (!latestByType[u.file_type]) latestByType[u.file_type] = u.id
-  }
+  // ── 1. Latest uploads (TTL 60s) ──────────────────────────────────────────────
+  const latestByType = await cached('latest_uploads', 60_000, async () => {
+    const { data: lastUploads } = await supabase
+      .from('uploads').select('id, file_type')
+      .eq('status', 'ok').order('uploaded_at', { ascending: false }).limit(20)
+    const result: Record<string, string> = {}
+    if (lastUploads) for (const u of lastUploads) {
+      if (!result[u.file_type]) result[u.file_type] = u.id
+    }
+    return result
+  })
 
   const skuRepId = latestByType['sku_report']
 
-  // ── 2. dim_sku ───────────────────────────────────────────────────────────────
-  const dimRows = await fetchAll<{
-    sku_ms: string; sku_wb: number | null; name: string | null
-    category_wb: string | null; subject_wb: string | null
-  }>(
-    (sb) => sb.from('dim_sku').select('sku_ms, sku_wb, name, category_wb, subject_wb'),
-    supabase,
+  // ── 2. dim_sku (TTL 10min) ───────────────────────────────────────────────────
+  type DimRow = { sku_ms: string; sku_wb: number | null; name: string | null; category_wb: string | null; subject_wb: string | null }
+  const dimRows = await cached<DimRow[]>('dim_sku_all', 10 * 60_000, async () =>
+    fetchAll<DimRow>(
+      (sb) => sb.from('dim_sku').select('sku_ms, sku_wb, name, category_wb, subject_wb'),
+      supabase,
+    )
   )
-  const dimByMs: Record<string, typeof dimRows[0]> = {}
+  const dimByMs: Record<string, DimRow> = {}
   for (const r of dimRows) dimByMs[r.sku_ms] = r
 
   // ── 3. fact_sku_snapshot ─────────────────────────────────────────────────────
