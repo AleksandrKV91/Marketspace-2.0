@@ -35,15 +35,24 @@ export async function GET(req: NextRequest) {
   const skuReportId = latestByType['sku_report']
 
   // fact_sku_snapshot — все SKU (источник истины: список товаров + менеджеры + текущие цены)
+  // Используем fetchAll с фильтром по upload_id
   type SnapRow = { sku_ms: string; sku_wb: number | null; manager: string | null; price: number | null }
-  const allSnapRows = skuReportId
-    ? await fetchAll<SnapRow>(
-        (sb) => sb.from('fact_sku_snapshot')
-          .select('sku_ms, sku_wb, manager, price')
-          .eq('upload_id', skuReportId),
-        supabase,
-      )
-    : []
+  const allSnapRows: SnapRow[] = []
+  if (skuReportId) {
+    let snapOffset = 0
+    const snapPageSize = 1000
+    while (true) {
+      const { data, error } = await supabase
+        .from('fact_sku_snapshot')
+        .select('sku_ms, sku_wb, manager, price')
+        .eq('upload_id', skuReportId)
+        .range(snapOffset, snapOffset + snapPageSize - 1)
+      if (error || !data || data.length === 0) break
+      allSnapRows.push(...data)
+      if (data.length < snapPageSize) break
+      snapOffset += snapPageSize
+    }
+  }
 
   const managerMap: Record<string, string> = {}
   const snapPriceMap: Record<string, number> = {}   // sku_ms → текущая цена
@@ -64,15 +73,29 @@ export async function GET(req: NextRequest) {
     if (dimRows) for (const r of dimRows) nameMap[r.sku_ms] = r
   }
 
-  // fact_price_changes — ВСЯ история цен (без фильтра по дате),
-  // чтобы корректно вычислить изменения на границе периода
+  // fact_price_changes — история цен
+  // Берём записи с запасом: от (from - 14 дней) чтобы иметь "предыдущую" цену перед периодом
   type PriceRow = { sku_wb: number | null; sku_ms: string | null; price_date: string; price: number | null }
-  const priceRows = await fetchAll<PriceRow>(
-    (sb) => sb.from('fact_price_changes')
-      .select('sku_wb, sku_ms, price_date, price')
-      .order('price_date', { ascending: true }),
-    supabase,
-  )
+  const priceFrom = fromParam ? shiftDate(fromParam, -14) : null
+  const priceRows: PriceRow[] = []
+  {
+    let offset = 0
+    const pageSize = 1000
+    while (true) {
+      let q = supabase
+        .from('fact_price_changes')
+        .select('sku_wb, sku_ms, price_date, price')
+        .order('price_date', { ascending: true })
+        .range(offset, offset + pageSize - 1)
+      if (priceFrom) q = q.gte('price_date', priceFrom)
+      if (toParam) q = q.lte('price_date', toParam)
+      const { data, error } = await q
+      if (error || !data || data.length === 0) break
+      priceRows.push(...data)
+      if (data.length < pageSize) break
+      offset += pageSize
+    }
+  }
 
   // Определить диапазоны дат
   let fromDaily = fromParam
