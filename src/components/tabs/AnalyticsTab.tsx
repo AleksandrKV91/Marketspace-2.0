@@ -504,9 +504,9 @@ export default function AnalyticsTab() {
         </GlassCard>
       </div>
 
-      {/* Hierarchical table */}
+      {/* Hierarchical table — isolation:auto needed so sticky thead works through GlassCard */}
       <div ref={tableRef}>
-        <GlassCard padding="none">
+        <GlassCard padding="none" style={{ isolation: 'auto' }}>
           {/* Table filter row */}
           <div
             ref={filterRowRef}
@@ -597,7 +597,7 @@ export default function AnalyticsTab() {
           </div>
 
           {/* Table */}
-          <div style={{ overflowX: 'auto', overflowY: 'visible' }}>
+          <div style={{ overflowX: 'clip' }}>
             <table className="w-full text-xs" style={{ borderCollapse: 'collapse', minWidth: 800 }}>
               <thead>
                 <tr style={{ background: 'var(--surface)', position: 'sticky', top: stickyTop.thead, zIndex: 10 }}>

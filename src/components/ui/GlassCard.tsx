@@ -1,11 +1,12 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { type ReactNode } from 'react'
+import { type ReactNode, type CSSProperties } from 'react'
 
 interface Props {
   children: ReactNode
   className?: string
+  style?: CSSProperties
   padding?: 'none' | 'sm' | 'md' | 'lg'
   hover?: boolean
   solid?: boolean
@@ -18,6 +19,7 @@ const padMap = { none: '', sm: 'p-3', md: 'p-4', lg: 'p-5' }
 export function GlassCard({
   children,
   className = '',
+  style,
   padding = 'md',
   hover = false,
   solid = false,
@@ -35,7 +37,7 @@ export function GlassCard({
       transition={{ type: 'spring', stiffness: 400, damping: 28, delay }}
       className={`${base} ${hoverCls} ${padCls} ${className}`}
       onClick={onClick}
-      style={{ cursor: onClick ? 'pointer' : undefined }}
+      style={{ cursor: onClick ? 'pointer' : undefined, ...style }}
     >
       {children}
     </motion.div>
