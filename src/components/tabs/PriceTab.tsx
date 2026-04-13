@@ -67,6 +67,10 @@ function fmt(n: number | null | undefined) {
   if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(0) + 'К'
   return n.toFixed(0)
 }
+function fmtRub(n: number | null | undefined) {
+  if (n == null) return '—'
+  return Math.round(n).toLocaleString('ru-RU') + ' ₽'
+}
 function fmtDate(iso: string) {
   const d = new Date(iso)
   return `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}`
@@ -162,7 +166,7 @@ export default function PriceTab() {
   function SortTh({ label, sk, align = 'right' }: { label: string; sk: string; align?: 'left' | 'right' }) {
     const active = sortKey === sk
     return (
-      <th className={`text-${align} pb-3 pt-2 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text-subtle)' }} onClick={() => toggleSort(sk)}>
+      <th className={`text-${align} pb-3 pt-2 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text)' }} onClick={() => toggleSort(sk)}>
         <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
           {label}
           {active ? (sortDir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <ChevronUp size={11} style={{ opacity: 0.3 }} />}
@@ -283,13 +287,13 @@ export default function PriceTab() {
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis yAxisId="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => `${v}%`} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={60} tickFormatter={v => Math.round(v as number).toLocaleString('ru-RU') + ' ₽'} />
                 <Tooltip content={<ChartTip />} />
                 <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
                 <Line yAxisId="left" type="monotone" dataKey="CTR" stroke="var(--info)" strokeWidth={2} dot={false} />
                 <Line yAxisId="left" type="monotone" dataKey="CR корзина" stroke="var(--warning)" strokeWidth={2} dot={false} />
                 <Line yAxisId="left" type="monotone" dataKey="CR заказ" stroke="var(--success)" strokeWidth={2} dot={false} />
-                <Line yAxisId="right" type="monotone" dataKey="Цена ср." stroke="var(--accent)" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />
+                <Line yAxisId="right" type="monotone" dataKey="Цена ср." stroke="var(--accent)" strokeWidth={2} dot={false} connectNulls />
               </ComposedChart>
             </ResponsiveContainer>
           ) : <div className="flex items-center justify-center h-56 text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных</div>}
@@ -320,7 +324,7 @@ export default function PriceTab() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-xs border-b" style={{ borderColor: 'var(--border)', color: 'var(--text-subtle)' }}>
+                <tr className="text-xs border-b" style={{ borderColor: 'var(--border)', color: 'var(--text)', fontWeight: 600 }}>
                   <th className="text-left pb-2 font-medium">Менеджер</th>
                   <th className="text-right pb-2 font-medium">CTR</th>
                   <th className="text-right pb-2 font-medium">CR заказ</th>
@@ -346,7 +350,7 @@ export default function PriceTab() {
                         <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{(m.ctr * 100).toFixed(2)}%</td>
                         <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{(m.cr_order * 100).toFixed(2)}%</td>
                         <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{(m.ad_order_share * 100).toFixed(1)}%</td>
-                        <td className="py-2 text-right font-semibold text-xs" style={{ color: 'var(--text)' }}>{fmt(m.revenue)} ₽</td>
+                        <td className="py-2 text-right font-semibold text-xs" style={{ color: 'var(--text)' }}>{fmtRub(m.revenue)}</td>
                         <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{m.sku_count}</td>
                         <td className="py-2 text-right">
                           <ChevronRight
@@ -385,8 +389,8 @@ export default function PriceTab() {
                                         <td className="px-3 py-1.5 font-mono" style={{ color: 'var(--text-muted)' }}>{row.sku}</td>
                                         <td className="px-3 py-1.5 max-w-[160px] truncate" style={{ color: 'var(--text)' }}>{row.name}</td>
                                         <td className="px-3 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtDate(row.date)}</td>
-                                        <td className="px-3 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(row.price_before)} ₽</td>
-                                        <td className="px-3 py-1.5 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmt(row.price_after)} ₽</td>
+                                        <td className="px-3 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtRub(row.price_before)}</td>
+                                        <td className="px-3 py-1.5 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmtRub(row.price_after)}</td>
                                         <td className="px-3 py-1.5 text-right"><span className="font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>{up ? '+' : ''}{row.delta_pct.toFixed(1)}%</span></td>
                                         <td className="px-3 py-1.5 text-right"><DeltaCell v={row.delta_ctr} /></td>
                                         <td className="px-3 py-1.5 text-right"><DeltaCell v={row.delta_cr_order} /></td>
@@ -465,10 +469,10 @@ export default function PriceTab() {
         <div style={{ overflowX: 'clip', padding: '0 1rem' }}>
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-xs" style={{ position: 'sticky', top: stickyTop.thead, zIndex: 10, background: 'var(--surface-solid)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}>
-                <th className="text-left pb-3 pt-2 font-medium" style={{ color: 'var(--text-subtle)' }}>SKU</th>
-                <th className="text-left pb-3 pt-2 font-medium" style={{ color: 'var(--text-subtle)' }}>Название</th>
-                <th className="text-left pb-3 pt-2 font-medium" style={{ color: 'var(--text-subtle)' }}>Менеджер</th>
+              <tr className="text-xs" style={{ position: 'sticky', top: stickyTop.thead, zIndex: 10, background: 'var(--surface-solid)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', color: 'var(--text)', fontWeight: 600 }}>
+                <th className="text-left pb-3 pt-2 font-medium">SKU</th>
+                <th className="text-left pb-3 pt-2 font-medium">Название</th>
+                <th className="text-left pb-3 pt-2 font-medium">Менеджер</th>
                 <SortTh label="Дата" sk="date" align="right" />
                 <SortTh label="Было" sk="price_before" />
                 <SortTh label="Стало" sk="price_after" />
@@ -488,8 +492,8 @@ export default function PriceTab() {
                     <td className="py-2 pr-4 max-w-[160px] truncate" style={{ color: 'var(--text)' }}>{row.name}</td>
                     <td className="py-2 pr-4" style={{ color: 'var(--text-muted)' }}>{row.manager || '—'}</td>
                     <td className="py-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{row.date ? fmtDate(row.date) : '—'}</td>
-                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.price_before ? fmt(row.price_before) + ' ₽' : '—'}</td>
-                    <td className="py-2 text-right font-semibold" style={{ color: 'var(--text)' }}>{row.price_after ? fmt(row.price_after) + ' ₽' : '—'}</td>
+                    <td className="py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.price_before ? fmtRub(row.price_before) : '—'}</td>
+                    <td className="py-2 text-right font-semibold" style={{ color: 'var(--text)' }}>{row.price_after ? fmtRub(row.price_after) : '—'}</td>
                     <td className="py-2 text-right">
                       {row.has_change
                         ? <span className="text-xs font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>{up ? '+' : ''}{row.delta_pct.toFixed(1)}%</span>

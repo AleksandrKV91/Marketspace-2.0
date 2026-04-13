@@ -21,6 +21,10 @@ function fmt(n: number | null | undefined) {
   if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(0) + 'К'
   return String(Math.round(n))
 }
+function fmtRub(n: number | null | undefined) {
+  if (n == null) return '—'
+  return Math.round(n).toLocaleString('ru-RU') + ' ₽'
+}
 function fmtPct(n: number | null | undefined) {
   if (n == null) return '—'
   return (n * 100).toFixed(1) + '%'
@@ -260,9 +264,20 @@ export default function AnalyticsTab() {
     const drr = revenue > 0 ? ad_spend / revenue : 0
     const margin_pct = revenue > 0 ? margin_num / revenue : 0
     const forecast_30d_revenue = kpi.period_days > 0 ? (revenue / kpi.period_days) * 30 : 0
+    // CPO = ad_spend / (revenue / avg_price), where avg_price is weighted by revenue
+    let priceRevSum = 0
+    for (const cat of hierarchy) {
+      for (const subj of cat.subjects) {
+        for (const sku of filterSkus(subj.skus)) {
+          if (sku.price > 0) priceRevSum += sku.price * sku.revenue
+        }
+      }
+    }
+    const avgPrice = revenue > 0 ? priceRevSum / revenue : 0
+    const cpo = avgPrice > 0 && ad_spend > 0 ? ad_spend / (revenue / avgPrice) : kpi.cpo
     return {
       ...kpi,
-      revenue, chmd, drr, margin_pct, forecast_30d_revenue,
+      revenue, chmd, drr, margin_pct, forecast_30d_revenue, cpo,
       // prev не пересчитываем — нет prev_daily_by_sku
       prev_revenue: kpi.prev_revenue, prev_chmd: kpi.prev_chmd,
       prev_margin_pct: kpi.prev_margin_pct, prev_drr: kpi.prev_drr,
@@ -321,7 +336,7 @@ export default function AnalyticsTab() {
       currDate: curr?.date ? fmtDate(curr.date) : undefined,
       prevDate: prev?.date ? fmtDate(prev.date) : undefined,
       'Текущий период': curr?.revenue,
-      'Пред. период':   isFiltered ? undefined : prev?.revenue,
+      'Пред. период':   prev?.revenue,
       'Прогноз': i >= actualDays ? Math.round(avgDailyRev) : undefined,
     })
   }
@@ -463,6 +478,7 @@ export default function AnalyticsTab() {
           value: activeKpi.cpo != null ? fmt(activeKpi.cpo) + ' ₽' : '—',
           delta: deltaCpo,
           deltaPositive: activeKpi.cpo != null && activeKpi.prev_cpo != null ? activeKpi.cpo <= activeKpi.prev_cpo : undefined,
+          tooltip: 'Стоимость заказа = Рекл. расходы / (Выручка / Ср. цена)',
         },
         {
           label: 'Прогноз 30д',
@@ -477,7 +493,7 @@ export default function AnalyticsTab() {
       <GlassCard padding="lg">
         <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Выручка / ЧМД / Расходы / ДРР по дням</p>
         {chartData.length > 0 ? (
-          <ResponsiveContainer width="100%" height={240}>
+          <ResponsiveContainer width="100%" minWidth={0} height={240}>
             <ComposedChart data={chartData} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="aRevG" x1="0" y1="0" x2="0" y2="1">
@@ -497,7 +513,7 @@ export default function AnalyticsTab() {
               <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
               <Area yAxisId="left"  type="monotone" dataKey="Выручка" stroke="#3b82f6" strokeWidth={2} fill="url(#aRevG)"  dot={false} />
               <Area yAxisId="right" type="monotone" dataKey="ЧМД"     stroke="#22c55e" strokeWidth={2} fill="url(#aChmdG)" dot={false} />
-              <Line  yAxisId="right" type="monotone" dataKey="Расходы" stroke="#ef4444" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+              <Line  yAxisId="right" type="monotone" dataKey="Расходы" stroke="#ef4444" strokeWidth={2.5} dot={false} />
               <Line  yAxisId="right" type="monotone" dataKey="ДРР%"    stroke="#f59e0b" strokeWidth={2}   dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -510,7 +526,7 @@ export default function AnalyticsTab() {
       {compData.length > 0 && (
         <GlassCard padding="lg">
           <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Сравнение периодов: выручка по дням</p>
-          <ResponsiveContainer width="100%" height={200}>
+          <ResponsiveContainer width="100%" minWidth={0} height={200}>
             <ComposedChart data={compData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="aCurrG" x1="0" y1="0" x2="0" y2="1">
@@ -570,7 +586,7 @@ export default function AnalyticsTab() {
         <GlassCard padding="lg">
           <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Выручка по дням</p>
           {chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={210}>
+            <ResponsiveContainer width="100%" minWidth={0} height={210}>
               <ComposedChart data={chartData} margin={{ top: 4, right: 44, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval={chartData.length > 14 ? 1 : 0} />
@@ -578,7 +594,7 @@ export default function AnalyticsTab() {
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
                 <Tooltip content={<ChartTip />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
                 <Bar  yAxisId="left"  dataKey="Выручка" fill="#3b82f6" fillOpacity={0.75} radius={[3, 3, 0, 0]} activeBar={{ fill: 'rgba(59,130,246,0.25)', stroke: 'none' }} />
-                <Line yAxisId="right" type="monotone" dataKey="Расходы" stroke="#ef4444" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+                <Line yAxisId="right" type="monotone" dataKey="Расходы" stroke="#ef4444" strokeWidth={2.5} dot={false} />
               </ComposedChart>
             </ResponsiveContainer>
           ) : (
@@ -595,7 +611,7 @@ export default function AnalyticsTab() {
             </p>
           </div>
           {marginDrrData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={210}>
+            <ResponsiveContainer width="100%" minWidth={0} height={210}>
               <ComposedChart data={marginDrrData} margin={{ top: 4, right: 40, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
@@ -818,7 +834,7 @@ export default function AnalyticsTab() {
                           {cat.category}
                         </span>
                       </td>
-                      <td className="px-2 py-2.5 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmt(cat.revenue)}</td>
+                      <td className="px-2 py-2.5 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmtRub(cat.revenue)}</td>
                       <td className="px-2 py-2.5 text-right">
                         {cat.delta_pct != null && (
                           <span className="text-[10px] font-semibold" style={{ color: cat.delta_pct > 0 ? 'var(--success)' : 'var(--danger)' }}>
@@ -826,7 +842,7 @@ export default function AnalyticsTab() {
                           </span>
                         )}
                       </td>
-                      <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(cat.chmd)}</td>
+                      <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtRub(cat.chmd)}</td>
                       <td className="px-2 py-2.5 text-right">
                         <span className="px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ background: cat.margin_pct < 0.10 ? 'var(--danger-bg)' : 'var(--success-bg)', color: cat.margin_pct < 0.10 ? 'var(--danger)' : 'var(--success)' }}>
                           {fmtPct(cat.margin_pct)}
@@ -834,7 +850,7 @@ export default function AnalyticsTab() {
                       </td>
                       <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(cat.drr)}</td>
                       <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>
-                        {fmt(cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + sku.stock_rub, 0), 0))}
+                        {fmtRub(cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + sku.stock_rub, 0), 0))}
                       </td>
                       <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>
                         {(() => { const total = cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + sku.stock_qty, 0), 0); return total > 0 ? total : '—' })()}
@@ -843,7 +859,7 @@ export default function AnalyticsTab() {
                         {(() => { const total = cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + (sku.forecast_30d_qty ?? 0), 0), 0); return total > 0 ? `${total} шт.` : '—' })()}
                       </td>
                       <td className="px-2 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>
-                        {(() => { const total = cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + (sku.forecast_30d_qty != null ? sku.forecast_30d_qty * sku.price : 0), 0), 0); return total > 0 ? fmt(total) : '—' })()}
+                        {(() => { const total = cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sku) => ss + (sku.forecast_30d_qty != null ? sku.forecast_30d_qty * sku.price : 0), 0), 0); return total > 0 ? fmtRub(total) : '—' })()}
                       </td>
                     </tr>,
 
@@ -871,7 +887,7 @@ export default function AnalyticsTab() {
                               {subj.subject}
                             </span>
                           </td>
-                          <td className="px-2 py-2 text-right" style={{ color: 'var(--text)' }}>{fmt(subj.revenue)}</td>
+                          <td className="px-2 py-2 text-right" style={{ color: 'var(--text)' }}>{fmtRub(subj.revenue)}</td>
                           <td className="px-2 py-2 text-right">
                             {subj.delta_pct != null && (
                               <span className="text-[10px] font-semibold" style={{ color: subj.delta_pct > 0 ? 'var(--success)' : 'var(--danger)' }}>
@@ -879,11 +895,11 @@ export default function AnalyticsTab() {
                               </span>
                             )}
                           </td>
-                          <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(subj.chmd)}</td>
+                          <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmtRub(subj.chmd)}</td>
                           <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(subj.margin_pct)}</td>
                           <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(subj.drr)}</td>
                           <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>
-                            {fmt(subj.skus.reduce((s, sku) => s + sku.stock_rub, 0))}
+                            {fmtRub(subj.skus.reduce((s, sku) => s + sku.stock_rub, 0))}
                           </td>
                           <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>
                             {(() => { const total = subj.skus.reduce((s, sku) => s + sku.stock_qty, 0); return total > 0 ? total : '—' })()}
@@ -892,7 +908,7 @@ export default function AnalyticsTab() {
                             {(() => { const total = subj.skus.reduce((s, sku) => s + (sku.forecast_30d_qty ?? 0), 0); return total > 0 ? `${total} шт.` : '—' })()}
                           </td>
                           <td className="px-2 py-2 text-right" style={{ color: 'var(--text-muted)' }}>
-                            {(() => { const total = subj.skus.reduce((s, sku) => s + (sku.forecast_30d_qty != null ? sku.forecast_30d_qty * sku.price : 0), 0); return total > 0 ? fmt(total) : '—' })()}
+                            {(() => { const total = subj.skus.reduce((s, sku) => s + (sku.forecast_30d_qty != null ? sku.forecast_30d_qty * sku.price : 0), 0); return total > 0 ? fmtRub(total) : '—' })()}
                           </td>
                         </tr>,
 
@@ -913,7 +929,7 @@ export default function AnalyticsTab() {
                                 <div className="truncate" title={sku.name}>{sku.name}</div>
                                 <div className="text-[10px]" style={{ color: 'var(--text-subtle)' }}>{sku.sku_wb ?? sku.sku_ms}</div>
                               </td>
-                              <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text)' }}>{fmt(sku.revenue)}</td>
+                              <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text)' }}>{fmtRub(sku.revenue)}</td>
                               <td className="px-2 py-1.5 text-right">
                                 {sku.delta_pct != null ? (
                                   <span className="text-[10px] font-semibold" style={{ color: sku.delta_pct > 0 ? 'var(--success)' : 'var(--danger)' }}>
@@ -921,16 +937,16 @@ export default function AnalyticsTab() {
                                   </span>
                                 ) : <span style={{ color: 'var(--text-subtle)' }}>—</span>}
                               </td>
-                              <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(sku.chmd)}</td>
+                              <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtRub(sku.chmd)}</td>
                               <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(sku.margin_pct)}</td>
                               <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(sku.drr)}</td>
-                              <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(sku.stock_rub)}</td>
+                              <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtRub(sku.stock_rub)}</td>
                               <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{sku.stock_qty > 0 ? sku.stock_qty : '—'}</td>
                               <td className="px-2 py-1.5 text-right font-semibold" style={{ color: forecast != null ? forecastColor : 'var(--text-muted)' }}>
                                 {forecast != null ? `${forecast} шт.` : '—'}
                               </td>
                               <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>
-                                {forecast != null ? fmt(forecast * sku.price) : '—'}
+                                {forecast != null ? fmtRub(forecast * sku.price) : '—'}
                               </td>
                             </tr>
                           )

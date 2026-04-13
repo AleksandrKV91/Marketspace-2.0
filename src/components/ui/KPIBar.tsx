@@ -13,6 +13,7 @@ interface KPIItem {
   accent?: boolean
   icon?: string
   onClick?: () => void
+  tooltip?: string
 }
 
 interface KPIBarProps {
@@ -44,6 +45,7 @@ export function KPIBar({ items, loading }: KPIBarProps) {
               transition={{ type: 'spring', stiffness: 400, damping: 28, delay: idx * 0.05 }}
               className="relative px-5 py-4"
               onClick={item.onClick}
+              title={item.tooltip}
               style={{
                 borderRight: idx < items.length - 1
                   ? '1px solid var(--border-subtle)'
