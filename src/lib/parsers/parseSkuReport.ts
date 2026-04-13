@@ -42,9 +42,17 @@ export interface SkuSnapshotRow {
   novelty_status: string | null
 }
 
+export interface SkuPriceChangeRow {
+  sku_ms: string
+  sku_wb: number | null
+  price_date: string
+  price: number
+}
+
 export interface ParseSkuReportResult {
   daily: SkuDailyRow[]
   snapshots: SkuSnapshotRow[]
+  priceChanges: SkuPriceChangeRow[]
   rows_parsed: number
   rows_skipped: number
   skipped_skus: string[]
@@ -52,48 +60,30 @@ export interface ParseSkuReportResult {
 }
 
 /**
- * Структура файла «Лист7» (реальная):
- * Row 0: группы (необязательно)
- * Row 1: заголовки
- *   col 0:  SKU (артикул МС)
- *   col 1:  Категория
- *   col 2:  Предмет
- *   col 3:  Название
- *   col 4:  Бренд
- *   col 5:  Дата появления на полке
- *   col 6:  Менеджер
- *   col 8:  Статус Новинки
- *   col 10: "Затраты за 5 дней" → cols 11-15 = 5 дат → данные затрат
+ * Структура файла «Лист7» (реальная для xlsb):
+ * Row 0: группы — "Характеристики SKU"(A), "Выручка Total за 5 дней"(AE/30),
+ *         "ДРР Total"(AK/36), "ДРР Рекламный"(AQ/42), "CTR за 5 дней"(AW/48),
+ *         "CR в корзину"(BC/54), "CR в заказ"(BI/60), "CPM"(BP/67),
+ *         "CPC"(BV/73), "Доля рекламных заказов"(CB/79), "Изменение цены"(CJ/87)
+ * Row 1: подзаголовки + Excel-даты
+ *   col 0 (A): SKU WB (числовой артикул WB, напр. 15747552)
+ *   col 1 (B): Категория
+ *   col 2 (C): Предмет
+ *   col 3 (D): Название
+ *   col 4 (E): Бренд
+ *   col 5 (F): Дата появления на полке
+ *   col 6 (G): Менеджер
+ *   col 8 (I): Статус Новинки
+ *   col 10 (K): "Затраты за 5 дней" (в row0 - это «Характеристики SKU» продолжение)
+ *   col 11-15: 5 дат → данные затрат
  *   col 16: Остаток на ВБ ФБО
- *   col 17: Остаток FBS Пушкино
- *   col 18: Остаток FBS Смоленск
- *   col 19: остаток комплектов
- *   col 20: остаток, дни
- *   col 21: дней до прихода
- *   col 22: Запас дней до OOS
- *   col 23: Маржа Опер.
- *   col 25: ЧМД за пять дней, руб
- *   col 26: дата
- *   col 27: Затраты план
- *   col 28: ДРР план
- *   col 29: Выручка план
- *   col 30: "Выручка Total за 5 дней" → cols 31-35 = 5 дат → выручка
- *   col 36: "ДРР Total за 5 дней" → cols 37-41 = 5 дат → ДРР total
- *   col 42: "ДРР рекл. за 5 дней" → cols 43-47 = 5 дат → ДРР рекл
- *   col 48: "CTR за 5 дней" → cols 49-53 = 5 дат → CTR
- *   col 54: "CR в корзину за 5 дней" → cols 55-59 = 5 дат → CR корзина
- *   col 60: "CR в заказ за 5 дней" → cols 61-65 = 5 дат → CR заказ
- *   col 66: Цена
- *   col 67: "CPM за 5 дней" → cols 68-72 = 5 дат → CPM
- *   col 73: "CPC за 5 дней" → cols 74-78 = 5 дат → CPC
- *   col 79: "Доля рекламных заказов" → cols 80-84 = 5 дат → ad_order_share
+ *   ...
+ *   col 30 (AE): дата-заголовки Выручки (в row0: "Выручка Total за 5 дней")
+ *   col 66 (BO): Цена
+ *   col 87 (CJ): "Изменение цены" (в row0), col 88-91 = даты, данные = абс. цена
  *
- * Парсим ДИНАМИЧЕСКИ — находим каждый блок по заголовку строки 1,
- * затем берём cols [blockStart+1 .. blockStart+5] как даты/значения
- */
-/**
- * skuMap: Map<string WB_art, string MS_art> — передаётся из API route
- * Если не передан — col 0 используется как sku_ms без конвертации
+ * findMetricBlock ищет сначала в row0 (группы), затем в row1 (подзаголовки),
+ * и для каждого найденного заголовка собирает следующие 5 Excel-дат из row1.
  */
 export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>): ParseSkuReportResult {
   const wb = readWorkbook(buffer)
@@ -102,20 +92,15 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
 
   if (rows.length < 3) throw new Error('Файл пустой или неправильный формат')
 
-  const headerRow = rows[1]
+  const groupRow = rows[0]   // строка 0: имена групп блоков
+  const headerRow = rows[1]  // строка 1: подзаголовки + даты
   const dataRows = rows.slice(2)
 
-  // ── Найти колонку SKU (sku_ms) ─────────────────────────────────────────────
-  let skuCol = headerRow.findIndex(h =>
-    norm(h) === 'sku' ||
-    norm(h).includes('артикул мс') ||
-    norm(h).includes('артикул склада') ||
-    norm(h) === 'артикул' ||
-    norm(h).includes('номенклатура')
-  )
-  if (skuCol === -1) skuCol = 0
+  // ── Найти колонку SKU WB (col 0 = числовой WB-артикул) ────────────────────
+  // col 0 всегда WB-артикул. skuMap: WB→MS конвертирует его в MS-артикул.
+  const skuCol = 0
 
-  // ── Фиксированные снапшот-колонки (ищем по заголовку) ─────────────────────
+  // ── Фиксированные снапшот-колонки (ищем по заголовку в row1) ──────────────
   const fc = (q: string) => headerRow.findIndex(h => norm(h).includes(q))
   const fcs = (qs: string[]) => {
     for (const q of qs) {
@@ -136,26 +121,40 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
   const daysArrivalCol = fc('дней до прихода')
   const otsReserveCol = fcs(['запас дней до out to stock', 'запас дней до oos', 'запас дней'])
   const marginRubCol = fcs(['маржа опер', 'маржа, руб', 'маржа руб'])
-  // Колонка Y «Маржа, %» — маржинальность выручки в процентах (17.3 → хранить как 0.173)
   const marginPctCol = fcs(['маржа, %', 'маржа,%', 'маржа %'])
   const chmd5dCol = fcs(['чмд за пять', 'чмд за 5'])
   const spendPlanCol = fcs(['затраты план', 'spend plan'])
   const drrPlanCol = fcs(['дрр план', 'drr план'])
-  const revenPlanCol = fcs(['выручка план'])
   const priceCol = fc('цена')
   const supplyDateCol = fcs(['поставка план', 'дата поставки'])
   const supplyQtyCol = fcs(['поступ', 'поставка шт'])
 
-  // ── Найти блоки метрик: (заголовок группы) → (5 дат в следующих cols) ─────
+  // ── Найти блок метрик: ищем в row0 (группы) И row1 (подзаголовки) ─────────
   /**
-   * Блок: col с текстом → cols +1..+5 содержат числа-даты
-   * Возвращает: { dateOffsets: number[] } относительно начала блока
+   * Ищет заголовок блока в row0, затем row1.
+   * После нахождения col, ищет до 5 Excel-дат в row1 (cols header+1..header+7).
    */
   function findMetricBlock(queries: string[]): { headerCol: number; dateCols: number[] } | null {
+    // Ищем в row0 (группы блоков)
+    for (let ci = 10; ci < groupRow.length - 2; ci++) {
+      const h = norm(groupRow[ci])
+      if (queries.some(q => h.includes(q))) {
+        const dateCols: number[] = []
+        // Даты могут быть в row1 начиная с ci или ci+1
+        for (let di = ci; di < ci + 8 && di < headerRow.length; di++) {
+          const v = headerRow[di]
+          if (typeof v === 'number' && v > 40000 && v < 60000) {
+            dateCols.push(di)
+            if (dateCols.length === 5) break
+          }
+        }
+        if (dateCols.length > 0) return { headerCol: ci, dateCols }
+      }
+    }
+    // Fallback: ищем в row1 (подзаголовки) — для обратной совместимости
     for (let ci = 10; ci < headerRow.length - 5; ci++) {
       const h = norm(headerRow[ci])
       if (queries.some(q => h.includes(q))) {
-        // собираем следующие 5 date-cols
         const dateCols: number[] = []
         for (let di = ci + 1; di < ci + 8 && di < headerRow.length; di++) {
           const v = headerRow[di]
@@ -181,19 +180,23 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
   const cpcBlock = findMetricBlock(['cpc за 5', 'cpc'])
   const adShareBlock = findMetricBlock(['доля рекламных заказов', 'доля рекл'])
 
-  // Основные даты — берём из первого найденного блока (обычно выручка)
+  // ── Блок «Изменение цены» (CJ/col87 в row0) ───────────────────────────────
+  // row0 col 87: "Изменение цены", row1 cols 88-91: Excel-даты, данные = абс. цена
+  const priceChangeBlock = findMetricBlock(['изменение цены', 'изменение цен'])
+
+  // Основные даты — берём из первого найденного блока
   const primaryBlock = revenueBlock ?? adSpendBlock ?? ctrBlock
   if (!primaryBlock) throw new Error('Не найдены датированные блоки метрик в Отчёте по SKU')
 
-  // Все уникальные даты из primaryBlock
   const dateCols = primaryBlock.dateCols
 
-  // Дата снапшота = первая (самая свежая) дата
+  // Дата снапшота = первая (самая свежая) дата основного блока
   const snapDateISO = excelToISO(headerRow[dateCols[0]] as number) ?? ''
 
   // ── Парсим строки ───────────────────────────────────────────────────────────
   const daily: SkuDailyRow[] = []
   const snapshots: SkuSnapshotRow[] = []
+  const priceChanges: SkuPriceChangeRow[] = []
   let skipped = 0
   const skippedSkus: string[] = []
   const skippedService: string[] = []
@@ -205,17 +208,18 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
       if (rawSku) skippedService.push(rawSku)
       continue
     }
-    // Конвертируем WB→MS если передан маппинг
+    // col 0 = WB-артикул → конвертируем в MS через skuMap
     const skuMs = skuMap ? (skuMap.get(rawSku) ?? null) : rawSku
     if (!skuMs) { skipped++; skippedSkus.push(rawSku); continue }
 
-    // Функция получения значения из блока по индексу даты (0..4)
+    const skuWbNum = Number(rawSku) || null
+
     const getFromBlock = (block: { dateCols: number[] } | null, di: number) => {
       if (!block) return null
       return toNum(row[block.dateCols[di]])
     }
 
-    // Дневные метрики (5 дат)
+    // Дневные метрики (5 дат основного блока)
     for (let di = 0; di < dateCols.length; di++) {
       const dateISO = excelToISO(headerRow[dateCols[di]] as number)
       if (!dateISO) continue
@@ -239,10 +243,19 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
       })
     }
 
+    // ── Изменения цен из блока CJ-CN ────────────────────────────────────────
+    if (priceChangeBlock && skuWbNum) {
+      for (let di = 0; di < priceChangeBlock.dateCols.length; di++) {
+        const dateISO = excelToISO(headerRow[priceChangeBlock.dateCols[di]] as number)
+        const price = toNum(row[priceChangeBlock.dateCols[di]])
+        if (dateISO && price != null && price > 0) {
+          priceChanges.push({ sku_ms: skuMs, sku_wb: skuWbNum, price_date: dateISO, price })
+        }
+      }
+    }
+
     // Снапшот
     const rawNovelty = noveltyCol >= 0 ? String(row[noveltyCol] ?? '').trim() : null
-    // rawSku = WB артикул (колонка A), skuMap мог конвертировать его в sku_ms
-    const skuWbNum = skuMap ? (Number(rawSku) || null) : null
 
     snapshots.push({
       sku_ms: skuMs,
@@ -260,7 +273,6 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
         if (marginPctCol < 0) return null
         const v = toNum(row[marginPctCol])
         if (v == null) return null
-        // Значение в % (напр. 17.3) → переводим в долю (0.173)
         return v / 100
       })(),
       chmd_5d: chmd5dCol >= 0 ? toNum(row[chmd5dCol]) : null,
@@ -278,6 +290,7 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
   return {
     daily,
     snapshots,
+    priceChanges,
     rows_parsed: snapshots.length,
     rows_skipped: skipped,
     skipped_skus: skippedSkus,

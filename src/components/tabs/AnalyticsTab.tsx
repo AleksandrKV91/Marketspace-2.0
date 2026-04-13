@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import {
   ComposedChart, AreaChart, Area, Line, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
@@ -102,7 +102,7 @@ export default function AnalyticsTab() {
   const { filters, setMeta } = useGlobalFilters()
   const tableRef = useRef<HTMLDivElement>(null)
   const filterRowRef = useRef<HTMLDivElement>(null)
-  const [stickyTop, setStickyTop] = useState({ filterRow: 88, thead: 88 + 44 })
+  const [stickyTop, setStickyTop] = useState({ filterRow: 110, thead: 110 + 52 })
 
   const [data, setData] = useState<AnalyticsResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -124,7 +124,7 @@ export default function AnalyticsTab() {
   const [modalSku, setModalSku] = useState<string | null>(null)
 
   // Measure actual header height for sticky positioning
-  useLayoutEffect(() => {
+  useEffect(() => {
     function measure() {
       const header = document.querySelector('header.top-nav') as HTMLElement | null
       const filterRow = filterRowRef.current
@@ -132,9 +132,10 @@ export default function AnalyticsTab() {
       const filterH = filterRow ? filterRow.getBoundingClientRect().height : 44
       setStickyTop({ filterRow: headerH, thead: headerH + filterH })
     }
-    measure()
+    // Wait for layout to complete
+    const t = setTimeout(() => requestAnimationFrame(measure), 100)
     window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
+    return () => { clearTimeout(t); window.removeEventListener('resize', measure) }
   }, [])
 
   function toggleSort(key: SortKey) {

@@ -78,15 +78,33 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Записать цены из снапшота в fact_price_changes
-  // snap_date = дата отчёта, price = текущая цена из колонки "Цена"
-  const priceRows = dedupedSnaps
-    .filter(r => r.sku_wb != null && r.price != null && r.snap_date)
-    .map(r => ({ sku_wb: r.sku_wb!, sku_ms: r.sku_ms, price_date: r.snap_date, price: r.price }))
+  // Записать изменения цен из блока CJ-CN (абс. цена по датам) в fact_price_changes
+  const priceChangeRows = parsed.priceChanges
+  // Дедупликация по (sku_wb, price_date) — берём последнее значение
+  const priceChangeDedup = new Map<string, typeof priceChangeRows[0]>()
+  for (const r of priceChangeRows) {
+    priceChangeDedup.set(`${r.sku_wb}|${r.price_date}`, r)
+  }
+  const dedupedPriceChanges = [...priceChangeDedup.values()].map(r => ({
+    sku_wb: r.sku_wb!,
+    sku_ms: r.sku_ms,
+    price_date: r.price_date,
+    price: r.price,
+  }))
 
-  for (const batch of chunk(priceRows, 500)) {
+  for (const batch of chunk(dedupedPriceChanges, 500)) {
     const { error } = await supabase.from('fact_price_changes').upsert(batch, { onConflict: 'sku_wb,price_date' })
     if (error) console.error('fact_price_changes upsert error:', error.message)
+  }
+
+  // Дополнительно: snap_date + price из снапшота (текущая цена)
+  const snapPriceRows = dedupedSnaps
+    .filter(r => r.sku_wb != null && r.price != null && r.snap_date)
+    .map(r => ({ sku_wb: r.sku_wb!, sku_ms: r.sku_ms, price_date: r.snap_date, price: r.price! }))
+
+  for (const batch of chunk(snapPriceRows, 500)) {
+    const { error } = await supabase.from('fact_price_changes').upsert(batch, { onConflict: 'sku_wb,price_date' })
+    if (error) console.error('fact_price_changes snap upsert error:', error.message)
   }
 
   return NextResponse.json({
@@ -94,7 +112,8 @@ export async function POST(req: NextRequest) {
     upload_id: uploadId,
     rows_parsed: parsed.rows_parsed,
     rows_skipped: parsed.rows_skipped,
-    price_change_rows: priceRows.length,
+    price_change_rows: dedupedPriceChanges.length,
+    snap_price_rows: snapPriceRows.length,
     skipped_no_map: parsed.skipped_skus.length,
     sku_map_size: skuMap.size,
     diag_daily: parsed.daily.slice(0, 2),
