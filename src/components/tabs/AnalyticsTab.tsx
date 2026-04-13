@@ -622,7 +622,7 @@ export default function AnalyticsTab() {
             <ColFilter
               label="Ост. дни"
               value={stockDaysFilter}
-              onChange={setStockDaysFilter}
+              onChange={v => setStockDaysFilter(v as typeof stockDaysFilter)}
               options={[
                 { value: 'all', label: 'Все' },
                 { value: 'low', label: '< 14 дн.' },
@@ -635,7 +635,7 @@ export default function AnalyticsTab() {
             <ColFilter
               label="Ост. ₽"
               value={stockRubFilter}
-              onChange={setStockRubFilter}
+              onChange={v => setStockRubFilter(v as typeof stockRubFilter)}
               options={[
                 { value: 'all', label: 'Все' },
                 { value: 'low', label: '< 100К' },
@@ -647,7 +647,7 @@ export default function AnalyticsTab() {
             <ColFilter
               label="Прогноз шт."
               value={forecastQtyFilter}
-              onChange={setForecastQtyFilter}
+              onChange={v => setForecastQtyFilter(v as typeof forecastQtyFilter)}
               options={[
                 { value: 'all', label: 'Все' },
                 { value: 'oos_risk', label: '⚠ OOS риск' },
@@ -659,7 +659,7 @@ export default function AnalyticsTab() {
             <ColFilter
               label="Прогноз ₽"
               value={forecastRevFilter}
-              onChange={setForecastRevFilter}
+              onChange={v => setForecastRevFilter(v as typeof forecastRevFilter)}
               options={[
                 { value: 'all', label: 'Все' },
                 { value: 'low', label: '< 100К' },
