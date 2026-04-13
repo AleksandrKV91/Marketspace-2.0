@@ -146,6 +146,8 @@ export default function PriceTab() {
   const [sortKey, setSortKey] = useState<string>('date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [expandedManager, setExpandedManager] = useState<string | null>(null)
+  const [pageSize, setPageSize] = useState<50 | 100 | 0>(50)
+  const [page, setPage] = useState(0)
   const filterBarRef = useRef<HTMLDivElement>(null)
   const [stickyTop, setStickyTop] = useState({ filterRow: 88, thead: 88 + 52 })
 
@@ -226,6 +228,14 @@ export default function PriceTab() {
     if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * mult
     return String(av ?? '').localeCompare(String(bv ?? '')) * mult
   })
+
+  // Reset page on filter/sort change
+  useEffect(() => { setPage(0) }, [search, priceFilter, sortKey, sortDir])
+
+  const pagedPrices = pageSize === 0
+    ? filteredPrices
+    : filteredPrices.slice(page * pageSize, (page + 1) * pageSize)
+  const totalPricePages = pageSize === 0 ? 1 : Math.ceil(filteredPrices.length / pageSize)
 
   function exportPrices() {
     exportToExcel(filteredPrices.map(r => ({
@@ -493,7 +503,7 @@ export default function PriceTab() {
               </tr>
             </thead>
             <tbody>
-              {filteredPrices.map((row, i) => {
+              {pagedPrices.map((row, i) => {
                 const up = row.delta_pct > 0
                 return (
                   <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
@@ -532,6 +542,38 @@ export default function PriceTab() {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination */}
+        {filteredPrices.length > 0 && (
+          <div className="flex items-center gap-3 px-4 py-3 border-t" style={{ borderColor: 'var(--border)' }}>
+            <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              {pageSize === 0
+                ? `${filteredPrices.length} строк`
+                : `${Math.min(page * pageSize + 1, filteredPrices.length)}–${Math.min((page + 1) * pageSize, filteredPrices.length)} из ${filteredPrices.length}`}
+            </span>
+            <div className="flex gap-1">
+              {([50, 100, 0] as const).map(n => (
+                <button key={n} onClick={() => { setPageSize(n); setPage(0) }}
+                  className="px-2 py-0.5 rounded text-[11px] font-medium"
+                  style={{ background: pageSize === n ? 'var(--accent-glass)' : 'var(--surface)', border: '1px solid ' + (pageSize === n ? 'var(--accent)' : 'var(--border)'), color: pageSize === n ? 'var(--accent)' : 'var(--text-muted)' }}>
+                  {n === 0 ? 'Все' : n}
+                </button>
+              ))}
+            </div>
+            {totalPricePages > 1 && (
+              <div className="flex gap-1 ml-auto">
+                {Array.from({ length: Math.min(totalPricePages, 20) }, (_, i) => (
+                  <button key={i} onClick={() => setPage(i)}
+                    className="w-7 h-6 rounded text-[11px] font-medium"
+                    style={{ background: page === i ? 'var(--accent)' : 'var(--surface)', border: '1px solid ' + (page === i ? 'var(--accent)' : 'var(--border)'), color: page === i ? '#fff' : 'var(--text-muted)' }}>
+                    {i + 1}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
       </GlassCard>
     </div>
   )

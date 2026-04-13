@@ -187,6 +187,10 @@ export default function AnalyticsTab() {
   const [forecastQtyFilter, setForecastQtyFilter] = useState<'all' | 'oos_risk' | 'ok'>('all')
   const [forecastRevFilter, setForecastRevFilter] = useState<'all' | 'low' | 'high'>('all')
 
+  // Pagination
+  const [pageSize, setPageSize] = useState<50 | 100 | 0>(50)  // 0 = все
+  const [page, setPage] = useState(0)
+
   // SKU modal
   const [modalSku, setModalSku] = useState<string | null>(null)
 
@@ -469,6 +473,39 @@ export default function AnalyticsTab() {
     ...cat,
     subjects: sortNodes(cat.subjects),
   }))
+
+  // Reset page when filters or sort change
+  useEffect(() => { setPage(0) }, [search, deltaFilter, stockDaysFilter, stockRubFilter, forecastQtyFilter, forecastRevFilter, sortKey, sortDir])
+
+  // Paginate: pre-filter and slice filtered SKUs by page window
+  const pagedHierarchy = (() => {
+    const start = pageSize === 0 ? 0 : page * pageSize
+    const end = pageSize === 0 ? Infinity : start + pageSize
+    let skuIdx = 0
+    return sortedHierarchy.map(cat => {
+      const subjects = cat.subjects.map(subj => {
+        const filtered = filterSkus(subj.skus)
+        const sliced = filtered.filter(() => {
+          const idx = skuIdx++
+          return idx >= start && idx < end
+        })
+        return { ...subj, skus: sliced }
+      }).filter(subj => subj.skus.length > 0)
+      return { ...cat, subjects }
+    }).filter(cat => cat.subjects.length > 0)
+  })()
+
+  // Total pages based on all filtered SKUs
+  const totalFilteredSkus = (() => {
+    let count = 0
+    for (const cat of sortedHierarchy) {
+      for (const subj of cat.subjects) {
+        count += filterSkus(subj.skus).length
+      }
+    }
+    return count
+  })()
+  const totalPages = pageSize === 0 ? 1 : Math.ceil(totalFilteredSkus / pageSize)
 
   return (
     <div className="py-6 space-y-6">
@@ -831,15 +868,13 @@ export default function AnalyticsTab() {
                 </tr>
               </thead>
               <tbody>
-                {sortedHierarchy.map(cat => {
+                {pagedHierarchy.map(cat => {
                   const catKey = cat.category
                   const catExpanded = expandedCats.has(catKey) || matchingCats.has(catKey)
-                  // Filter subjects to only those with visible SKUs
-                  const visibleSubjects = cat.subjects
-                    .map(subj => ({ subj, skus: filterSkus(subj.skus) }))
-                    .filter(({ skus }) => skus.length > 0)
+                  // pagedHierarchy already contains only visible, sorted, paged SKUs
+                  const visibleSubjects = cat.subjects.map(subj => ({ subj, skus: subj.skus }))
 
-                  if (visibleSubjects.length === 0 && (search || deltaFilter !== 'all')) return null
+                  if (visibleSubjects.length === 0) return null
 
                   return [
                     // Category row
@@ -985,6 +1020,37 @@ export default function AnalyticsTab() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination */}
+          {totalFilteredSkus > 0 && (
+            <div className="flex items-center gap-3 px-4 py-3 border-t" style={{ borderColor: 'var(--border)' }}>
+              <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                {pageSize === 0
+                  ? `${totalFilteredSkus} SKU`
+                  : `${Math.min(page * pageSize + 1, totalFilteredSkus)}–${Math.min((page + 1) * pageSize, totalFilteredSkus)} из ${totalFilteredSkus} SKU`}
+              </span>
+              <div className="flex gap-1">
+                {([50, 100, 0] as const).map(n => (
+                  <button key={n} onClick={() => { setPageSize(n); setPage(0) }}
+                    className="px-2 py-0.5 rounded text-[11px] font-medium"
+                    style={{ background: pageSize === n ? 'var(--accent-glass)' : 'var(--surface)', border: '1px solid ' + (pageSize === n ? 'var(--accent)' : 'var(--border)'), color: pageSize === n ? 'var(--accent)' : 'var(--text-muted)' }}>
+                    {n === 0 ? 'Все' : n}
+                  </button>
+                ))}
+              </div>
+              {totalPages > 1 && (
+                <div className="flex gap-1 ml-auto">
+                  {Array.from({ length: Math.min(totalPages, 20) }, (_, i) => (
+                    <button key={i} onClick={() => setPage(i)}
+                      className="w-7 h-6 rounded text-[11px] font-medium"
+                      style={{ background: page === i ? 'var(--accent)' : 'var(--surface)', border: '1px solid ' + (page === i ? 'var(--accent)' : 'var(--border)'), color: page === i ? '#fff' : 'var(--text-muted)' }}>
+                      {i + 1}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
         </GlassCard>
       </div>
