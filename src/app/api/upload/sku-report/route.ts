@@ -105,15 +105,12 @@ export async function POST(req: NextRequest) {
     if (error) console.error('fact_price_changes upsert error:', error.message)
   }
 
-  // Обновляем fact_daily_agg только за даты этого отчёта (фоновый вызов)
+  // Обновляем fact_daily_agg за даты этого отчёта через SQL-функцию
   const aggFrom = dates[0] ?? null
   const aggTo   = dates[dates.length - 1] ?? null
   if (aggFrom && aggTo) {
-    fetch(`${process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'}/api/admin/refresh-daily-agg`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: aggFrom, to: aggTo }),
-    }).catch(e => console.error('refresh-daily-agg error:', e))
+    supabase.rpc('refresh_daily_agg', { from_date: aggFrom, to_date: aggTo })
+      .then(({ error }) => { if (error) console.error('refresh_daily_agg error:', error.message) })
   }
 
   return NextResponse.json({
