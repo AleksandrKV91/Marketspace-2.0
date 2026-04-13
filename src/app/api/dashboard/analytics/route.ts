@@ -73,6 +73,7 @@ export interface AnalyticsResponse {
   hierarchy: CategoryNode[]
   daily_chart: Array<{ date: string; revenue: number; chmd: number; ad_spend: number; drr: number; margin_pct: number }>
   daily_chart_prev: Array<{ day_index: number; date: string; revenue: number }>
+  daily_by_sku: Array<{ sku_ms: string; date: string; revenue: number; ad_spend: number }>
   meta: { categories: string[]; managers: string[] }
 }
 
@@ -364,11 +365,17 @@ export async function GET(req: Request) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, revenue], i) => ({ day_index: i, date, revenue }))
 
+  // daily_by_sku — сырые строки по SKU для клиентской фильтрации графиков
+  const daily_by_sku = dailyRows
+    .filter(r => allSkuMs.has(r.sku_ms))
+    .map(r => ({ sku_ms: r.sku_ms, date: r.metric_date, revenue: r.revenue ?? 0, ad_spend: r.ad_spend ?? 0 }))
+
   return NextResponse.json({
     kpi,
     hierarchy,
     daily_chart,
     daily_chart_prev,
+    daily_by_sku,
     meta: {
       categories: [...metaCats].sort(),
       managers:   [...metaMgrs].sort(),

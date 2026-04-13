@@ -225,7 +225,7 @@ export default function AnalyticsTab() {
   if (error) return <div className="py-16 text-center text-sm" style={{ color: 'var(--danger)' }}>{error}</div>
   if (!data) return null
 
-  const { kpi, hierarchy, daily_chart, daily_chart_prev } = data
+  const { kpi, hierarchy, daily_chart, daily_chart_prev, daily_by_sku } = data
 
   // Delta helpers
   function calcDelta(curr: number, prev: number): string | undefined {
@@ -241,18 +241,44 @@ export default function AnalyticsTab() {
     ? calcDelta(kpi.cpo, kpi.prev_cpo)
     : undefined
 
+  // Collect visible SKU set for chart filtering (populated after filterSkus calls below)
+  // We compute it eagerly here so charts respond to table filters
+  const visibleSkuMs = new Set<string>()
+  for (const cat of hierarchy) {
+    for (const subj of cat.subjects) {
+      for (const sku of filterSkus(subj.skus)) visibleSkuMs.add(sku.sku_ms)
+    }
+  }
+  const isFiltered = visibleSkuMs.size < hierarchy.reduce((s, c) => s + c.subjects.reduce((ss, subj) => ss + subj.skus.length, 0), 0)
+
+  // Build filtered daily chart from daily_by_sku when table filters are active
+  function buildFilteredChart() {
+    if (!isFiltered || !daily_by_sku?.length) return null
+    const dateMap: Record<string, { revenue: number; ad_spend: number }> = {}
+    for (const r of daily_by_sku) {
+      if (!visibleSkuMs.has(r.sku_ms)) continue
+      if (!dateMap[r.date]) dateMap[r.date] = { revenue: 0, ad_spend: 0 }
+      dateMap[r.date].revenue += r.revenue
+      dateMap[r.date].ad_spend += r.ad_spend
+    }
+    return Object.entries(dateMap).sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, d]) => ({ date, revenue: d.revenue, ad_spend: d.ad_spend, drr: d.revenue > 0 ? d.ad_spend / d.revenue : 0 }))
+  }
+  const filteredChart = buildFilteredChart()
+  const activeChart = filteredChart ?? daily_chart
+
   // Chart data
-  const chartData = daily_chart.map(d => ({
+  const chartData = activeChart.map(d => ({
     date:    fmtDate(d.date),
     Выручка: d.revenue,
-    ЧМД:     d.chmd,
+    ЧМД:     'chmd' in d ? d.chmd : d.revenue * kpi.margin_pct - d.ad_spend,
     Расходы: d.ad_spend,
     'ДРР%':  +(d.drr * 100).toFixed(1),
   }))
 
-  const marginDrrData = daily_chart.map(d => ({
+  const marginDrrData = activeChart.map(d => ({
     date:     fmtDate(d.date),
-    'Маржа%': +(d.margin_pct * 100).toFixed(1),
+    'Маржа%': 'margin_pct' in d ? +((d.margin_pct as number) * 100).toFixed(1) : +(kpi.margin_pct * 100).toFixed(1),
     'ДРР%':   +(d.drr * 100).toFixed(1),
   }))
 
