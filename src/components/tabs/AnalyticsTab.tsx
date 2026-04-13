@@ -50,9 +50,40 @@ function ChartTip({ active, payload, label }: { active?: boolean; payload?: Arra
   )
 }
 
+// ── Column filter dropdown ────────────────────────────────────────────────────
+
+function ColFilter({ label, value, onChange, options }: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  options: { value: string; label: string }[]
+}) {
+  const active = value !== 'all'
+  return (
+    <div className="relative flex items-center">
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="appearance-none pl-2 pr-5 py-1 rounded-lg text-[11px] font-medium cursor-pointer"
+        style={{
+          background: active ? 'var(--accent-glass)' : 'var(--surface)',
+          border: '1px solid ' + (active ? 'var(--accent)' : 'var(--border)'),
+          color: active ? 'var(--accent)' : 'var(--text-muted)',
+          outline: 'none',
+        }}
+      >
+        {options.map(o => (
+          <option key={o.value} value={o.value}>{o.value === 'all' ? label : o.label}</option>
+        ))}
+      </select>
+      <ChevronDown size={9} className="absolute right-1 pointer-events-none" style={{ color: active ? 'var(--accent)' : 'var(--text-muted)' }} />
+    </div>
+  )
+}
+
 // ── Sort helper ───────────────────────────────────────────────────────────────
 
-type SortKey = 'revenue' | 'delta_pct' | 'chmd' | 'margin_pct' | 'drr' | 'stock_rub' | 'stock_qty' | 'forecast_30d_qty' | 'forecast_30d_rev'
+type SortKey = 'revenue' | 'delta_pct' | 'chmd' | 'margin_pct' | 'drr' | 'stock_rub' | 'stock_qty' | 'forecast_30d_qty' | 'forecast_30d_rev' | 'stock_days'
 
 function SortTh({ label, sortKey, current, dir, onClick, align = 'right' }: {
   label: string; sortKey: SortKey; current: SortKey; dir: 'asc' | 'desc'; onClick: (k: SortKey) => void; align?: 'left' | 'right'
@@ -119,6 +150,11 @@ export default function AnalyticsTab() {
   // Table filter
   const [search, setSearch] = useState('')
   const [deltaFilter, setDeltaFilter] = useState<'all' | 'growth' | 'decline'>('all')
+  // Numeric column filters (collapsed state)
+  const [stockDaysFilter, setStockDaysFilter] = useState<'all' | 'low' | 'ok' | 'high'>('all')
+  const [stockRubFilter, setStockRubFilter] = useState<'all' | 'low' | 'high'>('all')
+  const [forecastQtyFilter, setForecastQtyFilter] = useState<'all' | 'oos_risk' | 'ok'>('all')
+  const [forecastRevFilter, setForecastRevFilter] = useState<'all' | 'low' | 'high'>('all')
 
   // SKU modal
   const [modalSku, setModalSku] = useState<string | null>(null)
@@ -258,6 +294,32 @@ export default function AnalyticsTab() {
       }
       if (deltaFilter === 'growth'  && (s.delta_pct == null || s.delta_pct <= 0)) return false
       if (deltaFilter === 'decline' && (s.delta_pct == null || s.delta_pct >= 0)) return false
+      // stock_days filter (from stock_qty/price approximation or snapshot days_to_arrival)
+      if (stockDaysFilter !== 'all') {
+        const days = s.stock_days ?? null
+        if (stockDaysFilter === 'low'  && (days == null || days >= 14)) return false
+        if (stockDaysFilter === 'ok'   && (days == null || days < 14 || days > 60)) return false
+        if (stockDaysFilter === 'high' && (days == null || days <= 60)) return false
+      }
+      // stock_rub filter
+      if (stockRubFilter !== 'all') {
+        const rub = s.stock_rub ?? 0
+        if (stockRubFilter === 'low'  && rub >= 100_000) return false
+        if (stockRubFilter === 'high' && rub < 100_000) return false
+      }
+      // forecast_qty (OOS risk = forecast > stock)
+      if (forecastQtyFilter !== 'all') {
+        const qty = s.forecast_30d_qty ?? null
+        const stock = s.stock_qty ?? 0
+        if (forecastQtyFilter === 'oos_risk' && (qty == null || qty <= stock)) return false
+        if (forecastQtyFilter === 'ok'       && (qty != null && qty > stock)) return false
+      }
+      // forecast_rev filter
+      if (forecastRevFilter !== 'all') {
+        const rev = s.forecast_30d_qty != null ? s.forecast_30d_qty * s.price : 0
+        if (forecastRevFilter === 'low'  && rev >= 100_000) return false
+        if (forecastRevFilter === 'high' && rev < 100_000) return false
+      }
       return true
     }).sort((a, b) => {
       let av: number, bv: number
@@ -284,7 +346,7 @@ export default function AnalyticsTab() {
   }
 
   // Auto-expand categories/subjects that match the current filter
-  const hasFilter = search !== '' || deltaFilter !== 'all'
+  const hasFilter = search !== '' || deltaFilter !== 'all' || stockDaysFilter !== 'all' || stockRubFilter !== 'all' || forecastQtyFilter !== 'all' || forecastRevFilter !== 'all'
   const matchingCats = new Set<string>()
   const matchingSubjs = new Set<string>()
   if (hasFilter) {
@@ -515,8 +577,10 @@ export default function AnalyticsTab() {
               position: 'sticky',
               top: stickyTop.filterRow,
               zIndex: 20,
-              background: 'var(--surface-popup)',
+              background: 'var(--surface-solid)',
               borderColor: 'var(--border)',
+              backdropFilter: 'blur(12px)',
+              WebkitBackdropFilter: 'blur(12px)',
             }}
           >
             {/* Search */}
@@ -554,8 +618,57 @@ export default function AnalyticsTab() {
               ))}
             </div>
 
-            {(search || deltaFilter !== 'all') && (
-              <button onClick={() => { setSearch(''); setDeltaFilter('all') }} className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px]" style={{ color: 'var(--text-muted)', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+            {/* Stock days filter */}
+            <ColFilter
+              label="Ост. дни"
+              value={stockDaysFilter}
+              onChange={setStockDaysFilter}
+              options={[
+                { value: 'all', label: 'Все' },
+                { value: 'low', label: '< 14 дн.' },
+                { value: 'ok', label: '14–60 дн.' },
+                { value: 'high', label: '> 60 дн.' },
+              ]}
+            />
+
+            {/* Stock rub filter */}
+            <ColFilter
+              label="Ост. ₽"
+              value={stockRubFilter}
+              onChange={setStockRubFilter}
+              options={[
+                { value: 'all', label: 'Все' },
+                { value: 'low', label: '< 100К' },
+                { value: 'high', label: '≥ 100К' },
+              ]}
+            />
+
+            {/* Forecast qty filter */}
+            <ColFilter
+              label="Прогноз шт."
+              value={forecastQtyFilter}
+              onChange={setForecastQtyFilter}
+              options={[
+                { value: 'all', label: 'Все' },
+                { value: 'oos_risk', label: '⚠ OOS риск' },
+                { value: 'ok', label: 'В норме' },
+              ]}
+            />
+
+            {/* Forecast rev filter */}
+            <ColFilter
+              label="Прогноз ₽"
+              value={forecastRevFilter}
+              onChange={setForecastRevFilter}
+              options={[
+                { value: 'all', label: 'Все' },
+                { value: 'low', label: '< 100К' },
+                { value: 'high', label: '≥ 100К' },
+              ]}
+            />
+
+            {hasFilter && (
+              <button onClick={() => { setSearch(''); setDeltaFilter('all'); setStockDaysFilter('all'); setStockRubFilter('all'); setForecastQtyFilter('all'); setForecastRevFilter('all') }} className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px]" style={{ color: 'var(--text-muted)', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                 <X size={9} /> Сбросить
               </button>
             )}
@@ -600,7 +713,7 @@ export default function AnalyticsTab() {
           <div style={{ overflowX: 'clip' }}>
             <table className="w-full text-xs" style={{ borderCollapse: 'collapse', minWidth: 800 }}>
               <thead>
-                <tr style={{ background: 'var(--surface)', position: 'sticky', top: stickyTop.thead, zIndex: 10 }}>
+                <tr style={{ background: 'var(--surface-solid)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', position: 'sticky', top: stickyTop.thead, zIndex: 10 }}>
                   <th className="text-left pl-4 pr-2 py-2.5 font-medium" style={{ color: 'var(--text-subtle)', minWidth: 280 }}>Категория / Предмет / SKU</th>
                   <SortTh label="Выручка"       sortKey="revenue"          current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="Δ%"            sortKey="delta_pct"        current={sortKey} dir={sortDir} onClick={toggleSort} />

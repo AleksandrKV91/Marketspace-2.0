@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
   BarChart, Bar, ComposedChart
@@ -135,6 +135,21 @@ export default function PriceTab() {
   const [sortKey, setSortKey] = useState<string>('date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [expandedManager, setExpandedManager] = useState<string | null>(null)
+  const filterBarRef = useRef<HTMLDivElement>(null)
+  const [theadTop, setTheadTop] = useState(110)
+
+  useEffect(() => {
+    function measure() {
+      const header = document.querySelector('header.top-nav') as HTMLElement | null
+      const filterBar = filterBarRef.current
+      const headerH = header ? header.getBoundingClientRect().height : 88
+      const filterH = filterBar ? filterBar.getBoundingClientRect().height : 52
+      setTheadTop(headerH + filterH)
+    }
+    const t = setTimeout(() => requestAnimationFrame(measure), 100)
+    window.addEventListener('resize', measure)
+    return () => { clearTimeout(t); window.removeEventListener('resize', measure) }
+  }, [])
 
   function toggleSort(key: string) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -143,7 +158,7 @@ export default function PriceTab() {
   function SortTh({ label, sk, align = 'right' }: { label: string; sk: string; align?: 'left' | 'right' }) {
     const active = sortKey === sk
     return (
-      <th className={`text-${align} pb-3 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text-subtle)' }} onClick={() => toggleSort(sk)}>
+      <th className={`text-${align} pb-3 pt-2 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text-subtle)' }} onClick={() => toggleSort(sk)}>
         <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
           {label}
           {active ? (sortDir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <ChevronUp size={11} style={{ opacity: 0.3 }} />}
@@ -412,8 +427,8 @@ export default function PriceTab() {
       )}
 
       {/* Таблица изменений цен */}
-      <GlassCard padding="lg">
-        <div className="mb-4">
+      <GlassCard padding="lg" style={{ isolation: 'auto' }}>
+        <div className="mb-4" ref={filterBarRef}>
           <FilterBar
             search={search}
             onSearch={setSearch}
@@ -452,13 +467,13 @@ export default function PriceTab() {
             summary={<span className="text-xs" style={{ color: 'var(--text-muted)' }}>Изменения цен · {filteredPrices.length}</span>}
           />
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm sticky-thead">
+        <div style={{ overflowX: 'clip' }}>
+          <table className="w-full text-sm">
             <thead>
-              <tr className="text-xs">
-                <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>SKU</th>
-                <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Название</th>
-                <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Менеджер</th>
+              <tr className="text-xs" style={{ position: 'sticky', top: theadTop, zIndex: 10, background: 'var(--surface-solid)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}>
+                <th className="text-left pb-3 pt-2 font-medium" style={{ color: 'var(--text-subtle)' }}>SKU</th>
+                <th className="text-left pb-3 pt-2 font-medium" style={{ color: 'var(--text-subtle)' }}>Название</th>
+                <th className="text-left pb-3 pt-2 font-medium" style={{ color: 'var(--text-subtle)' }}>Менеджер</th>
                 <SortTh label="Дата" sk="date" align="right" />
                 <SortTh label="Было" sk="price_before" />
                 <SortTh label="Стало" sk="price_after" />

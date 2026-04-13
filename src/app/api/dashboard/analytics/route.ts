@@ -27,6 +27,7 @@ export interface SkuNode {
   drr: number
   stock_rub: number
   stock_qty: number
+  stock_days: number | null
   forecast_30d_qty: number | null
   price: number
 }
@@ -255,6 +256,7 @@ export async function GET(req: Request) {
       drr,
       stock_rub:       stockRub,
       stock_qty:       totalStock,
+      stock_days:      dim?.stock_days ?? null,
       forecast_30d_qty: forecastQty,
       price,
     }
