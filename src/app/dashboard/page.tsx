@@ -267,7 +267,14 @@ export default function DashboardPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [pendingFilter, setPendingFilter] = useState<SkuFilter | null>(null)
   const [globalFilters, setGlobalFilters] = useState<GlobalFilters>({ category: '', manager: '', novelty: '' })
-  const [meta, setMeta] = useState<{ categories: string[]; managers: string[] }>({ categories: [], managers: [] })
+  const [meta, setMetaState] = useState<{ categories: string[]; managers: string[] }>({ categories: [], managers: [] })
+  const setMeta = useCallback((m: { categories: string[]; managers: string[] }) => {
+    setMetaState(prev => {
+      // Only update if data actually changed to avoid re-render loops
+      if (prev.categories.join() === m.categories.join() && prev.managers.join() === m.managers.join()) return prev
+      return m
+    })
+  }, [])
 
   const navigateToSku = (f: SkuFilter) => {
     setPendingFilter(f)
@@ -284,7 +291,7 @@ export default function DashboardPage() {
 
   return (
     <PendingFilterContext.Provider value={{ pending: pendingFilter, setPending: setPendingFilter, navigateToSku, navigateToTab }}>
-    <GlobalFiltersContext.Provider value={{ filters: globalFilters, setFilters: setGlobalFilters, meta, setMeta }}>
+    <GlobalFiltersContext.Provider value={{ filters: globalFilters, setFilters: setGlobalFilters, meta, setMeta: setMeta }}>
     <DateRangeProvider>
     <div className="min-h-screen relative" style={{ background: 'var(--bg)' }}>
 
