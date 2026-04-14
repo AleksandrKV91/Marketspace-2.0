@@ -438,14 +438,19 @@ export async function GET(req: NextRequest) {
           if (ad_spend_before != null && ad_spend_after != null) delta_ad_spend = ad_spend_after - ad_spend_before
         }
 
+        // price_before: prefer previous history entry; fallback to snapshot price
+        const priceBefore = prev.price ?? (skuMs ? (snapPriceMap[skuMs] ?? 0) : 0)
+        const priceAfter = cur.price ?? 0
+        const deltaFixed = priceBefore > 0 && priceAfter > 0 ? (priceAfter - priceBefore) / priceBefore : delta
+
         changes.push({
           sku: String(skuWb),
           name: dim?.name ?? skuMs ?? '',
           manager,
           date: cur.date,
-          price_before: prev.price ?? 0,
-          price_after: cur.price ?? 0,
-          delta_pct: delta,
+          price_before: priceBefore,
+          price_after: priceAfter,
+          delta_pct: deltaFixed,
           has_change: true,
           delta_ctr,
           delta_cr_basket,

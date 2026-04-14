@@ -11,6 +11,7 @@ import { FilterBar } from '@/components/ui/FilterBar'
 import { exportToExcel } from '@/lib/exportExcel'
 import { ChevronUp, ChevronDown, ChevronRight } from 'lucide-react'
 import { useDateRange } from '@/components/ui/DateRangePicker'
+import { priceTabCache } from '@/lib/tabCache'
 
 interface FunnelKpi {
   ctr: number
@@ -149,8 +150,8 @@ function SortTh({ label, sk, align = 'right', sortKey, sortDir, onSort }: {
   )
 }
 
-// ── Client-side cache ────────────────────────────────────────────────────────
-const priceCache = new Map<string, PriceData>()
+// ── Client-side cache (shared module, survives tab switches) ──────────────────
+const priceCache = priceTabCache as Map<string, PriceData>
 
 export default function PriceTab() {
   const { range } = useDateRange()
@@ -191,6 +192,9 @@ export default function PriceTab() {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('desc') }
   }
+
+  // Must be BEFORE early returns (loading/error/null) — Rules of Hooks
+  useEffect(() => { setPage(0) }, [search, priceFilter, sortKey, sortDir])
 
   useEffect(() => {
     const cacheKey = `${range.from}|${range.to}`
@@ -255,8 +259,6 @@ export default function PriceTab() {
     return String(av ?? '').localeCompare(String(bv ?? '')) * mult
   })
 
-  // Reset page on filter/sort change
-  useEffect(() => { setPage(0) }, [search, priceFilter, sortKey, sortDir])
 
   const pagedPrices = pageSize === 0
     ? filteredPrices

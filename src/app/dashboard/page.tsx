@@ -1,11 +1,12 @@
 'use client'
 
-import React, { useState, useCallback, useMemo, Component } from 'react'
+import React, { useState, useCallback, useMemo, useEffect, Component } from 'react'
 import {
   LayoutDashboard, Table2, TrendingUp, BarChart2,
   Globe, ShoppingCart, Upload, Moon, Sun, Monitor, X
 } from 'lucide-react'
 import { useTheme } from '@/components/ui/ThemeProvider'
+import { analyticsTabCache, priceTabCache, overviewTabCache } from '@/lib/tabCache'
 import { DateRangeProvider, DateRangePicker, useDateRange } from '@/components/ui/DateRangePicker'
 import SvodTab      from '@/components/tabs/OverviewTab'
 import SkuTab       from '@/components/tabs/SkuTableTab'
@@ -244,6 +245,58 @@ function ThemeButton() {
   )
 }
 
+// ── Background prefetcher ─────────────────────────────────────────────────────
+// Warms caches for other tabs while user is on overview tab
+function BackgroundPrefetcher() {
+  const { range } = useDateRange()
+  const { filters } = React.useContext(GlobalFiltersContext)
+
+  useEffect(() => {
+    const params = new URLSearchParams({ from: range.from, to: range.to })
+    if (filters.category) params.set('category', filters.category)
+    if (filters.manager)  params.set('manager', filters.manager)
+    if (filters.novelty)  params.set('novelty', filters.novelty)
+    const key = params.toString()
+
+    const run = () => {
+      // Prefetch analytics tab
+      if (!analyticsTabCache.has(key)) {
+        fetch(`/api/dashboard/analytics?${params}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(d => { if (d?.hierarchy) analyticsTabCache.set(key, d) })
+          .catch(() => {})
+      }
+      // Prefetch prices tab
+      const priceKey = `${range.from}|${range.to}`
+      if (!priceTabCache.has(priceKey)) {
+        fetch(`/api/dashboard/prices?from=${range.from}&to=${range.to}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(d => { if (d?.funnel) priceTabCache.set(priceKey, d) })
+          .catch(() => {})
+      }
+      // Prefetch overview tab
+      if (!overviewTabCache.has(key)) {
+        fetch(`/api/dashboard/overview?${params}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(d => { if (d?.kpi) overviewTabCache.set(key, d) })
+          .catch(() => {})
+      }
+    }
+
+    // Wait until browser is idle — doesn't compete with initial render
+    if ('requestIdleCallback' in window) {
+      const id = requestIdleCallback(run, { timeout: 4000 })
+      return () => cancelIdleCallback(id)
+    } else {
+      const t = setTimeout(run, 2500)
+      return () => clearTimeout(t)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.from, range.to])
+
+  return null
+}
+
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<Tab>('svod')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -290,6 +343,7 @@ export default function DashboardPage() {
     <GlobalFiltersContext.Provider value={globalFiltersCtxValue}>
     <MetaContext.Provider value={metaCtxValue}>
     <DateRangeProvider>
+    <BackgroundPrefetcher />
     <div className="min-h-screen relative" style={{ background: 'var(--bg)' }}>
 
       {/* ── Liquid Glass sticky header ── */}

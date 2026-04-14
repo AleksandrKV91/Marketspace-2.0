@@ -19,6 +19,7 @@ import { usePendingFilter } from '@/app/dashboard/page'
 import { useGlobalFilters } from '@/app/dashboard/page'
 import { exportToExcel } from '@/lib/exportExcel'
 import { useDateRange } from '@/components/ui/DateRangePicker'
+import { overviewTabCache } from '@/lib/tabCache'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -276,17 +277,33 @@ function ChartTip({ active, payload, label, pct }: ChartTipProps) {
   )
 }
 
+// ── Client-side cache (shared module, survives tab switches) ──────────────────
+const overviewCache = overviewTabCache as Map<string, OverviewData>
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function OverviewTab() {
-  const [data, setData] = useState<OverviewData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [modalSkuMs, setModalSkuMs] = useState<string | null>(null)
-  const [showLostModal, setShowLostModal] = useState(false)
   const { navigateToSku } = usePendingFilter()
   const { filters, setMeta } = useGlobalFilters()
   const { range } = useDateRange()
+
+  const [data, setData] = useState<OverviewData | null>(() => {
+    const p = new URLSearchParams({ from: range.from, to: range.to })
+    if (filters.category) p.set('category', filters.category)
+    if (filters.manager)  p.set('manager', filters.manager)
+    if (filters.novelty)  p.set('novelty', filters.novelty)
+    return overviewCache.get(p.toString()) ?? null
+  })
+  const [loading, setLoading] = useState(() => {
+    const p = new URLSearchParams({ from: range.from, to: range.to })
+    if (filters.category) p.set('category', filters.category)
+    if (filters.manager)  p.set('manager', filters.manager)
+    if (filters.novelty)  p.set('novelty', filters.novelty)
+    return !overviewCache.has(p.toString())
+  })
+  const [error, setError] = useState<string | null>(null)
+  const [modalSkuMs, setModalSkuMs] = useState<string | null>(null)
+  const [showLostModal, setShowLostModal] = useState(false)
 
   // Sync meta to parent AFTER render — never inside .then() to avoid React #310
   useEffect(() => {
@@ -295,18 +312,21 @@ export default function OverviewTab() {
   }, [data])
 
   useEffect(() => {
+    const params = new URLSearchParams({ from: range.from, to: range.to })
+    if (filters.category) params.set('category', filters.category)
+    if (filters.manager)  params.set('manager', filters.manager)
+    if (filters.novelty)  params.set('novelty', filters.novelty)
+    const cacheKey = params.toString()
+
+    const hit = overviewCache.get(cacheKey)
+    if (hit) { setData(hit); setLoading(false); return }
+
     setLoading(true)
     setError(null)
-    const params = new URLSearchParams({
-      from: range.from,
-      to: range.to,
-      ...(filters.category ? { category: filters.category } : {}),
-      ...(filters.manager  ? { manager:  filters.manager  } : {}),
-      ...(filters.novelty  ? { novelty:  filters.novelty  } : {}),
-    })
     fetch(`/api/dashboard/overview?${params}`)
       .then(r => r.json())
       .then((d: OverviewData) => {
+        overviewCache.set(cacheKey, d)
         setData(d)
         setLoading(false)
       })
