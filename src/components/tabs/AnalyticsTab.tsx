@@ -198,6 +198,14 @@ export default function AnalyticsTab() {
   const [modalSku, setModalSku] = useState<string | null>(null)
 
 
+  // Sync meta (categories/managers) to parent context AFTER render completes
+  useEffect(() => {
+    if (data?.meta) {
+      setMeta({ categories: data.meta.categories ?? [], managers: data.meta.managers ?? [] })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data])
+
   // Measure actual header height for sticky positioning
   useEffect(() => {
     function measure() {
@@ -221,6 +229,9 @@ export default function AnalyticsTab() {
   const scrollToTable = useCallback(() => {
     tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [])
+
+  // Reset page when filters or sort change — must be BEFORE any early returns
+  useEffect(() => { setPage(0) }, [search, deltaFilter, stockDaysFilter, stockRubFilter, forecastQtyFilter, forecastRevFilter, sortKey, sortDir])
 
   const handleForecastClick = useCallback(() => {
     // Expand all categories, sort by forecast
@@ -262,7 +273,6 @@ export default function AnalyticsTab() {
         if (!d.hierarchy) { setError('Неверный формат ответа API'); setLoading(false); return }
         analyticsCache.set(cacheKey, d as AnalyticsResponse)
         setData(d as AnalyticsResponse)
-        setMeta({ categories: d.meta?.categories ?? [], managers: d.meta?.managers ?? [] })
         setLoading(false)
       })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })

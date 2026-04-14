@@ -1,7 +1,6 @@
 'use client'
 
 import React, { useState, useCallback, useMemo, Component } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, Table2, TrendingUp, BarChart2,
   Globe, ShoppingCart, Upload, Moon, Sun, Monitor, X
@@ -168,13 +167,8 @@ function FilterDropdown({
         {value || placeholder}
         <span style={{ fontSize: 9, opacity: 0.7 }}>▼</span>
       </button>
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: 4, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 2, scale: 0.97 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+      {open && (
+          <div
             className="absolute left-0 top-[calc(100%+4px)] z-[300] py-1 min-w-[140px] max-h-48 overflow-y-auto"
             style={{
               background: 'var(--surface-popup, rgba(255,255,255,0.97))',
@@ -205,9 +199,8 @@ function FilterDropdown({
                 {o}
               </button>
             ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
+          </div>
+      )}
     </div>
   )
 }
@@ -251,17 +244,14 @@ function ThemeButton() {
   const Icon = theme === 'dark' ? Moon : theme === 'auto' ? Monitor : Sun
 
   return (
-    <motion.button
-      whileHover={{ y: -2, scale: 1.05 }}
-      whileTap={{ scale: 0.94 }}
-      transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+    <button
       onClick={cycle}
-      className="btn-glass w-8 h-8 rounded-[27%] flex items-center justify-center"
+      className="btn-glass w-8 h-8 rounded-[27%] flex items-center justify-center transition-transform hover:scale-105 active:scale-95"
       style={{ color: 'var(--text-muted)' }}
       title={`Тема: ${theme}`}
     >
       <Icon size={14} />
-    </motion.button>
+    </button>
   )
 }
 
@@ -314,12 +304,7 @@ export default function DashboardPage() {
         {/* Row 1: Logo + Nav + Actions */}
         <div className="flex items-center gap-4 h-[52px]">
           {/* Logo */}
-          <motion.div
-            className="flex items-center gap-2.5 shrink-0"
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 28, delay: 0.05 }}
-          >
+          <div className="flex items-center gap-2.5 shrink-0">
             <div
               className="icon-squircle w-8 h-8 text-white text-sm font-black shrink-0"
               style={{
@@ -331,47 +316,35 @@ export default function DashboardPage() {
             <span className="font-bold text-sm hidden sm:block" style={{ color: 'var(--text)' }}>
               Marketspace 2.0
             </span>
-          </motion.div>
+          </div>
 
           {/* Desktop nav */}
           <nav className="hidden lg:flex items-center gap-0.5 flex-1 justify-center overflow-x-auto">
-            {NAV_TABS.map((tab, i) => {
+            {NAV_TABS.map((tab) => {
               const Icon = tab.icon
               const active = activeTab === tab.id
               return (
-                <motion.button
+                <button
                   key={tab.id}
-                  initial={{ opacity: 0, y: -6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ type: 'spring', stiffness: 400, damping: 28, delay: 0.06 + i * 0.04 }}
-                  whileHover={active ? {} : { y: -1 }}
-                  whileTap={{ scale: 0.96 }}
                   onClick={() => setActiveTab(tab.id)}
-                  className="relative flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-colors whitespace-nowrap"
+                  className="relative flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-colors whitespace-nowrap active:scale-95"
                   style={{ color: active ? 'var(--accent)' : 'var(--text-muted)' }}
                 >
                   {active && (
-                    <motion.span
-                      layoutId="nav-pill"
-                      className="nav-pill absolute inset-0 -z-10"
-                      transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-                    />
+                    <span className="nav-pill absolute inset-0 -z-10" />
                   )}
                   <Icon size={14} />
                   <span>{tab.label}</span>
-                </motion.button>
+                </button>
               )
             })}
           </nav>
 
           {/* Right actions */}
           <div className="ml-auto flex items-center gap-2 shrink-0">
-            <motion.button
-              whileHover={{ y: -2 }}
-              whileTap={{ scale: 0.95 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+            <button
               onClick={() => setActiveTab('update')}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all active:scale-95"
               style={{
                 background: activeTab === 'update'
                   ? 'linear-gradient(135deg, #FF6B81 0%, #FF3B5C 100%)'
@@ -386,14 +359,13 @@ export default function DashboardPage() {
             >
               <Upload size={12} />
               <span>Загрузить</span>
-            </motion.button>
+            </button>
 
             <ThemeButton />
 
             {/* Mobile hamburger */}
-            <motion.button
-              whileTap={{ scale: 0.92 }}
-              className="lg:hidden btn-glass w-8 h-8 rounded-xl flex flex-col items-center justify-center gap-1"
+            <button
+              className="lg:hidden btn-glass w-8 h-8 rounded-xl flex flex-col items-center justify-center gap-1 active:scale-95"
               style={{ color: 'var(--text-muted)' }}
               onClick={() => setMobileMenuOpen(v => !v)}
               aria-label="Меню"
@@ -401,7 +373,7 @@ export default function DashboardPage() {
               <span className="block w-4 h-0.5 rounded" style={{ background: 'currentColor' }} />
               <span className="block w-4 h-0.5 rounded" style={{ background: 'currentColor' }} />
               <span className="block w-3 h-0.5 rounded" style={{ background: 'currentColor' }} />
-            </motion.button>
+            </button>
           </div>
         </div>
 
@@ -429,10 +401,7 @@ export default function DashboardPage() {
             placeholder="Менеджер"
           />
           {hasFilters && (
-            <motion.button
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
+            <button
               onClick={resetFilters}
               className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-all"
               style={{
@@ -442,55 +411,45 @@ export default function DashboardPage() {
               }}
             >
               <X size={10} /> Сбросить
-            </motion.button>
+            </button>
           )}
         </div>
         </div>{/* /max-w wrapper */}
       </header>
 
       {/* Mobile dropdown */}
-      <AnimatePresence>
-        {mobileMenuOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="lg:hidden fixed inset-0 z-40 bg-black/20"
-              style={{ backdropFilter: 'blur(4px)' }}
-              onClick={() => setMobileMenuOpen(false)}
-            />
-            <motion.div
-              initial={{ opacity: 0, y: -12, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -8, scale: 0.97 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-              className="lg:hidden fixed top-[68px] left-3 right-3 z-40 p-2 space-y-1 glass"
-              style={{ borderRadius: 'var(--radius-xl)' }}
-            >
-              {TABS.map(tab => {
-                const Icon = tab.icon
-                const active = activeTab === tab.id
-                return (
-                  <motion.button
-                    key={tab.id}
-                    whileTap={{ scale: 0.97 }}
-                    onClick={() => { setActiveTab(tab.id); setMobileMenuOpen(false) }}
-                    className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-left transition-colors"
-                    style={{
-                      background: active ? 'var(--accent-glass)' : 'transparent',
-                      color: active ? 'var(--accent)' : 'var(--text-muted)',
-                    }}
-                  >
-                    <Icon size={16} />
-                    {tab.label}
-                  </motion.button>
-                )
-              })}
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+      {mobileMenuOpen && (
+        <>
+          <div
+            className="lg:hidden fixed inset-0 z-40 bg-black/20"
+            style={{ backdropFilter: 'blur(4px)' }}
+            onClick={() => setMobileMenuOpen(false)}
+          />
+          <div
+            className="lg:hidden fixed top-[68px] left-3 right-3 z-40 p-2 space-y-1 glass"
+            style={{ borderRadius: 'var(--radius-xl)' }}
+          >
+            {TABS.map(tab => {
+              const Icon = tab.icon
+              const active = activeTab === tab.id
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => { setActiveTab(tab.id); setMobileMenuOpen(false) }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-left transition-colors active:scale-95"
+                  style={{
+                    background: active ? 'var(--accent-glass)' : 'transparent',
+                    color: active ? 'var(--accent)' : 'var(--text-muted)',
+                  }}
+                >
+                  <Icon size={16} />
+                  {tab.label}
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
 
       {/* Main content */}
       <main className="max-w-[1440px] mx-auto px-4 lg:px-6 relative z-10">
