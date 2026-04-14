@@ -306,7 +306,8 @@ export default function OverviewTab() {
         if (d.meta) setMeta(d.meta)
       })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
-  }, [range.from, range.to, filters.category, filters.manager, filters.novelty, setMeta])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.from, range.to, filters.category, filters.manager, filters.novelty])
 
   // ── Loading ──────────────────────────────────────────────────────────────
   if (loading) return (

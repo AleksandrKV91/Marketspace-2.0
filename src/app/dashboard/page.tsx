@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useCallback, Component } from 'react'
+import React, { useState, useCallback, useMemo, Component } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, Table2, TrendingUp, BarChart2,
@@ -279,22 +279,32 @@ export default function DashboardPage() {
     })
   }, [])
 
-  const navigateToSku = (f: SkuFilter) => {
+  const navigateToSku = useCallback((f: SkuFilter) => {
     setPendingFilter(f)
     setActiveTab('sku')
-  }
+  }, [])
 
   const navigateToTab = useCallback((tab: Tab, f: SkuFilter) => {
     setPendingFilter(f)
     setActiveTab(tab)
   }, [])
 
+  const setFilters = useCallback((f: GlobalFilters) => setGlobalFilters(f), [])
+
   const hasFilters = globalFilters.category !== '' || globalFilters.manager !== '' || globalFilters.novelty !== ''
-  const resetFilters = () => setGlobalFilters({ category: '', manager: '', novelty: '' })
+  const resetFilters = useCallback(() => setGlobalFilters({ category: '', manager: '', novelty: '' }), [])
+
+  const pendingCtxValue = useMemo(() => ({
+    pending: pendingFilter, setPending: setPendingFilter, navigateToSku, navigateToTab,
+  }), [pendingFilter, setPendingFilter, navigateToSku, navigateToTab])
+
+  const globalFiltersCtxValue = useMemo(() => ({
+    filters: globalFilters, setFilters, meta, setMeta,
+  }), [globalFilters, setFilters, meta, setMeta])
 
   return (
-    <PendingFilterContext.Provider value={{ pending: pendingFilter, setPending: setPendingFilter, navigateToSku, navigateToTab }}>
-    <GlobalFiltersContext.Provider value={{ filters: globalFilters, setFilters: setGlobalFilters, meta, setMeta: setMeta }}>
+    <PendingFilterContext.Provider value={pendingCtxValue}>
+    <GlobalFiltersContext.Provider value={globalFiltersCtxValue}>
     <DateRangeProvider>
     <div className="min-h-screen relative" style={{ background: 'var(--bg)' }}>
 
