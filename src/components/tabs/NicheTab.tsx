@@ -43,6 +43,21 @@ function fmt(n: number | null | undefined) {
 
 const MONTHS = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек']
 
+function SortTh({ label, sk, align = 'right', sortKey, sortDir, onSort }: {
+  label: string; sk: string; align?: 'left' | 'right' | 'center'
+  sortKey: string; sortDir: 'asc' | 'desc'; onSort: (k: string) => void
+}) {
+  const active = sortKey === sk
+  return (
+    <th className={`text-${align} px-4 py-3 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text-subtle)' }} onClick={() => onSort(sk)}>
+      <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
+        {label}
+        {active ? (sortDir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <ChevronUp size={11} style={{ opacity: 0.3 }} />}
+      </span>
+    </th>
+  )
+}
+
 export default function NicheTab() {
   const [data, setData] = useState<NicheData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -55,17 +70,6 @@ export default function NicheTab() {
   function toggleSort(key: keyof NicheRow) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('desc') }
-  }
-  function SortTh({ label, sk, align = 'right' }: { label: string; sk: keyof NicheRow; align?: 'left' | 'right' | 'center' }) {
-    const active = sortKey === sk
-    return (
-      <th className={`text-${align} px-4 py-3 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text-subtle)' }} onClick={() => toggleSort(sk)}>
-        <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
-          {label}
-          {active ? (sortDir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <ChevronUp size={11} style={{ opacity: 0.3 }} />}
-        </span>
-      </th>
-    )
   }
 
   useEffect(() => {
@@ -184,14 +188,14 @@ export default function NicheTab() {
             <thead>
               <tr className="text-xs border-b" style={{ borderColor: 'var(--border)' }}>
                 <th className="text-left px-4 py-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Ниша / Категория</th>
-                <SortTh label="Рейтинг" sk="rating" />
-                <SortTh label="Привл." sk="attractiveness" />
-                <SortTh label="Выручка" sk="revenue" />
+                <SortTh label="Рейтинг" sk="rating" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof NicheRow)} />
+                <SortTh label="Привл." sk="attractiveness" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof NicheRow)} />
+                <SortTh label="Выручка" sk="revenue" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof NicheRow)} />
                 <th className="text-center px-4 py-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Сезонность</th>
-                <SortTh label="Старт" sk="season_start" />
-                <SortTh label="Пик" sk="season_peak" />
-                <SortTh label="Доступность" sk="availability" />
-                <SortTh label="ABC" sk="abc_class" align="center" />
+                <SortTh label="Старт" sk="season_start" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof NicheRow)} />
+                <SortTh label="Пик" sk="season_peak" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof NicheRow)} />
+                <SortTh label="Доступность" sk="availability" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof NicheRow)} />
+                <SortTh label="ABC" sk="abc_class" align="center" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof NicheRow)} />
               </tr>
             </thead>
             <tbody>

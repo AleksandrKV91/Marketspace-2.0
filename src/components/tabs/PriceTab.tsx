@@ -134,6 +134,21 @@ function DeltaCell({ v }: { v?: number }) {
   )
 }
 
+function SortTh({ label, sk, align = 'right', sortKey, sortDir, onSort }: {
+  label: string; sk: string; align?: 'left' | 'right'
+  sortKey: string; sortDir: 'asc' | 'desc'; onSort: (k: string) => void
+}) {
+  const active = sortKey === sk
+  return (
+    <th className={`text-${align} pb-3 pt-2 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text)' }} onClick={() => onSort(sk)}>
+      <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
+        {label}
+        {active ? (sortDir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <ChevronUp size={11} style={{ opacity: 0.3 }} />}
+      </span>
+    </th>
+  )
+}
+
 // ── Client-side cache ────────────────────────────────────────────────────────
 const priceCache = new Map<string, PriceData>()
 
@@ -170,17 +185,6 @@ export default function PriceTab() {
   function toggleSort(key: string) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('desc') }
-  }
-  function SortTh({ label, sk, align = 'right' }: { label: string; sk: string; align?: 'left' | 'right' }) {
-    const active = sortKey === sk
-    return (
-      <th className={`text-${align} pb-3 pt-2 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text)' }} onClick={() => toggleSort(sk)}>
-        <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
-          {label}
-          {active ? (sortDir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <ChevronUp size={11} style={{ opacity: 0.3 }} />}
-        </span>
-      </th>
-    )
   }
 
   useEffect(() => {
@@ -506,17 +510,17 @@ export default function PriceTab() {
                 <th className="text-left pb-3 pt-2 font-medium">SKU</th>
                 <th className="text-left pb-3 pt-2 font-medium">Название</th>
                 <th className="text-left pb-3 pt-2 font-medium">Менеджер</th>
-                <SortTh label="Дата" sk="date" align="right" />
-                <SortTh label="Было" sk="price_before" />
-                <SortTh label="Стало" sk="price_after" />
-                <SortTh label="Δ%" sk="delta_pct" />
-                <SortTh label="Δ CTR" sk="delta_ctr" />
-                <SortTh label="Δ CR корз." sk="delta_cr_basket" />
-                <SortTh label="Δ CR заказ" sk="delta_cr_order" />
-                <SortTh label="CPO" sk="cpo" />
-                <SortTh label="Расх. до" sk="ad_spend_before" />
-                <SortTh label="Расх. после" sk="ad_spend_after" />
-                <SortTh label="Δ расходов" sk="delta_ad_spend" />
+                <SortTh label="Дата" sk="date" align="right" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Было" sk="price_before" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Стало" sk="price_after" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Δ%" sk="delta_pct" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Δ CTR" sk="delta_ctr" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Δ CR корз." sk="delta_cr_basket" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Δ CR заказ" sk="delta_cr_order" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="CPO" sk="cpo" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Расх. до" sk="ad_spend_before" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Расх. после" sk="ad_spend_after" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Δ расходов" sk="delta_ad_spend" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               </tr>
             </thead>
             <tbody>

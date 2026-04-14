@@ -51,6 +51,21 @@ function fmtPct(n: number | null | undefined) {
   return (n * 100).toFixed(1) + '%'
 }
 
+function SortTh({ label, sk, align = 'right', sortKey, sortDir, onSort }: {
+  label: string; sk: string; align?: 'left' | 'right' | 'center'
+  sortKey: string; sortDir: 'asc' | 'desc'; onSort: (k: string) => void
+}) {
+  const active = sortKey === sk
+  return (
+    <th className={`text-${align} pb-3 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text-subtle)' }} onClick={() => onSort(sk)}>
+      <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
+        {label}
+        {active ? (sortDir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <ChevronUp size={11} style={{ opacity: 0.3 }} />}
+      </span>
+    </th>
+  )
+}
+
 const statusCfg = {
   critical: { label: 'Критический', color: 'var(--danger)',  bg: 'var(--danger-bg)' },
   warning:  { label: 'Внимание',    color: 'var(--warning)', bg: 'var(--warning-bg)' },
@@ -71,17 +86,6 @@ export default function OrderTab() {
   function toggleSort(key: keyof OrderRow) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('asc') }
-  }
-  function SortTh({ label, sk, align = 'right' }: { label: string; sk: keyof OrderRow; align?: 'left' | 'right' | 'center' }) {
-    const active = sortKey === sk
-    return (
-      <th className={`text-${align} pb-3 font-medium cursor-pointer select-none whitespace-nowrap`} style={{ color: active ? 'var(--accent)' : 'var(--text-subtle)' }} onClick={() => toggleSort(sk)}>
-        <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
-          {label}
-          {active ? (sortDir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <ChevronUp size={11} style={{ opacity: 0.3 }} />}
-        </span>
-      </th>
-    )
   }
 
   useEffect(() => {
@@ -199,17 +203,17 @@ export default function OrderTab() {
               <tr className="text-xs">
                 <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>SKU WB</th>
                 <th className="text-left pb-3 font-medium" style={{ color: 'var(--text-subtle)' }}>Название</th>
-                <SortTh label="Статус" sk="status" align="center" />
-                <SortTh label="ABC" sk="abc" align="center" />
-                <SortTh label="Продажи 31д" sk="sales_31d" />
-                <SortTh label="OOS дней" sk="oos_days" />
-                <SortTh label="Наличие" sk="stock_qty" />
-                <SortTh label="Остаток дней" sk="stock_days" />
-                <SortTh label="Лог. плечо" sk="lead_time" />
-                <SortTh label="Расч. заказ" sk="calc_order" />
-                <SortTh label="Заказ менедж." sk="manager_order" />
-                <SortTh label="Δ" sk="delta_order" />
-                <SortTh label="Маржа" sk="margin_pct" />
+                <SortTh label="Статус" sk="status" align="center" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
+                <SortTh label="ABC" sk="abc" align="center" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
+                <SortTh label="Продажи 31д" sk="sales_31d" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
+                <SortTh label="OOS дней" sk="oos_days" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
+                <SortTh label="Наличие" sk="stock_qty" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
+                <SortTh label="Остаток дней" sk="stock_days" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
+                <SortTh label="Лог. плечо" sk="lead_time" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
+                <SortTh label="Расч. заказ" sk="calc_order" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
+                <SortTh label="Заказ менедж." sk="manager_order" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
+                <SortTh label="Δ" sk="delta_order" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
+                <SortTh label="Маржа" sk="margin_pct" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
               </tr>
             </thead>
             <tbody>
