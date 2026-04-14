@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
   BarChart, Bar, ComposedChart
@@ -62,13 +62,6 @@ interface PriceData {
     revenue: number
     sku_count: number
   }>
-}
-
-function ChartsSection({ children }: { children: React.ReactNode }) {
-  const [mounted, setMounted] = React.useState(false)
-  React.useEffect(() => { setMounted(true) }, [])
-  if (!mounted) return <div style={{ height: 220 }} />
-  return <>{children}</>
 }
 
 function fmt(n: number | null | undefined) {
@@ -321,7 +314,6 @@ export default function PriceTab() {
       </div>
 
       {/* Charts */}
-      <ChartsSection>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {/* Воронка конверсий + средневзвешенная цена (правая ось) */}
         <GlassCard padding="lg">
@@ -361,7 +353,6 @@ export default function PriceTab() {
           ) : <div className="flex items-center justify-center h-56 text-sm" style={{ color: 'var(--text-muted)' }}>Нет данных</div>}
         </GlassCard>
       </div>
-      </ChartsSection>
 
       {/* Таблица менеджеров */}
       {managerTable.length > 0 && (
