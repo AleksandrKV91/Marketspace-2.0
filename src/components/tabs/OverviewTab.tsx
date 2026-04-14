@@ -507,7 +507,7 @@ export default function OverviewTab() {
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis yAxisId="left" orientation="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => fmt(v as number)} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => fmt(v as number)} />
-                <Tooltip content={<ChartTip />} />
+                <Tooltip content={ChartTip} />
                 <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
                 <Area yAxisId="left"  type="monotone" dataKey="Выручка" stroke="#3b82f6"        fill="url(#revGrad)"  strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
                 <Area yAxisId="left"  type="monotone" dataKey="ЧМД"    stroke="#22c55e"        fill="url(#chmdGrad)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
@@ -531,7 +531,7 @@ export default function OverviewTab() {
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis yAxisId="left" orientation="left" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#ef4444' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => (v as number).toFixed(1) + '%'} />
                 <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#22d3ee' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => (v as number).toFixed(1) + '%'} />
-                <Tooltip content={<ChartTip pct />} />
+                <Tooltip content={(props) => <ChartTip {...props} pct />} />
                 <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
                 <Line yAxisId="left"  type="monotone" dataKey="ДРР %"  stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
                 <Line yAxisId="right" type="monotone" dataKey="ЧМД %"  stroke="#22d3ee" strokeWidth={2} dot={false} activeDot={{ r: 4 }} strokeDasharray="5 3" />

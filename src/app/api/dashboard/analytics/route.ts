@@ -139,17 +139,24 @@ export async function GET(req: Request) {
   const dateAgg: Record<string, { revenue: number; ad_spend: number; chmd: number }> = {}
   const aggSkuCount = new Set<string>()  // приблизительно — реальный счётчик из агрега
 
+  const safeNum = (n: unknown): number => (typeof n === 'number' && isFinite(n)) ? n : 0
+
   for (const r of aggCurr) {
-    totalRevenue  += r.revenue
-    totalAdSpend  += r.ad_spend
-    totalChmd     += r.chmd
-    marginRevNum  += r.margin_pct_wgt * r.revenue
-    priceRevNum   += r.price_wgt * r.revenue
+    const rev   = safeNum(r.revenue)
+    const spend = safeNum(r.ad_spend)
+    const chmd  = safeNum(r.chmd)
+    const mpw   = safeNum(r.margin_pct_wgt)
+    const pw    = safeNum(r.price_wgt)
+    totalRevenue  += rev
+    totalAdSpend  += spend
+    totalChmd     += chmd
+    marginRevNum  += mpw * rev
+    priceRevNum   += pw * rev
 
     if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0, chmd: 0 }
-    dateAgg[r.metric_date].revenue  += r.revenue
-    dateAgg[r.metric_date].ad_spend += r.ad_spend
-    dateAgg[r.metric_date].chmd     += r.chmd
+    dateAgg[r.metric_date].revenue  += rev
+    dateAgg[r.metric_date].ad_spend += spend
+    dateAgg[r.metric_date].chmd     += chmd
   }
 
   const marginPct  = totalRevenue > 0 ? marginRevNum / totalRevenue : 0
