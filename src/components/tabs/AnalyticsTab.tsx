@@ -257,10 +257,12 @@ export default function AnalyticsTab() {
         if (!r.ok) return r.json().then(e => Promise.reject(new Error(e?.error ?? `HTTP ${r.status}`)))
         return r.json()
       })
-      .then((d: AnalyticsResponse) => {
-        analyticsCache.set(cacheKey, d)
-        setData(d)
-        setMeta({ categories: d.meta.categories, managers: d.meta.managers })
+      .then((d: AnalyticsResponse & { error?: string }) => {
+        if (d.error) { setError(d.error); setLoading(false); return }
+        if (!d.hierarchy) { setError('Неверный формат ответа API'); setLoading(false); return }
+        analyticsCache.set(cacheKey, d as AnalyticsResponse)
+        setData(d as AnalyticsResponse)
+        setMeta({ categories: d.meta?.categories ?? [], managers: d.meta?.managers ?? [] })
         setLoading(false)
       })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })

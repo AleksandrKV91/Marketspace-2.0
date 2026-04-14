@@ -195,7 +195,13 @@ export default function PriceTab() {
         if (!r.ok) return r.json().then(e => Promise.reject(new Error(e?.error ?? `HTTP ${r.status}`)))
         return r.json()
       })
-      .then((d: PriceData) => { priceCache.set(cacheKey, d); setData(d); setLoading(false) })
+      .then((d: PriceData & { error?: string }) => {
+        if (d.error) { setError(d.error); setLoading(false); return }
+        if (!d.funnel) { setError('Неверный формат ответа API'); setLoading(false); return }
+        priceCache.set(cacheKey, d as PriceData)
+        setData(d as PriceData)
+        setLoading(false)
+      })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
   }, [range.from, range.to])
 

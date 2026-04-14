@@ -172,44 +172,56 @@ export async function GET(req: Request) {
   const prevCpo        = priceWgt > 0 && prevAdSpend > 0
     ? prevAdSpend / (prevRevenue / priceWgt) : null
 
-  // ── 6. fact_sku_daily — детализация по SKU (иерархия таблицы) ───────────────
-  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null }
-  const [dailyRows, prevDailyRows] = fromDate && toDate
-    ? await Promise.all([
-        fetchAll<DailyRow>(
-          (sb) => {
-            let q = sb.from('fact_sku_daily')
-              .select('sku_ms, metric_date, revenue, ad_spend')
-              .gte('metric_date', fromDate!).lte('metric_date', toDate!)
-            // Фильтрация по категории/менеджеру через JOIN невозможна напрямую —
-            // фильтруем в JS по dimByMs/snapByMs (snapshot уже загружен)
-            return q
-          },
-          supabase,
-        ),
-        prevFrom && prevTo
-          ? fetchAll<DailyRow>(
-              (sb) => sb.from('fact_sku_daily')
-                .select('sku_ms, metric_date, revenue, ad_spend')
-                .gte('metric_date', prevFrom).lte('metric_date', prevTo),
-              supabase,
-            )
-          : Promise.resolve([]),
-      ])
-    : [[], []]
+  // ── 6. Агрегация по SKU из fact_daily_agg (быстро, без fetchAll на 180k строк) ─
+  // Получаем revenue/ad_spend по каждому SKU за текущий и предыдущий период
+  type SkuDailyAgg = { sku_ms: string; revenue: number; ad_spend: number }
 
-  // Агрегация по SKU
+  async function fetchSkuAgg(from: string, to: string): Promise<SkuDailyAgg[]> {
+    // Используем RPC для агрегации на стороне БД — возвращает одну строку на SKU
+    const { data, error } = await supabase.rpc('get_sku_period_agg', { p_from: from, p_to: to })
+    if (error || !data) {
+      // Fallback: простой select с limit
+      const { data: fallback } = await supabase
+        .from('fact_sku_daily')
+        .select('sku_ms, revenue, ad_spend')
+        .gte('metric_date', from).lte('metric_date', to)
+        .limit(50000)
+      if (!fallback) return []
+      const agg: Record<string, SkuDailyAgg> = {}
+      for (const r of fallback) {
+        if (!agg[r.sku_ms]) agg[r.sku_ms] = { sku_ms: r.sku_ms, revenue: 0, ad_spend: 0 }
+        agg[r.sku_ms].revenue  += r.revenue ?? 0
+        agg[r.sku_ms].ad_spend += r.ad_spend ?? 0
+      }
+      return Object.values(agg)
+    }
+    return data as SkuDailyAgg[]
+  }
+
+  // daily_by_sku нужен для графиков — берём только текущий период с limit
+  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null }
+  const [skuAggCurr, skuAggPrev, dailyRows] = fromDate && toDate
+    ? await Promise.all([
+        fetchSkuAgg(fromDate, toDate),
+        prevFrom && prevTo ? fetchSkuAgg(prevFrom, prevTo) : Promise.resolve([]),
+        supabase.from('fact_sku_daily')
+          .select('sku_ms, metric_date, revenue, ad_spend')
+          .gte('metric_date', fromDate).lte('metric_date', toDate)
+          .limit(50000)
+          .then(r => (r.data ?? []) as DailyRow[]),
+      ])
+    : [[], [], []]
+
+  // Индексируем SKU-агрегаты из RPC/fallback
   type SkuAgg = { revenue: number; ad_spend: number }
   const skuAgg: Record<string, SkuAgg> = {}
-  for (const r of dailyRows) {
-    if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0 }
-    skuAgg[r.sku_ms].revenue  += r.revenue ?? 0
-    skuAgg[r.sku_ms].ad_spend += r.ad_spend ?? 0
+  for (const r of skuAggCurr) {
+    skuAgg[r.sku_ms] = { revenue: r.revenue, ad_spend: r.ad_spend }
   }
 
   const prevSkuRev: Record<string, number> = {}
-  for (const r of prevDailyRows) {
-    prevSkuRev[r.sku_ms] = (prevSkuRev[r.sku_ms] ?? 0) + (r.revenue ?? 0)
+  for (const r of skuAggPrev) {
+    prevSkuRev[r.sku_ms] = r.revenue
   }
 
   // ── 7. Build hierarchy ───────────────────────────────────────────────────────
