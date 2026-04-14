@@ -11,7 +11,7 @@ import { SkuModal } from '@/components/ui/SkuModal'
 import { useDateRange } from '@/components/ui/DateRangePicker'
 import { useGlobalFilters } from '@/app/dashboard/page'
 import { ChevronUp, ChevronDown, ChevronRight, Download, Search, X } from 'lucide-react'
-import type { AnalyticsResponse, CategoryNode, SubjectNode, SkuNode } from '@/app/api/dashboard/analytics/route'
+import type { AnalyticsResponse, CategoryNode, SubjectNode, SkuNode } from '@/types/analytics'
 import { exportToExcelMultiSheet } from '@/lib/exportExcel'
 
 // ── Formatters ────────────────────────────────────────────────────────────────
