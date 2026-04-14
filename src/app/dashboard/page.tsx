@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, Component } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, Table2, TrendingUp, BarChart2,
@@ -14,6 +14,36 @@ import AnalyticsTab from '@/components/tabs/AnalyticsTab'
 import NicheTab     from '@/components/tabs/NicheTab'
 import OrderTab     from '@/components/tabs/OrderTab'
 import UpdateTab    from '@/components/tabs/UpdateTab'
+
+// ── Error Boundary ─────────────────────────────────────────────────────────────
+class TabErrorBoundary extends Component<
+  { children: React.ReactNode; tabId: string },
+  { error: string | null }
+> {
+  state = { error: null as string | null }
+  static getDerivedStateFromError(e: Error) { return { error: e.message } }
+  componentDidCatch(e: Error) { console.error('[TabErrorBoundary]', e) }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="py-16 text-center space-y-3">
+          <p className="text-sm font-semibold" style={{ color: 'var(--danger)' }}>
+            Ошибка рендера вкладки
+          </p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{this.state.error}</p>
+          <button
+            className="px-4 py-2 rounded-xl text-xs font-medium"
+            style={{ background: 'var(--accent)', color: 'white' }}
+            onClick={() => this.setState({ error: null })}
+          >
+            Повторить
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 type SkuFilter = { type: string; label: string }
 const PendingFilterContext = React.createContext<{
@@ -442,15 +472,21 @@ export default function DashboardPage() {
         )}
       </AnimatePresence>
 
-      {/* Main content */}
+      {/* Main content — tabs stay mounted (display:none) so client cache survives tab switches */}
       <main className="max-w-[1440px] mx-auto px-4 lg:px-6 relative z-10">
-        {activeTab === 'svod'      && <SvodTab />}
-        {activeTab === 'sku'       && <SkuTab />}
-        {activeTab === 'price'     && <PriceTab />}
-        {activeTab === 'analytics' && <AnalyticsTab />}
-        {activeTab === 'niche'     && <NicheTab />}
-        {activeTab === 'orders'    && <OrderTab />}
-        {activeTab === 'update'    && <UpdateTab />}
+        <TabErrorBoundary tabId="svod">
+          <div style={{ display: activeTab === 'svod' ? undefined : 'none' }}><SvodTab /></div>
+        </TabErrorBoundary>
+        <TabErrorBoundary tabId="analytics">
+          <div style={{ display: activeTab === 'analytics' ? undefined : 'none' }}><AnalyticsTab /></div>
+        </TabErrorBoundary>
+        <TabErrorBoundary tabId="price">
+          <div style={{ display: activeTab === 'price' ? undefined : 'none' }}><PriceTab /></div>
+        </TabErrorBoundary>
+        {activeTab === 'orders' && <TabErrorBoundary tabId="orders"><OrderTab /></TabErrorBoundary>}
+        {activeTab === 'sku'    && <TabErrorBoundary tabId="sku"><SkuTab /></TabErrorBoundary>}
+        {activeTab === 'niche'  && <TabErrorBoundary tabId="niche"><NicheTab /></TabErrorBoundary>}
+        {activeTab === 'update' && <TabErrorBoundary tabId="update"><UpdateTab /></TabErrorBoundary>}
       </main>
     </div>
     </DateRangeProvider>
