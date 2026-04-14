@@ -13,6 +13,7 @@ import { useGlobalFilters } from '@/app/dashboard/page'
 import { ChevronUp, ChevronDown, ChevronRight, Download, Search, X } from 'lucide-react'
 import type { AnalyticsResponse, CategoryNode, SubjectNode, SkuNode } from '@/types/analytics'
 import { exportToExcelMultiSheet } from '@/lib/exportExcel'
+import { analyticsTabCache } from '@/lib/tabCache'
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -162,8 +163,8 @@ function exportExcel(
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-// ── Client-side cache (survives tab switches, cleared on page reload) ─────────
-const analyticsCache = new Map<string, AnalyticsResponse>()
+// ── Client-side cache (shared module, survives tab switches) ──────────────────
+const analyticsCache = analyticsTabCache
 
 
 export default function AnalyticsTab() {
