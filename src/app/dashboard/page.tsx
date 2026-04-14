@@ -1,10 +1,11 @@
 'use client'
 
-import React, { useState, useCallback, useMemo, useEffect, Component } from 'react'
+import React, { useState, useCallback, useMemo, Component } from 'react'
 import {
   LayoutDashboard, Table2, TrendingUp, BarChart2,
   Globe, ShoppingCart, Upload, Moon, Sun, Monitor, X
 } from 'lucide-react'
+import { useTheme } from '@/components/ui/ThemeProvider'
 import { DateRangeProvider, DateRangePicker, useDateRange } from '@/components/ui/DateRangePicker'
 import SvodTab      from '@/components/tabs/OverviewTab'
 import SkuTab       from '@/components/tabs/SkuTableTab'
@@ -228,36 +229,15 @@ const TABS: TabDef[] = [
 const NAV_TABS = TABS.filter(t => t.id !== 'update')
 
 function ThemeButton() {
-  const [theme, setTheme] = useState<'light' | 'dark' | 'auto'>('light')
-  // Read localStorage only after hydration to avoid #418 mismatch
-  useEffect(() => {
-    const saved = localStorage.getItem('theme') as 'light' | 'dark' | 'auto' | null
-    if (saved) setTheme(saved)
-  }, [])
-
-  const cycle = () => {
-    const next: Record<string, 'light' | 'dark' | 'auto'> = { light: 'dark', dark: 'auto', auto: 'light' }
-    const newTheme = next[theme]
-    setTheme(newTheme)
-    localStorage.setItem('theme', newTheme)
-    if (newTheme === 'dark') {
-      document.documentElement.dataset.theme = 'dark'
-    } else if (newTheme === 'light') {
-      document.documentElement.dataset.theme = 'light'
-    } else {
-      const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-      document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
-    }
-  }
-
-  const Icon = theme === 'dark' ? Moon : theme === 'auto' ? Monitor : Sun
-
+  const { mode, setMode } = useTheme()
+  const next: Record<string, 'light' | 'dark' | 'auto'> = { light: 'dark', dark: 'auto', auto: 'light' }
+  const Icon = mode === 'dark' ? Moon : mode === 'auto' ? Monitor : Sun
   return (
     <button
-      onClick={cycle}
+      onClick={() => setMode(next[mode])}
       className="btn-glass w-8 h-8 rounded-[27%] flex items-center justify-center transition-transform hover:scale-105 active:scale-95"
       style={{ color: 'var(--text-muted)' }}
-      title={`Тема: ${theme}`}
+      title={`Тема: ${mode}`}
     >
       <Icon size={14} />
     </button>

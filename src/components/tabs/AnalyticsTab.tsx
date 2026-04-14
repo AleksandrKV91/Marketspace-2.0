@@ -64,9 +64,12 @@ function ColFilter({ label, value, onChange, options }: {
   options: { value: string; label: string }[]
 }) {
   const active = value !== 'all'
+  const id = `colfilter-${label.replace(/\s+/g, '-').toLowerCase()}`
   return (
     <div className="relative flex items-center">
       <select
+        id={id}
+        name={id}
         value={value}
         onChange={e => onChange(e.target.value)}
         className="appearance-none pl-2 pr-5 py-1 rounded-lg text-[11px] font-medium cursor-pointer"
@@ -192,8 +195,11 @@ export default function AnalyticsTab() {
   const [forecastRevFilter, setForecastRevFilter] = useState<'all' | 'low' | 'high'>('all')
 
   // Pagination
-  const [pageSize, setPageSize] = useState<50 | 100 | 0>(50)  // 0 = все
+  const [pageSize, setPageSize] = useState<50 | 100 | 0>(0)  // 0 = все
   const [page, setPage] = useState(0)
+
+  // View mode
+  const [flatMode, setFlatMode] = useState(true)
 
   // SKU modal
   const [modalSku, setModalSku] = useState<string | null>(null)
@@ -505,6 +511,28 @@ export default function AnalyticsTab() {
     ...cat,
     subjects: sortNodes(cat.subjects),
   }))
+
+  // Flat SKU list (for flatMode)
+  const flatSkus = (() => {
+    const all: Array<SkuNode & { category: string; subject: string }> = []
+    for (const cat of sortedHierarchy)
+      for (const subj of cat.subjects)
+        for (const sku of filterSkus(subj.skus))
+          all.push({ ...sku, category: cat.category, subject: subj.subject })
+    return all.sort((a, b) => {
+      let av: number, bv: number
+      if (sortKey === 'delta_pct') {
+        av = a.delta_pct ?? -Infinity; bv = b.delta_pct ?? -Infinity
+      } else if (sortKey === 'forecast_30d_rev') {
+        av = a.forecast_30d_qty != null ? a.forecast_30d_qty * a.price : -Infinity
+        bv = b.forecast_30d_qty != null ? b.forecast_30d_qty * b.price : -Infinity
+      } else {
+        const k = sortKey as keyof SkuNode
+        av = (a[k] as number) ?? -Infinity; bv = (b[k] as number) ?? -Infinity
+      }
+      return sortDir === 'asc' ? (av < bv ? -1 : 1) : (av > bv ? -1 : 1)
+    })
+  })()
 
   // Paginate: pre-filter and slice filtered SKUs by page window
   const pagedHierarchy = (() => {
@@ -829,25 +857,46 @@ export default function AnalyticsTab() {
               </button>
             )}
 
-            {/* Expand/Collapse all + summary + download */}
+            {/* View mode toggle + Expand/Collapse + summary + download */}
             <div className="ml-auto flex items-center gap-2">
-              <button
-                onClick={() => {
-                  setExpandedCats(new Set(sortedHierarchy.map(c => c.category)))
-                  setExpandedSubjs(new Set(sortedHierarchy.flatMap(c => c.subjects.map(s => `${c.category}::${s.subject}`))))
-                }}
-                className="px-2 py-1 rounded-lg text-[11px]"
-                style={{ color: 'var(--text-muted)', border: '1px solid var(--border)', background: 'var(--surface)' }}
-              >
-                Развернуть
-              </button>
-              <button
-                onClick={() => { setExpandedCats(new Set()); setExpandedSubjs(new Set()) }}
-                className="px-2 py-1 rounded-lg text-[11px]"
-                style={{ color: 'var(--text-muted)', border: '1px solid var(--border)', background: 'var(--surface)' }}
-              >
-                Свернуть
-              </button>
+              {/* Flat / Hierarchy toggle */}
+              <div className="flex items-center gap-0.5">
+                <button
+                  onClick={() => setFlatMode(true)}
+                  className="px-2 py-1 rounded-lg text-[11px]"
+                  style={{ background: flatMode ? 'var(--accent-glass)' : 'var(--surface)', border: '1px solid ' + (flatMode ? 'var(--accent)' : 'var(--border)'), color: flatMode ? 'var(--accent)' : 'var(--text-muted)' }}
+                >
+                  Список
+                </button>
+                <button
+                  onClick={() => setFlatMode(false)}
+                  className="px-2 py-1 rounded-lg text-[11px]"
+                  style={{ background: !flatMode ? 'var(--accent-glass)' : 'var(--surface)', border: '1px solid ' + (!flatMode ? 'var(--accent)' : 'var(--border)'), color: !flatMode ? 'var(--accent)' : 'var(--text-muted)' }}
+                >
+                  Иерархия
+                </button>
+              </div>
+              {!flatMode && (
+                <>
+                  <button
+                    onClick={() => {
+                      setExpandedCats(new Set(sortedHierarchy.map(c => c.category)))
+                      setExpandedSubjs(new Set(sortedHierarchy.flatMap(c => c.subjects.map(s => `${c.category}::${s.subject}`))))
+                    }}
+                    className="px-2 py-1 rounded-lg text-[11px]"
+                    style={{ color: 'var(--text-muted)', border: '1px solid var(--border)', background: 'var(--surface)' }}
+                  >
+                    Развернуть
+                  </button>
+                  <button
+                    onClick={() => { setExpandedCats(new Set()); setExpandedSubjs(new Set()) }}
+                    className="px-2 py-1 rounded-lg text-[11px]"
+                    style={{ color: 'var(--text-muted)', border: '1px solid var(--border)', background: 'var(--surface)' }}
+                  >
+                    Свернуть
+                  </button>
+                </>
+              )}
               <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 <strong style={{ color: 'var(--text)' }}>{visibleSkuCount}</strong> SKU
                 &nbsp;•&nbsp;
@@ -870,7 +919,8 @@ export default function AnalyticsTab() {
             <table className="w-full text-xs" style={{ borderCollapse: 'collapse', minWidth: 800 }}>
               <thead>
                 <tr style={{ background: 'var(--surface-solid)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', position: 'sticky', top: stickyTop.thead, zIndex: 10 }}>
-                  <th className="text-left pl-4 pr-2 py-2.5 font-medium" style={{ color: 'var(--text-subtle)', minWidth: 280 }}>Категория / Предмет / SKU</th>
+                  <th className="text-left pl-4 pr-2 py-2.5 font-medium" style={{ color: 'var(--text-subtle)', minWidth: flatMode ? 160 : 280 }}>{flatMode ? 'Категория / Предмет' : 'Категория / Предмет / SKU'}</th>
+                  {flatMode && <th className="text-left pl-2 pr-2 py-2.5 font-medium" style={{ color: 'var(--text-subtle)', minWidth: 200 }}>SKU</th>}
                   <SortTh label="Выручка"       sortKey="revenue"          current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="Δ%"            sortKey="delta_pct"        current={sortKey} dir={sortDir} onClick={toggleSort} />
                   <SortTh label="ЧМД"           sortKey="chmd"             current={sortKey} dir={sortDir} onClick={toggleSort} />
@@ -897,7 +947,50 @@ export default function AnalyticsTab() {
                 </tr>
               </thead>
               <tbody>
-                {pagedHierarchy.map(cat => {
+                {flatMode ? flatSkus.map(sku => {
+                  const forecast = sku.forecast_30d_qty
+                  const forecastColor = forecast != null && forecast > sku.stock_qty ? 'var(--danger)' : 'var(--success)'
+                  return (
+                    <tr
+                      key={sku.sku_ms}
+                      onClick={() => setModalSku(sku.sku_ms)}
+                      className="cursor-pointer border-b"
+                      style={{ borderColor: 'var(--border)' }}
+                      onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = 'rgba(59,130,246,0.04)'}
+                      onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'}
+                    >
+                      <td className="pl-4 pr-2 py-1.5 max-w-[200px]">
+                        <div className="truncate text-[10px]" style={{ color: 'var(--text-muted)' }} title={`${sku.category} / ${sku.subject}`}>
+                          {sku.category}
+                        </div>
+                        <div className="truncate text-[10px]" style={{ color: 'var(--text-subtle)' }}>{sku.subject}</div>
+                      </td>
+                      <td className="pl-2 pr-2 py-1.5 max-w-[220px]" style={{ color: 'var(--text)' }}>
+                        <div className="truncate" title={sku.name}>{sku.name}</div>
+                        <div className="text-[10px]" style={{ color: 'var(--text-subtle)' }}>{sku.sku_wb ?? sku.sku_ms}</div>
+                      </td>
+                      <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text)' }}>{fmtRub(sku.revenue)}</td>
+                      <td className="px-2 py-1.5 text-right">
+                        {sku.delta_pct != null ? (
+                          <span className="text-[10px] font-semibold" style={{ color: sku.delta_pct > 0 ? 'var(--success)' : 'var(--danger)' }}>
+                            {sku.delta_pct > 0 ? '+' : ''}{(sku.delta_pct * 100).toFixed(1)}%
+                          </span>
+                        ) : <span style={{ color: 'var(--text-subtle)' }}>—</span>}
+                      </td>
+                      <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtRub(sku.chmd)}</td>
+                      <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(sku.margin_pct)}</td>
+                      <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(sku.drr)}</td>
+                      <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtRub(sku.stock_rub)}</td>
+                      <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{sku.stock_qty > 0 ? sku.stock_qty : '—'}</td>
+                      <td className="px-2 py-1.5 text-right font-semibold" style={{ color: forecast != null ? forecastColor : 'var(--text-muted)' }}>
+                        {forecast != null ? `${forecast} шт.` : '—'}
+                      </td>
+                      <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>
+                        {forecast != null ? fmtRub(forecast * sku.price) : '—'}
+                      </td>
+                    </tr>
+                  )
+                }) : pagedHierarchy.map(cat => {
                   const catKey = cat.category
                   const catExpanded = expandedCats.has(catKey) || matchingCats.has(catKey)
                   // pagedHierarchy already contains only visible, sorted, paged SKUs
