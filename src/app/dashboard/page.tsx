@@ -20,9 +20,9 @@ class TabErrorBoundary extends Component<
   { children: React.ReactNode; tabId: string },
   { error: string | null }
 > {
-  state = { error: null as string | null }
-  static getDerivedStateFromError(e: Error) { return { error: e.message } }
-  componentDidCatch(e: Error) { console.error('[TabErrorBoundary]', e) }
+  state = { error: null as string | null, stack: null as string | null }
+  static getDerivedStateFromError(e: Error) { return { error: e.message, stack: e.stack ?? null } }
+  componentDidCatch(e: Error, info: React.ErrorInfo) { console.error('[TabErrorBoundary]', e, info.componentStack) }
   render() {
     if (this.state.error) {
       return (
@@ -31,6 +31,9 @@ class TabErrorBoundary extends Component<
             Ошибка рендера вкладки
           </p>
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{this.state.error}</p>
+          <pre className="text-[10px] text-left max-w-xl mx-auto overflow-auto max-h-40 mt-2 p-2 rounded" style={{ background: 'var(--surface)', color: 'var(--text-muted)' }}>
+            {this.state.stack?.split('\n').slice(0, 8).join('\n')}
+          </pre>
           <button
             className="px-4 py-2 rounded-xl text-xs font-medium"
             style={{ background: 'var(--accent)', color: 'white' }}
@@ -479,21 +482,15 @@ export default function DashboardPage() {
         )}
       </AnimatePresence>
 
-      {/* Main content — tabs stay mounted (display:none) so client cache survives tab switches */}
+      {/* Main content */}
       <main className="max-w-[1440px] mx-auto px-4 lg:px-6 relative z-10">
-        <TabErrorBoundary tabId="svod">
-          <div style={{ display: activeTab === 'svod' ? undefined : 'none' }}><SvodTab /></div>
-        </TabErrorBoundary>
-        <TabErrorBoundary tabId="analytics">
-          <div style={{ display: activeTab === 'analytics' ? undefined : 'none' }}><AnalyticsTab /></div>
-        </TabErrorBoundary>
-        <TabErrorBoundary tabId="price">
-          <div style={{ display: activeTab === 'price' ? undefined : 'none' }}><PriceTab /></div>
-        </TabErrorBoundary>
-        {activeTab === 'orders' && <TabErrorBoundary tabId="orders"><OrderTab /></TabErrorBoundary>}
-        {activeTab === 'sku'    && <TabErrorBoundary tabId="sku"><SkuTab /></TabErrorBoundary>}
-        {activeTab === 'niche'  && <TabErrorBoundary tabId="niche"><NicheTab /></TabErrorBoundary>}
-        {activeTab === 'update' && <TabErrorBoundary tabId="update"><UpdateTab /></TabErrorBoundary>}
+        {activeTab === 'svod'      && <TabErrorBoundary tabId="svod"><SvodTab /></TabErrorBoundary>}
+        {activeTab === 'analytics' && <TabErrorBoundary tabId="analytics"><AnalyticsTab /></TabErrorBoundary>}
+        {activeTab === 'price'     && <TabErrorBoundary tabId="price"><PriceTab /></TabErrorBoundary>}
+        {activeTab === 'orders'    && <TabErrorBoundary tabId="orders"><OrderTab /></TabErrorBoundary>}
+        {activeTab === 'sku'       && <TabErrorBoundary tabId="sku"><SkuTab /></TabErrorBoundary>}
+        {activeTab === 'niche'     && <TabErrorBoundary tabId="niche"><NicheTab /></TabErrorBoundary>}
+        {activeTab === 'update'    && <TabErrorBoundary tabId="update"><UpdateTab /></TabErrorBoundary>}
       </main>
     </div>
     </DateRangeProvider>
