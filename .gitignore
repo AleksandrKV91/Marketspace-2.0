@@ -56,3 +56,4 @@ agency-agents/
 .playwright-mcp/
 *.xlsx
 *.png
+supabase.md

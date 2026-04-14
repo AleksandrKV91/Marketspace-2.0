@@ -179,7 +179,7 @@ export async function GET(req: Request) {
       .gte('metric_date', from).lte('metric_date', to)
     if (catF) q = q.eq('category_wb', catF)
     if (subjFilter) q = q.eq('subject_wb', subjFilter)
-    const { data } = await q
+    const { data } = await q.limit(100000)
     return (data ?? []) as AggRow[]
   }
 
