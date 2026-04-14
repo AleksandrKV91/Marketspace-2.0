@@ -321,7 +321,7 @@ export default function PriceTab() {
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis yAxisId="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => `${v}%`} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={60} tickFormatter={v => Math.round(v as number).toLocaleString('ru-RU') + ' ₽'} />
-                <Tooltip content={ChartTip} />
+                <Tooltip content={(p) => <ChartTip active={p.active} payload={p.payload as Array<{ name: string; value: number; color: string }>} label={p.label} />} />
                 <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
                 <Line yAxisId="left" type="monotone" dataKey="CTR" stroke="var(--info)" strokeWidth={2} dot={false} />
                 <Line yAxisId="left" type="monotone" dataKey="CR корзина" stroke="var(--warning)" strokeWidth={2} dot={false} />
@@ -340,7 +340,7 @@ export default function PriceTab() {
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} />
-                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.04)' }} content={ChartTip} />
+                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.04)' }} content={(p) => <ChartTip active={p.active} payload={p.payload as Array<{ name: string; value: number; color: string }>} label={p.label} />} />
                 <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
                 <Bar dataKey="Рекламные" fill="var(--accent)" radius={[4,4,0,0]} activeBar={{ fill: 'rgba(99,102,241,0.5)', stroke: 'none' }} />
                 <Bar dataKey="Органические" fill="var(--info)" radius={[4,4,0,0]} activeBar={{ fill: 'rgba(59,130,246,0.5)', stroke: 'none' }} />

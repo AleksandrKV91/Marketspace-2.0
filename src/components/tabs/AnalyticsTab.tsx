@@ -594,7 +594,7 @@ export default function AnalyticsTab() {
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
               <YAxis yAxisId="left"  tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
               <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
-              <Tooltip content={ChartTip} />
+              <Tooltip content={(p) => <ChartTip active={p.active} payload={p.payload as Array<{ name: string; value: number; color: string }>} label={p.label} />} />
               <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
               <Area yAxisId="left"  type="monotone" dataKey="Выручка" stroke="#3b82f6" strokeWidth={2} fill="url(#aRevG)"  dot={false} />
               <Area yAxisId="right" type="monotone" dataKey="ЧМД"     stroke="#22c55e" strokeWidth={2} fill="url(#aChmdG)" dot={false} />
@@ -677,7 +677,7 @@ export default function AnalyticsTab() {
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval={chartData.length > 14 ? 1 : 0} />
                 <YAxis yAxisId="left"  tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
-                <Tooltip content={ChartTip} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                <Tooltip content={(p) => <ChartTip active={p.active} payload={p.payload as Array<{ name: string; value: number; color: string }>} label={p.label} />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
                 <Bar  yAxisId="left"  dataKey="Выручка" fill="#3b82f6" fillOpacity={0.75} radius={[3, 3, 0, 0]} activeBar={{ fill: 'rgba(59,130,246,0.25)', stroke: 'none' }} />
                 <Line yAxisId="right" type="monotone" dataKey="Расходы" stroke="#ef4444" strokeWidth={2.5} dot={false} />
               </ComposedChart>
@@ -702,7 +702,7 @@ export default function AnalyticsTab() {
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis yAxisId="left"  tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => `${v}%`} domain={['auto', 'auto']} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => `${v}%`} domain={['auto', 'auto']} />
-                <Tooltip content={ChartTip} />
+                <Tooltip content={(p) => <ChartTip active={p.active} payload={p.payload as Array<{ name: string; value: number; color: string }>} label={p.label} />} />
                 <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
                 <Line yAxisId="left"  type="monotone" dataKey="Маржа%" stroke="#22c55e" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
                 <Line yAxisId="right" type="monotone" dataKey="ДРР%"   stroke="#f59e0b" strokeWidth={2} dot={false} activeDot={{ r: 4 }} strokeDasharray="4 2" />
