@@ -67,20 +67,27 @@ export interface GlobalFilters {
   novelty: string
 }
 
+// Split into two contexts so meta updates don't re-render filter consumers
 const GlobalFiltersContext = React.createContext<{
   filters: GlobalFilters
   setFilters: (f: GlobalFilters) => void
-  meta: { categories: string[]; managers: string[] }
-  setMeta: (m: { categories: string[]; managers: string[] }) => void
 }>({
   filters: { category: '', manager: '', novelty: '' },
   setFilters: () => {},
+})
+
+const MetaContext = React.createContext<{
+  meta: { categories: string[]; managers: string[] }
+  setMeta: (m: { categories: string[]; managers: string[] }) => void
+}>({
   meta: { categories: [], managers: [] },
   setMeta: () => {},
 })
 
 export function useGlobalFilters() {
-  return React.useContext(GlobalFiltersContext)
+  const { filters, setFilters } = React.useContext(GlobalFiltersContext)
+  const { meta, setMeta } = React.useContext(MetaContext)
+  return { filters, setFilters, meta, setMeta }
 }
 
 // ── Period shortcuts ──────────────────────────────────────────────────────────
@@ -291,12 +298,17 @@ export default function DashboardPage() {
   }), [pendingFilter, setPendingFilter, navigateToSku, navigateToTab])
 
   const globalFiltersCtxValue = useMemo(() => ({
-    filters: globalFilters, setFilters, meta, setMeta,
-  }), [globalFilters, setFilters, meta, setMeta])
+    filters: globalFilters, setFilters,
+  }), [globalFilters, setFilters])
+
+  const metaCtxValue = useMemo(() => ({
+    meta, setMeta,
+  }), [meta, setMeta])
 
   return (
     <PendingFilterContext.Provider value={pendingCtxValue}>
     <GlobalFiltersContext.Provider value={globalFiltersCtxValue}>
+    <MetaContext.Provider value={metaCtxValue}>
     <DateRangeProvider>
     <div className="min-h-screen relative" style={{ background: 'var(--bg)' }}>
 
@@ -465,6 +477,7 @@ export default function DashboardPage() {
       </main>
     </div>
     </DateRangeProvider>
+    </MetaContext.Provider>
     </GlobalFiltersContext.Provider>
     </PendingFilterContext.Provider>
   )
