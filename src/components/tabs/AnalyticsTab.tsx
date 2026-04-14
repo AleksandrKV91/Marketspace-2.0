@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 import {
   ComposedChart, AreaChart, Area, Line, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
@@ -161,6 +161,16 @@ function exportExcel(
 
 // ── Client-side cache (survives tab switches, cleared on page reload) ─────────
 const analyticsCache = new Map<string, AnalyticsResponse>()
+
+// ── Charts wrapper — defers recharts mount to avoid React #310 ────────────────
+// recharts 3.x uses Redux internally; its useEffect dispatches during parent render
+// Wrapping in a separate component that only mounts after parent commit fixes #310
+function ChartsSection({ children }: { children: React.ReactNode }) {
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+  if (!mounted) return <div style={{ height: 240 }} />
+  return <>{children}</>
+}
 
 export default function AnalyticsTab() {
   const { range } = useDateRange()
@@ -584,6 +594,8 @@ export default function AnalyticsTab() {
         },
       ]} />
 
+      <ChartsSection>
+
       {/* Chart 1 — wide: Revenue/CHMD/Expenses/DRR */}
       <GlassCard padding="lg">
         <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Выручка / ЧМД / Расходы / ДРР по дням</p>
@@ -723,6 +735,8 @@ export default function AnalyticsTab() {
           )}
         </GlassCard>
       </div>
+
+      </ChartsSection>
 
       {/* Hierarchical table — isolation:auto needed so sticky thead works through GlassCard */}
       <div ref={tableRef}>
