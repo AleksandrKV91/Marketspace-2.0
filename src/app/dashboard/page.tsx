@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useCallback, useMemo, Component } from 'react'
+import React, { useState, useCallback, useMemo, useEffect, Component } from 'react'
 import {
   LayoutDashboard, Table2, TrendingUp, BarChart2,
   Globe, ShoppingCart, Upload, Moon, Sun, Monitor, X
@@ -221,10 +221,12 @@ const TABS: TabDef[] = [
 const NAV_TABS = TABS.filter(t => t.id !== 'update')
 
 function ThemeButton() {
-  const [theme, setTheme] = useState<'light' | 'dark' | 'auto'>(() => {
-    if (typeof window === 'undefined') return 'light'
-    return (localStorage.getItem('theme') as 'light' | 'dark' | 'auto') ?? 'light'
-  })
+  const [theme, setTheme] = useState<'light' | 'dark' | 'auto'>('light')
+  // Read localStorage only after hydration to avoid #418 mismatch
+  useEffect(() => {
+    const saved = localStorage.getItem('theme') as 'light' | 'dark' | 'auto' | null
+    if (saved) setTheme(saved)
+  }, [])
 
   const cycle = () => {
     const next: Record<string, 'light' | 'dark' | 'auto'> = { light: 'dark', dark: 'auto', auto: 'light' }

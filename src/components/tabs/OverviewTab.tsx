@@ -288,6 +288,12 @@ export default function OverviewTab() {
   const { filters, setMeta } = useGlobalFilters()
   const { range } = useDateRange()
 
+  // Sync meta to parent AFTER render — never inside .then() to avoid React #310
+  useEffect(() => {
+    if (data?.meta) setMeta(data.meta)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data])
+
   useEffect(() => {
     setLoading(true)
     setError(null)
@@ -303,7 +309,6 @@ export default function OverviewTab() {
       .then((d: OverviewData) => {
         setData(d)
         setLoading(false)
-        if (d.meta) setMeta(d.meta)
       })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
   // eslint-disable-next-line react-hooks/exhaustive-deps
