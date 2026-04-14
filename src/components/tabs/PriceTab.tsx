@@ -134,6 +134,9 @@ function DeltaCell({ v }: { v?: number }) {
   )
 }
 
+// ── Client-side cache ────────────────────────────────────────────────────────
+const priceCache = new Map<string, PriceData>()
+
 export default function PriceTab() {
   const [data, setData] = useState<PriceData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -181,10 +184,18 @@ export default function PriceTab() {
   }
 
   useEffect(() => {
+    const cacheKey = `${range.from}|${range.to}`
+    const hit = priceCache.get(cacheKey)
+    if (hit) { setData(hit); setLoading(false); return }
+
     setLoading(true)
+    setError(null)
     fetch(`/api/dashboard/prices?from=${range.from}&to=${range.to}`)
-      .then(r => r.json())
-      .then((d: PriceData) => { setData(d); setLoading(false) })
+      .then(r => {
+        if (!r.ok) return r.json().then(e => Promise.reject(new Error(e?.error ?? `HTTP ${r.status}`)))
+        return r.json()
+      })
+      .then((d: PriceData) => { priceCache.set(cacheKey, d); setData(d); setLoading(false) })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
   }, [range.from, range.to])
 

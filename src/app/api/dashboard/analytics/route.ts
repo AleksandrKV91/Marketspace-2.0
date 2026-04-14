@@ -75,7 +75,7 @@ export interface AnalyticsResponse {
   daily_chart: Array<{ date: string; revenue: number; chmd: number; ad_spend: number; drr: number; margin_pct: number }>
   daily_chart_prev: Array<{ day_index: number; date: string; revenue: number }>
   daily_by_sku: Array<{ sku_ms: string; date: string; revenue: number; ad_spend: number }>
-  meta: { categories: string[]; managers: string[] }
+  meta: { categories: string[]; managers: string[]; max_date: string | null }
 }
 
 function rollup(items: Array<{ revenue: number; prev_revenue: number; chmd: number; ad_spend: number; margin_pct_weighted: number }>) {
@@ -92,6 +92,7 @@ function rollup(items: Array<{ revenue: number; prev_revenue: number; chmd: numb
 }
 
 export async function GET(req: Request) {
+  try {
   const supabase = createServiceClient()
   const url = new URL(req.url)
   const fromParam  = url.searchParams.get('from')
@@ -396,6 +397,12 @@ export async function GET(req: Request) {
     meta: {
       categories: [...metaCats].sort(),
       managers:   [...metaMgrs].sort(),
+      max_date:   toDate ?? null,
     },
   } satisfies AnalyticsResponse)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('[analytics] ERROR:', msg)
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
 }

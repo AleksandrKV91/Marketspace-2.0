@@ -16,6 +16,7 @@ function daysBetween(from: string, to: string): number {
 }
 
 export async function GET(req: NextRequest) {
+  try {
   const supabase = createServiceClient()
   const { searchParams } = new URL(req.url)
   const search = searchParams.get('search') ?? ''
@@ -538,4 +539,9 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => b.revenue - a.revenue)
 
   return NextResponse.json({ funnel, prev_funnel, daily, price_changes: changes, manager_table })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('[prices] ERROR:', msg)
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
 }

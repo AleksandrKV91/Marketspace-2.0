@@ -159,8 +159,11 @@ function exportExcel(
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+// ── Client-side cache (survives tab switches, cleared on page reload) ─────────
+const analyticsCache = new Map<string, AnalyticsResponse>()
+
 export default function AnalyticsTab() {
-  const { range } = useDateRange()
+  const { range, setRange } = useDateRange()
   const { filters, setMeta } = useGlobalFilters()
   const tableRef = useRef<HTMLDivElement>(null)
   const filterRowRef = useRef<HTMLDivElement>(null)
@@ -193,6 +196,9 @@ export default function AnalyticsTab() {
 
   // SKU modal
   const [modalSku, setModalSku] = useState<string | null>(null)
+
+  // Whether we've done the initial date correction from max_date
+  const dateInitialized = useRef(false)
 
   // Measure actual header height for sticky positioning
   useEffect(() => {
@@ -232,21 +238,48 @@ export default function AnalyticsTab() {
   }, [data, scrollToTable])
 
   useEffect(() => {
-    setLoading(true)
     const params = new URLSearchParams({ from: range.from, to: range.to })
     if (filters.category) params.set('category', filters.category)
     if (filters.manager)  params.set('manager', filters.manager)
     if (filters.novelty)  params.set('novelty', filters.novelty)
+    const cacheKey = params.toString()
 
+    // Instant cache hit — no loading state
+    const cached = analyticsCache.get(cacheKey)
+    if (cached) {
+      setData(cached)
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+    setError(null)
     fetch(`/api/dashboard/analytics?${params}`)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) return r.json().then(e => Promise.reject(new Error(e?.error ?? `HTTP ${r.status}`)))
+        return r.json()
+      })
       .then((d: AnalyticsResponse) => {
+        // On first load: if server's max_date differs from our default range, snap to last 7 days
+        if (!dateInitialized.current && d.meta.max_date) {
+          dateInitialized.current = true
+          const maxDate = d.meta.max_date
+          const from7 = new Date(maxDate)
+          from7.setDate(from7.getDate() - 6)
+          const from7iso = from7.toISOString().split('T')[0]
+          if (range.to !== maxDate || range.from !== from7iso) {
+            setRange({ from: from7iso, to: maxDate })
+            return  // will re-trigger effect with correct range
+          }
+        }
+        dateInitialized.current = true
+        analyticsCache.set(cacheKey, d)
         setData(d)
         setMeta({ categories: d.meta.categories, managers: d.meta.managers })
         setLoading(false)
       })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
-  }, [range.from, range.to, filters.category, filters.manager, filters.novelty, setMeta])
+  }, [range.from, range.to, filters.category, filters.manager, filters.novelty, setMeta, setRange])
 
   if (loading) return (
     <div className="py-6 space-y-6">
