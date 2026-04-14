@@ -173,8 +173,21 @@ export default function AnalyticsTab() {
   const filterRowRef = useRef<HTMLDivElement>(null)
   const [stickyTop, setStickyTop] = useState({ filterRow: 110, thead: 110 + 52 })
 
-  const [data, setData] = useState<AnalyticsResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  // Initialize from cache immediately — no loading flash on tab switch
+  const [data, setData] = useState<AnalyticsResponse | null>(() => {
+    const p = new URLSearchParams({ from: range.from, to: range.to })
+    if (filters.category) p.set('category', filters.category)
+    if (filters.manager)  p.set('manager', filters.manager)
+    if (filters.novelty)  p.set('novelty', filters.novelty)
+    return analyticsCache.get(p.toString()) ?? null
+  })
+  const [loading, setLoading] = useState(() => {
+    const p = new URLSearchParams({ from: range.from, to: range.to })
+    if (filters.category) p.set('category', filters.category)
+    if (filters.manager)  p.set('manager', filters.manager)
+    if (filters.novelty)  p.set('novelty', filters.novelty)
+    return !analyticsCache.has(p.toString())
+  })
   const [error, setError] = useState<string | null>(null)
 
   // Hierarchical expand state: Set of expanded category keys, Set of expanded subject keys

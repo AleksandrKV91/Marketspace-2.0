@@ -153,10 +153,15 @@ function SortTh({ label, sk, align = 'right', sortKey, sortDir, onSort }: {
 const priceCache = new Map<string, PriceData>()
 
 export default function PriceTab() {
-  const [data, setData] = useState<PriceData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const { range } = useDateRange()
+  // Initialize from cache immediately — no loading flash on tab switch
+  const [data, setData] = useState<PriceData | null>(() =>
+    priceCache.get(`${range.from}|${range.to}`) ?? null
+  )
+  const [loading, setLoading] = useState(() =>
+    !priceCache.has(`${range.from}|${range.to}`)
+  )
+  const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [priceFilter, setPriceFilter] = useState<Record<string, string>>({
     direction: 'all', ctr_delta: 'all', cr_delta: 'all', cpo: 'all', show: 'changes',
