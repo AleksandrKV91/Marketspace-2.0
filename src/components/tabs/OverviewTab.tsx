@@ -751,12 +751,11 @@ export default function OverviewTab() {
                 const isLowMargin  = row.margin_pct < 0.10
                 const isHighDrrRow = row.drr > row.margin_pct && row.margin_pct > 0
                 return (
-                  <motion.tr
+                  <tr
                     key={row.sku_ms}
                     className="border-t cursor-pointer"
                     style={{ borderColor: 'var(--border)' }}
                     onClick={() => setModalSkuMs(row.sku_ms)}
-                    whileHover={{ backgroundColor: 'rgba(255,255,255,0.03)' }}
                   >
                     <td className="py-2 text-xs" style={{ color: 'var(--text-subtle)' }}>{i + 1}</td>
                     <td className="py-2 text-center">
@@ -826,7 +825,7 @@ export default function OverviewTab() {
                     >
                       {row.stock_days == null ? '—' : row.stock_days}
                     </td>
-                  </motion.tr>
+                  </tr>
                 )
               })}
             </tbody>

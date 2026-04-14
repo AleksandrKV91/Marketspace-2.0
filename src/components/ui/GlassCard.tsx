@@ -1,6 +1,5 @@
 'use client'
 
-import { motion } from 'framer-motion'
 import { type ReactNode, type CSSProperties } from 'react'
 
 interface Props {
@@ -24,22 +23,18 @@ export function GlassCard({
   hover = false,
   solid = false,
   onClick,
-  delay = 0,
 }: Props) {
   const base = solid ? 'glass-solid' : 'glass'
   const hoverCls = (hover || onClick) ? 'glass-hover' : ''
   const padCls = padMap[padding]
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ type: 'spring', stiffness: 400, damping: 28, delay }}
+    <div
       className={`${base} ${hoverCls} ${padCls} ${className}`}
       onClick={onClick}
       style={{ cursor: onClick ? 'pointer' : undefined, ...style }}
     >
       {children}
-    </motion.div>
+    </div>
   )
 }

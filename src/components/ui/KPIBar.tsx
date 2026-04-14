@@ -1,14 +1,12 @@
 'use client'
 
-import { motion } from 'framer-motion'
-
 interface KPIItem {
   label: string
   value: string
   delta?: string
-  deltaColor?: string      // CSS color for delta (overrides deltaPositive)
-  deltaPositive?: boolean  // legacy fallback
-  hint?: string            // interpretation text under the value
+  deltaColor?: string
+  deltaPositive?: boolean
+  hint?: string
   danger?: boolean
   accent?: boolean
   icon?: string
@@ -23,10 +21,7 @@ interface KPIBarProps {
 
 export function KPIBar({ items, loading }: KPIBarProps) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: -6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+    <div
       className="glass overflow-hidden"
       style={{ borderRadius: 'var(--radius-xl)' }}
     >
@@ -38,11 +33,8 @@ export function KPIBar({ items, loading }: KPIBarProps) {
           const dColor = item.deltaColor
             ?? (item.deltaPositive ? 'var(--success)' : 'var(--danger)')
           return (
-            <motion.div
+            <div
               key={idx}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 28, delay: idx * 0.05 }}
               className="relative px-5 py-4"
               onClick={item.onClick}
               title={item.tooltip}
@@ -58,7 +50,6 @@ export function KPIBar({ items, loading }: KPIBarProps) {
                 cursor: item.onClick ? 'pointer' : undefined,
               }}
             >
-              {/* Specular per-cell */}
               <div
                 className="absolute top-0 right-0 w-1/2 h-full pointer-events-none"
                 style={{ background: 'radial-gradient(ellipse at 85% 10%, rgba(255,255,255,0.20) 0%, transparent 60%)' }}
@@ -101,10 +92,10 @@ export function KPIBar({ items, loading }: KPIBarProps) {
                   ) : null}
                 </div>
               )}
-            </motion.div>
+            </div>
           )
         })}
       </div>
-    </motion.div>
+    </div>
   )
 }
