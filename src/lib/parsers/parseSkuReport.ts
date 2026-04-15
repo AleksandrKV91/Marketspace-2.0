@@ -241,74 +241,49 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
     }
 
     // ── Изменения цен ────────────────────────────────────────────────────────
-    // Блок «Изменение цены» содержит дельты % за конкретные даты.
-    // price (col «Цена») = цена на snap_date (конец периода).
-    // Цена на начало (самую старую дату) = откат всех дельт назад от snap_date.
-    // price_date = дата начала действия цены (т.е. дата ДО которой цена была другой).
+    // Колонка «Цена» = цена на НАЧАЛО периода (самую старую дату), т.е. «цена было».
+    // Блок «Изменение цены»: заголовок колонки = дата изменения, значение = дельта %.
+    // При дельте -6%: priceAfter = priceBefore * (1 - 0.06)
+    // При дельте +9%: priceAfter = priceBefore * (1 + 0.09)
+    // Т.е. priceAfter = priceBefore * (1 + delta/100) для любого знака дельты.
+    // Записываем price_date = дата изменения, price = цена ПОСЛЕ изменения (новая).
     if (priceChangeBlock && skuWbNum) {
-      const basePrice = priceCol >= 0 ? toNum(row[priceCol]) : null
-      if (basePrice != null && basePrice > 0) {
+      const startPrice = priceCol >= 0 ? toNum(row[priceCol]) : null
+      if (startPrice != null && startPrice > 0) {
         // Собираем даты и дельты, сортируем от старой к новой
         const priceDates = priceChangeBlock.dateCols.map(c => ({
-          col: c,
           iso: excelToISO(headerRow[c] as number),
           delta: toNum(row[c]) ?? 0,
         })).filter(x => x.iso).sort((a, b) => a.iso!.localeCompare(b.iso!))
 
-        // Только даты с ненулевой дельтой
-        const withDelta = priceDates.filter(d => d.delta !== 0)
+        // Записываем цену на начало периода (самую старую дату блока или dateCols[last])
+        // как базовую — это и есть startPrice
+        const periodStartISO = dateCols.length > 0
+          ? excelToISO(headerRow[dateCols[dateCols.length - 1]] as number) ?? snapDateISO
+          : snapDateISO
 
-        if (withDelta.length > 0) {
-          // Откатываем от basePrice (snap_date) назад — находим цену до каждого изменения
-          // Идём от новейшего к старейшему, делим на (1 + delta/100)
-          const reversed = [...withDelta].reverse()
-          const priceStack: number[] = [basePrice]
-          for (const { delta } of reversed) {
-            priceStack.push(priceStack[priceStack.length - 1] / (1 + delta / 100))
-          }
-          // priceStack[0] = snap_date цена, priceStack[N] = цена до всех изменений
+        // Всегда пишем цену «было» (на начало периода)
+        priceChanges.push({
+          sku_ms: skuMs,
+          sku_wb: skuWbNum,
+          price_date: periodStartISO,
+          price: startPrice,
+          delta_pct: null,
+        })
 
-          // Строим записи: price_date = дата начала действия новой цены (после изменения)
-          // Самая старая запись: price_date = withDelta[0].iso, price = цена ПОСЛЕ первой дельты
-          // т.е. цена до первой дельты была priceStack[last], после = priceStack[last] * (1 + delta/100)
-          for (let i = 0; i < withDelta.length; i++) {
-            const { iso, delta } = withDelta[i]
-            // Цена ДО этого изменения (начальная для этой даты)
-            const priceBefore = priceStack[withDelta.length - i]
-            // Цена ПОСЛЕ (= priceBefore * (1 + delta/100))
-            const priceAfter = Math.round(priceBefore * (1 + delta / 100))
-            priceChanges.push({
-              sku_ms: skuMs,
-              sku_wb: skuWbNum,
-              price_date: iso!,
-              price: priceAfter,
-              delta_pct: delta,
-            })
-          }
-
-          // Также записываем цену на snap_date (конец периода)
-          const snapKey = snapDateISO
-          const alreadyHasSnap = priceChanges.some(
-            p => p.sku_wb === skuWbNum && p.price_date === snapKey
-          )
-          if (!alreadyHasSnap) {
-            priceChanges.push({
-              sku_ms: skuMs,
-              sku_wb: skuWbNum,
-              price_date: snapDateISO,
-              price: basePrice,
-              delta_pct: null,
-            })
-          }
-        } else {
-          // Нет изменений — записываем только snap_date цену
+        // Прокатываем цену вперёд через все дельты (от старой к новой)
+        let currentPrice = startPrice
+        for (const { iso, delta } of priceDates) {
+          if (delta === 0) continue
+          const priceAfter = Math.round(currentPrice * (1 + delta / 100))
           priceChanges.push({
             sku_ms: skuMs,
             sku_wb: skuWbNum,
-            price_date: snapDateISO,
-            price: basePrice,
-            delta_pct: null,
+            price_date: iso!,
+            price: priceAfter,
+            delta_pct: delta,
           })
+          currentPrice = priceAfter
         }
       }
     }
