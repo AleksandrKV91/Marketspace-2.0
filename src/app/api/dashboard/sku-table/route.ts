@@ -20,10 +20,7 @@ export async function GET(req: NextRequest) {
   if (lastUploads) for (const u of lastUploads) {
     if (!latestByType[u.file_type]) latestByType[u.file_type] = u.id
   }
-
-  const stockId = latestByType['stock']
   const abcId = latestByType['abc']
-  const skuReportId = latestByType['sku_report']
 
   // Если даты не переданы — берём последние 7 дней из fact_sku_daily
   let effectiveFrom = fromParam
@@ -40,8 +37,12 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // dim_sku — справочник (фильтрация по поиску) — все строки через пагинацию
-  const dimRows = await fetchAll<{ sku_ms: string; sku_wb: number | null; name: string | null; brand: string | null; supplier: string | null; subject_wb: string | null; category_wb: string | null }>(
+  // dim_sku — справочник
+  const dimRows = await fetchAll<{
+    sku_ms: string; sku_wb: number | null; name: string | null
+    brand: string | null; supplier: string | null
+    subject_wb: string | null; category_wb: string | null
+  }>(
     (sb) => {
       let q = sb.from('dim_sku').select('sku_ms, sku_wb, name, brand, supplier, subject_wb, category_wb')
       if (search) q = q.or(`name.ilike.%${search}%,sku_ms.ilike.%${search}%,brand.ilike.%${search}%`)
@@ -52,85 +53,57 @@ export async function GET(req: NextRequest) {
   if (!dimRows.length) return NextResponse.json({ rows: [], total: 0, selected_count: 0, selected_revenue: 0 })
 
   const skuMsList = dimRows.map(r => r.sku_ms)
-  const wbList = dimRows.map(r => r.sku_wb).filter((v): v is number => v !== null)
 
-  // Хелпер: батчированный запрос через .in() для больших списков (>1000 элементов)
-  async function batchIn<T>(
-    table: string,
-    selectCols: string,
-    key: string,
-    ids: (string | number)[],
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    extraFilter?: (q: any) => any,
-    batchSize = 500,
-  ): Promise<T[]> {
-    const results: T[] = []
-    for (let i = 0; i < ids.length; i += batchSize) {
-      const chunk = ids.slice(i, i + batchSize)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let q: any = supabase.from(table).select(selectCols).in(key, chunk)
-      if (extraFilter) q = extraFilter(q)
-      const { data } = await q
-      if (data) results.push(...(data as T[]))
-    }
-    return results
+  // Снапшот из fact_sku_daily (последняя snap_date)
+  const { data: maxSnapRow } = await supabase.from('fact_sku_daily')
+    .select('snap_date').not('snap_date', 'is', null)
+    .order('snap_date', { ascending: false }).limit(1)
+  const maxSnapDate = maxSnapRow?.[0]?.snap_date
+
+  type SnapRow = {
+    sku_ms: string; margin_pct: number | null; chmd_5d: number | null
+    stock_days: number | null; novelty_status: string | null; manager: string | null
+    price: number | null; fbo_wb: number | null; fbs_pushkino: number | null
+    fbs_smolensk: number | null; kits_stock: number | null
+  }
+  const snapByMs: Record<string, SnapRow> = {}
+  if (maxSnapDate) {
+    const snapRows = await fetchAll<SnapRow>(
+      (sb) => sb.from('fact_sku_daily')
+        .select('sku_ms, margin_pct, chmd_5d, stock_days, novelty_status, manager, price, fbo_wb, fbs_pushkino, fbs_smolensk, kits_stock')
+        .eq('snap_date', maxSnapDate).not('fbo_wb', 'is', null),
+      supabase,
+    )
+    for (const r of snapRows) { if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = r }
   }
 
-  // Параллельные запросы — все через батчи
-  const [stockRows, abcRows, skuSnapRows, dailyRows] = await Promise.all([
-    // fact_stock_snapshot — остатки по sku_wb
-    stockId && wbList.length
-      ? batchIn<{ sku_wb: number; sku_ms: string; fbo_wb: number; fbs_pushkino: number; fbs_smolensk: number; total_stock: number; price: number | null; margin_pct: number | null }>(
-          'fact_stock_snapshot',
-          'sku_wb, sku_ms, fbo_wb, fbs_pushkino, fbs_smolensk, total_stock, price, margin_pct',
-          'sku_wb',
-          wbList,
-          q => q.eq('upload_id', stockId!),
-        )
-      : Promise.resolve([]),
+  // ABC
+  type AbcRow = { sku_ms: string; abc_class: string | null }
+  const abcByMs: Record<string, AbcRow> = {}
+  if (abcId) {
+    const abcRows = await fetchAll<AbcRow>(
+      (sb) => sb.from('fact_abc').select('sku_ms, abc_class').eq('upload_id', abcId),
+      supabase,
+    )
+    for (const r of abcRows) abcByMs[r.sku_ms] = r
+  }
 
-    // fact_abc — только abc_class как дополнение
-    abcId
-      ? batchIn<{ sku_ms: string; abc_class: string | null }>(
-          'fact_abc', 'sku_ms, abc_class', 'sku_ms', skuMsList,
-          q => q.eq('upload_id', abcId!),
-        )
-      : Promise.resolve([]),
+  // fact_sku_daily — метрики за период
+  type DailyRow = {
+    sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null
+    drr_total: number | null; ctr: number | null; cr_cart: number | null
+    cr_order: number | null; cpm: number | null; cpc: number | null; ad_order_share: number | null
+  }
+  const dailyRows = effectiveFrom && effectiveTo
+    ? await fetchAll<DailyRow>(
+        (sb) => sb.from('fact_sku_daily')
+          .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
+          .gte('metric_date', effectiveFrom!).lte('metric_date', effectiveTo!),
+        supabase,
+      )
+    : []
 
-    // fact_sku_snapshot — маржа, ЧМД, запас дней, менеджер
-    skuReportId
-      ? batchIn<{ sku_ms: string; margin_rub: number | null; chmd_5d: number | null; stock_days: number | null; novelty_status: string | null; manager: string | null; price: number | null; fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null }>(
-          'fact_sku_snapshot',
-          'sku_ms, margin_rub, chmd_5d, stock_days, novelty_status, manager, price, fbo_wb, fbs_pushkino, fbs_smolensk',
-          'sku_ms',
-          skuMsList,
-          q => q.eq('upload_id', skuReportId!),
-        )
-      : Promise.resolve([]),
-
-    // fact_sku_daily — выручка, ДРР, CTR, CR за период
-    // ВСЕГДА фильтруем по дате (effectiveFrom/effectiveTo) — иначе 176k строк = таймаут
-    effectiveFrom && effectiveTo
-      ? fetchAll<{ sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; drr_total: number | null; ctr: number | null; cr_cart: number | null; cr_order: number | null; cpm: number | null; cpc: number | null; ad_order_share: number | null }>(
-          (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
-            .gte('metric_date', effectiveFrom!).lte('metric_date', effectiveTo!),
-          supabase,
-        )
-      : Promise.resolve([]),
-  ])
-
-  // Маппинги
-  const stockByWb: Record<number, { fbo_wb: number; fbs_pushkino: number; fbs_smolensk: number; total_stock: number; price: number | null; margin_pct: number | null }> = {}
-  for (const r of stockRows) stockByWb[r.sku_wb] = r
-
-  const abcByMs: Record<string, { abc_class: string | null }> = {}
-  for (const r of abcRows) abcByMs[r.sku_ms] = r
-
-  const snapByMs: Record<string, { margin_rub: number | null; chmd_5d: number | null; stock_days: number | null; novelty_status: string | null; manager: string | null; price: number | null; fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null }> = {}
-  for (const r of skuSnapRows) snapByMs[r.sku_ms] = r
-
-  // Агрегация daily по SKU (фильтр по skuMsList в памяти)
+  // Агрегация daily по SKU
   const skuMsSet = new Set(skuMsList)
   type DailyAgg = { revenue: number; ad_spend: number; drr: number[]; ctr: number[]; cr_cart: number[]; cr_order: number[]; cpm: number[]; days: number }
   const dailyByMs: Record<string, DailyAgg> = {}
@@ -152,16 +125,16 @@ export async function GET(req: NextRequest) {
 
   // Собираем строки
   const rows = dimRows.map(sku => {
-    const wb = sku.sku_wb ?? 0
-    const stockSnap = stockByWb[wb]
     const skuSnap = snapByMs[sku.sku_ms]
     const abc = abcByMs[sku.sku_ms]
     const daily = dailyByMs[sku.sku_ms]
 
-    // Остатки — из fact_stock_snapshot (Таблица остатков, ADC)
-    const totalStock = stockSnap?.total_stock ?? 0
+    const fbo = skuSnap?.fbo_wb ?? 0
+    const fbsPush = skuSnap?.fbs_pushkino ?? 0
+    const fbsSmol = skuSnap?.fbs_smolensk ?? 0
+    const kits = skuSnap?.kits_stock ?? 0
+    const totalStock = fbo + fbsPush + fbsSmol + kits
 
-    // Выручка, ДРР — из fact_sku_daily
     const revenue = daily?.revenue ?? 0
     const adSpend = daily?.ad_spend ?? 0
     const drr = revenue > 0 ? adSpend / revenue : (avg(daily?.drr ?? []))
@@ -170,21 +143,13 @@ export async function GET(req: NextRequest) {
     const cr_order = avg(daily?.cr_order ?? [])
     const cpo = daily && daily.days > 0 && adSpend > 0 ? adSpend / daily.days : null
 
-    // Маржа % — из fact_sku_snapshot (колонка X Отчёта по SKU)
-    // margin_rub = маржа ₽ на единицу, price = цена → margin_pct = margin_rub / price
-    const price = skuSnap?.price ?? stockSnap?.price ?? null
-    const marginRub = skuSnap?.margin_rub ?? null
-    const marginPct = marginRub != null && price && price > 0 ? marginRub / price : (stockSnap?.margin_pct ?? 0)
-
-    // ЧМД — из fact_sku_snapshot (chmd_5d, колонка Z)
+    const price = skuSnap?.price ?? null
+    const marginPct = skuSnap?.margin_pct ?? 0
     const chmd = skuSnap?.chmd_5d ?? 0
-
-    // Запас дней — из fact_sku_snapshot (колонка W)
     const stockDays = skuSnap?.stock_days ?? 0
-
     const abcClass = abc?.abc_class ?? null
 
-    const oos_status: 'critical' | 'warning' | 'ok' | 'none' =
+    const oos_status: 'critical' | 'warning' | 'ok' =
       totalStock === 0 ? 'critical' : totalStock < 30 ? 'warning' : 'ok'
     const margin_status: 'high' | 'medium' | 'low' =
       marginPct > 0.20 ? 'high' : marginPct > 0.10 ? 'medium' : 'low'
@@ -201,7 +166,7 @@ export async function GET(req: NextRequest) {
     })
 
     return {
-      sku: String(wb || sku.sku_ms),
+      sku: String(sku.sku_wb || sku.sku_ms),
       sku_ms: sku.sku_ms,
       name: sku.name ?? '',
       manager: skuSnap?.manager ?? '',
@@ -214,7 +179,12 @@ export async function GET(req: NextRequest) {
       cr_basket,
       cr_order,
       stock_qty: totalStock,
+      fbo_wb: fbo,
+      fbs_pushkino: fbsPush,
+      fbs_smolensk: fbsSmol,
+      kits_stock: kits,
       stock_days: stockDays,
+      price,
       cpo,
       score,
       abc_class: abcClass,

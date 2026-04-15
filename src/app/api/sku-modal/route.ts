@@ -9,7 +9,6 @@ export async function GET(req: NextRequest) {
 
   const supabase = createServiceClient()
 
-  // Последние upload_id для каждого типа
   const getLatestUploadId = async (fileType: string) => {
     const { data } = await supabase.from('uploads').select('id')
       .eq('file_type', fileType).eq('status', 'ok')
@@ -17,24 +16,21 @@ export async function GET(req: NextRequest) {
     return data?.[0]?.id ?? null
   }
 
-  const [abcUploadId, skuUploadId, stockUploadId] = await Promise.all([
-    getLatestUploadId('abc'),
-    getLatestUploadId('sku_report'),
-    getLatestUploadId('stock'),
-  ])
+  const abcUploadId = await getLatestUploadId('abc')
 
   // Базовая инфо о SKU
   const { data: dim } = await supabase.from('dim_sku')
-    .select('sku_ms, sku_wb, name, brand, category_wb, subject_wb, manager, supplier')
+    .select('sku_ms, sku_wb, name, brand, category_wb, subject_wb, supplier')
     .eq('sku_ms', skuMs).single()
 
-  // Снапшот (остатки, цена, маржа)
-  const { data: snap } = skuUploadId ? await supabase.from('fact_sku_snapshot')
-    .select('*').eq('sku_ms', skuMs).eq('upload_id', skuUploadId).single() : { data: null }
-
-  // Stock снапшот
-  const { data: stockSnap } = stockUploadId && dim?.sku_wb ? await supabase.from('fact_stock_snapshot')
-    .select('*').eq('sku_wb', dim.sku_wb).eq('upload_id', stockUploadId).single() : { data: null }
+  // Снапшот из fact_sku_daily (последняя snap_date для этого SKU)
+  const { data: snapRows } = await supabase.from('fact_sku_daily')
+    .select('snap_date, fbo_wb, fbs_pushkino, fbs_smolensk, kits_stock, stock_days, margin_pct, chmd_5d, price, supply_date, supply_qty, days_to_arrival, manager, novelty_status, ots_reserve_days')
+    .eq('sku_ms', skuMs)
+    .not('snap_date', 'is', null)
+    .order('snap_date', { ascending: false })
+    .limit(1)
+  const snap = snapRows?.[0] ?? null
 
   // ABC данные
   const { data: abc } = abcUploadId ? await supabase.from('fact_abc')
@@ -49,7 +45,7 @@ export async function GET(req: NextRequest) {
 
   // Изменения цен — последние 10
   const { data: priceChanges } = dim?.sku_wb ? await supabase.from('fact_price_changes')
-    .select('price_date, price').eq('sku_wb', dim.sku_wb)
+    .select('price_date, price, delta_pct').eq('sku_wb', dim.sku_wb)
     .order('price_date', { ascending: false }).limit(10) : { data: null }
 
   // Заметка
@@ -70,7 +66,6 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     dim,
     snap,
-    stock_snap: stockSnap,
     abc,
     daily: (daily ?? []).slice(0, 30).reverse(),
     price_changes: priceChanges ?? [],

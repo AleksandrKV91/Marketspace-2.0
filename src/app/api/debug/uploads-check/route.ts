@@ -6,17 +6,17 @@ export const maxDuration = 20
 export async function GET() {
   const supabase = createServiceClient()
 
-  const [uploadsRes, snapSampleRes, snapCountByUploadRes] = await Promise.all([
+  const [uploadsRes, dailySampleRes, dailyCountRes] = await Promise.all([
     supabase.from('uploads').select('id, file_type, filename, uploaded_at, status, rows_count').order('uploaded_at', { ascending: false }).limit(15),
-    supabase.from('fact_sku_snapshot').select('sku_ms, sku_wb, manager, price, upload_id').limit(5),
-    supabase.from('fact_sku_snapshot').select('upload_id').limit(1),
+    supabase.from('fact_sku_daily').select('sku_ms, snap_date, manager, price, upload_id').not('snap_date', 'is', null).order('snap_date', { ascending: false }).limit(5),
+    supabase.from('fact_sku_daily').select('sku_ms', { count: 'exact', head: true }),
   ])
 
   return NextResponse.json({
     uploads: uploadsRes.data ?? [],
     uploads_error: uploadsRes.error?.message,
-    snapshot_sample: snapSampleRes.data ?? [],
-    snapshot_error: snapSampleRes.error?.message,
-    snapshot_upload_id_sample: snapCountByUploadRes.data ?? [],
+    daily_snapshot_sample: dailySampleRes.data ?? [],
+    daily_error: dailySampleRes.error?.message,
+    fact_sku_daily_total: dailyCountRes.count,
   })
 }

@@ -96,23 +96,29 @@ export async function GET(req: Request) {
     if (r.sku_wb) dimByWb[r.sku_wb] = r.sku_ms
   }
 
-  // ── 3. fact_sku_snapshot ─────────────────────────────────────────────────
+  // ── 3. fact_sku_daily — снапшотные поля (последняя snap_date) ────────────
   type SnapRow = {
-    sku_ms: string; margin_rub: number | null; margin_pct: number | null
+    sku_ms: string; margin_pct: number | null
     chmd_5d: number | null; manager: string | null; price: number | null
     stock_days: number | null; novelty_status: string | null
     fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
     snap_date: string | null
   }
   const snapByMs: Record<string, SnapRow> = {}
-  if (skuRepId) {
-    const rows = await fetchAll<SnapRow>(
-      (sb) => sb.from('fact_sku_snapshot')
-        .select('sku_ms, margin_rub, margin_pct, chmd_5d, manager, price, stock_days, novelty_status, fbo_wb, fbs_pushkino, fbs_smolensk, snap_date')
-        .eq('upload_id', skuRepId),
-      supabase,
-    )
-    for (const r of rows) snapByMs[r.sku_ms] = r
+  {
+    const { data: maxSnapRow } = await supabase.from('fact_sku_daily')
+      .select('snap_date').not('snap_date', 'is', null)
+      .order('snap_date', { ascending: false }).limit(1)
+    const maxSnapDate = maxSnapRow?.[0]?.snap_date
+    if (maxSnapDate) {
+      const rows = await fetchAll<SnapRow>(
+        (sb) => sb.from('fact_sku_daily')
+          .select('sku_ms, margin_pct, chmd_5d, manager, price, stock_days, novelty_status, fbo_wb, fbs_pushkino, fbs_smolensk, snap_date')
+          .eq('snap_date', maxSnapDate).not('fbo_wb', 'is', null),
+        supabase,
+      )
+      for (const r of rows) { if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = r }
+    }
   }
 
   // ── 5. fact_china_supply ─────────────────────────────────────────────────
@@ -177,17 +183,6 @@ export async function GET(req: Request) {
       )
     : []
 
-  // ── 10. fact_stock_daily ─────────────────────────────────────────────────
-  type StockDailyRow = { sku_wb: number; sale_date: string; sales_qty: number | null }
-  const stockDailyRows = fromDate && toDate
-    ? await fetchAll<StockDailyRow>(
-        (sb) => sb.from('fact_stock_daily')
-          .select('sku_wb, sale_date, sales_qty')
-          .gte('sale_date', fromDate!).lte('sale_date', toDate!),
-        supabase,
-      )
-    : []
-
   // ── 11. Агрегация по SKU — текущий период ────────────────────────────────
   type SkuAgg = { revenue: number; ad_spend: number; ctr: number[]; cr_order: number[]; days: Set<string> }
   const skuAgg: Record<string, SkuAgg> = {}
@@ -215,14 +210,6 @@ export async function GET(req: Request) {
     prevSkuAgg[r.sku_ms].ad_spend += r.ad_spend ?? 0
   }
 
-  // ── 13. Агрегация продаж шт ──────────────────────────────────────────────
-  const stockDailyByWb: Record<number, { total_qty: number; days_with_sales: number }> = {}
-  for (const r of stockDailyRows) {
-    if (!stockDailyByWb[r.sku_wb]) stockDailyByWb[r.sku_wb] = { total_qty: 0, days_with_sales: 0 }
-    stockDailyByWb[r.sku_wb].total_qty += r.sales_qty ?? 0
-    if ((r.sales_qty ?? 0) > 0) stockDailyByWb[r.sku_wb].days_with_sales++
-  }
-
   const periodDays = fromDate && toDate
     ? Math.max(1, Math.round((new Date(toDate).getTime() - new Date(fromDate).getTime()) / 86400000) + 1)
     : 30
@@ -234,7 +221,7 @@ export async function GET(req: Request) {
   const medianCr  = median(allCrs)
 
   // ── 15. Набор SKU после фильтрации ───────────────────────────────────────
-  // Объединяем SKU из fact_sku_daily (с рекламой) + fact_sku_snapshot (все, включая органику)
+  // Набор SKU: из fact_sku_daily (все SKU) + снапшот
   const filteredSkuMs = new Set<string>([...Object.keys(skuAgg), ...Object.keys(snapByMs)])
   if (catFilter || mgrFilter || novFilter) {
     for (const ms of [...filteredSkuMs]) {
@@ -295,17 +282,10 @@ export async function GET(req: Request) {
     const china = chinaByMs[ms]
 
     const price      = snap?.price ?? 0
-    // margin_pct из колонки Y «Маржа, %» отчёта по SKU (парсер делит на 100: 22 → 0.22)
     const marginPct  = snap?.margin_pct ?? 0
-
-    // Остаток = FBO WB + FBS Пушкино + FBS Смоленск
     const totalStock = (snap?.fbo_wb ?? 0) + (snap?.fbs_pushkino ?? 0) + (snap?.fbs_smolensk ?? 0)
     const leadTime   = getLeadTime(dim?.country, china?.lead_time_days)
-
-    const sd  = skuWb ? stockDailyByWb[skuWb] : null
-    const dpd = sd && sd.days_with_sales > 0 ? sd.total_qty / periodDays : 0
-    const stockDays = snap?.stock_days
-      ?? (dpd > 0 && totalStock > 0 ? Math.round(totalStock / dpd) : (totalStock > 0 ? null : 0))
+    const stockDays  = snap?.stock_days ?? (totalStock > 0 ? null : 0)
 
     const drr    = s.revenue > 0 ? s.ad_spend / s.revenue : 0
     const avgCtr = s.ctr.length ? s.ctr.reduce((a, b) => a + b, 0) / s.ctr.length : 0
@@ -325,24 +305,18 @@ export async function GET(req: Request) {
     if (prev) {
       prevRevenue += prev.revenue
       prevAdSpend += prev.ad_spend
-      const prevMarginPct = marginPct  // используем актуальную маржу (нет исторических данных)
-      prevChmd += prev.revenue * prevMarginPct - prev.ad_spend
+      prevChmd += prev.revenue * marginPct - prev.ad_spend
     }
 
     // Упущенная выручка OOS
     let skuLostOos = 0
     let skuLostAds = 0
-    if (totalStock === 0 && dpd > 0 && price > 0) {
-      const daysOos = Math.max(0, periodDays - (sd?.days_with_sales ?? 0))
-      skuLostOos = dpd * daysOos * price
-      lostRevenue += skuLostOos
-    }
     if (totalStock === 0 && s.ad_spend > 0) {
       skuLostAds = s.ad_spend
-      lostRevenue += skuLostAds  // слитый бюджет на OOS
+      lostRevenue += skuLostAds
     }
-    if (skuLostOos > 0 || skuLostAds > 0) {
-      lostDetailMap[ms] = { sku_ms: ms, name: dim?.name ?? ms, sku_wb: skuWb, lost_oos: skuLostOos, lost_ads: skuLostAds }
+    if (skuLostAds > 0) {
+      lostDetailMap[ms] = { sku_ms: ms, name: dim?.name ?? ms, sku_wb: skuWb, lost_oos: 0, lost_ads: skuLostAds }
     }
 
     // ── Alerts ──────────────────────────────────────────────────────────────
@@ -359,7 +333,7 @@ export async function GET(req: Request) {
       if (focusSoonOos.length < 5) focusSoonOos.push({
         sku_ms: ms, name: dim?.name ?? ms,
         stock_days: stockDays, lead_time: leadTime,
-        revenue_per_day: dpd * price,
+        revenue_per_day: periodDays > 0 ? s.revenue / periodDays : 0,
         sku_wb: skuWb,
       })
     }
@@ -498,10 +472,7 @@ export async function GET(req: Request) {
       const marginPct  = snap?.margin_pct ?? 0
       const totalStock = (snap?.fbo_wb ?? 0) + (snap?.fbs_pushkino ?? 0) + (snap?.fbs_smolensk ?? 0)
       const leadTime   = getLeadTime(dim?.country, china?.lead_time_days)
-      const sd  = skuWb ? stockDailyByWb[skuWb] : null
-      const dpd = sd && sd.days_with_sales > 0 ? sd.total_qty / periodDays : 0
-      const stockDays = snap?.stock_days
-        ?? (dpd > 0 && totalStock > 0 ? Math.round(totalStock / dpd) : (totalStock > 0 ? null : 0))
+      const stockDays  = snap?.stock_days ?? (totalStock > 0 ? null : 0)
 
       const drr   = s.revenue > 0 ? s.ad_spend / s.revenue : 0
       const avgCr = s.cr_order.length ? s.cr_order.reduce((a, b) => a + b, 0) / s.cr_order.length : 0

@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
   const skuReportId = latestByType['sku_report'] ?? null
 
   const snapCountRes = skuReportId
-    ? await supabase.from('fact_sku_snapshot').select('sku_ms', { count: 'exact', head: true }).eq('upload_id', skuReportId)
+    ? await supabase.from('fact_sku_daily').select('sku_ms', { count: 'exact', head: true }).eq('upload_id', skuReportId)
     : { count: null }
 
   const priceSampleRes = await supabase.from('fact_price_changes').select('sku_wb, sku_ms, price_date, price').order('price_date', { ascending: false }).limit(5)
@@ -45,8 +45,6 @@ export async function GET(req: NextRequest) {
       date_min: dailyRangeMinRes.data?.[0]?.metric_date ?? null,
       date_max: dailyRangeMaxRes.data?.[0]?.metric_date ?? null,
       rows_in_period: dailyCountRes.count,
-    },
-    fact_sku_snapshot: {
       rows_in_sku_report: snapCountRes.count,
     },
   })

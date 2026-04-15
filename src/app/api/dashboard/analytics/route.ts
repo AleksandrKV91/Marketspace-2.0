@@ -67,21 +67,27 @@ export async function GET(req: Request) {
   const dimByMs: Record<string, DimRow> = {}
   for (const r of dimRows) dimByMs[r.sku_ms] = r
 
-  // ── 3. fact_sku_snapshot ─────────────────────────────────────────────────────
+  // ── 3. fact_sku_daily — снапшотные поля (берём по последней snap_date) ───────
   type SnapRow = {
     sku_ms: string; margin_pct: number | null; price: number | null
     manager: string | null; novelty_status: string | null; stock_days: number | null
     fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
   }
   const snapByMs: Record<string, SnapRow> = {}
-  if (skuRepId) {
-    const rows = await fetchAll<SnapRow>(
-      (sb) => sb.from('fact_sku_snapshot')
-        .select('sku_ms, margin_pct, price, manager, novelty_status, stock_days, fbo_wb, fbs_pushkino, fbs_smolensk')
-        .eq('upload_id', skuRepId),
-      supabase,
-    )
-    for (const r of rows) snapByMs[r.sku_ms] = r
+  {
+    const { data: maxSnapRow } = await supabase.from('fact_sku_daily')
+      .select('snap_date').not('snap_date', 'is', null)
+      .order('snap_date', { ascending: false }).limit(1)
+    const maxSnapDate = maxSnapRow?.[0]?.snap_date
+    if (maxSnapDate) {
+      const rows = await fetchAll<SnapRow>(
+        (sb) => sb.from('fact_sku_daily')
+          .select('sku_ms, margin_pct, price, manager, novelty_status, stock_days, fbo_wb, fbs_pushkino, fbs_smolensk')
+          .eq('snap_date', maxSnapDate).not('fbo_wb', 'is', null),
+        supabase,
+      )
+      for (const r of rows) { if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = r }
+    }
   }
 
   // ── 4. Date range ────────────────────────────────────────────────────────────

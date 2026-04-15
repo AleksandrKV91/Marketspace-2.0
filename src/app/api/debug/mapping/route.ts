@@ -26,22 +26,26 @@ export async function GET() {
     .from('fact_sku_daily')
     .select('*', { count: 'exact', head: true })
 
-  const { count: snapCount } = await supabase
-    .from('fact_sku_snapshot')
-    .select('*', { count: 'exact', head: true })
-
-  // Sample rows from fact tables if any exist
+  // Sample rows from fact_sku_daily (with snap fields)
   const { data: dailySample } = await supabase
     .from('fact_sku_daily')
-    .select('sku_ms, metric_date, revenue')
+    .select('sku_ms, metric_date, revenue, snap_date, fbo_wb, price')
+    .limit(5)
+
+  // Sample rows with snap data only
+  const { data: snapSample } = await supabase
+    .from('fact_sku_daily')
+    .select('sku_ms, snap_date, fbo_wb, price, manager')
+    .not('snap_date', 'is', null)
+    .order('snap_date', { ascending: false })
     .limit(5)
 
   return NextResponse.json({
     dim_sample: dimSample,
     last_upload: lastUpload,
     fact_sku_daily_count: dailyCount,
-    fact_sku_snapshot_count: snapCount,
     fact_sku_daily_sample: dailySample,
+    fact_sku_daily_snap_sample: snapSample,
     note: 'Check dim_sample.sku_ms format vs what the parser extracts from row[0] or skuMsCol',
   })
 }

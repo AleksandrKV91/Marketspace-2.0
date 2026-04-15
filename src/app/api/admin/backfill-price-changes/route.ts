@@ -7,7 +7,7 @@
  * (используется только на сервере, локально или в Vercel с файловой системой)
  *
  * Fallback: если dir не передан или файлы недоступны,
- * заполняет fact_price_changes из fact_sku_snapshot (snap_date + price).
+ * заполняет fact_price_changes из fact_sku_daily (snap_date + price).
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -57,16 +57,9 @@ export async function POST(req: NextRequest) {
         const parsed = parseSkuReport(buf.buffer as ArrayBuffer, skuMap.size > 0 ? skuMap : undefined)
 
         // Дедупликация по (sku_wb, price_date)
-        const dedup = new Map<string, { sku_wb: number; sku_ms: string; price_date: string; price: number }>()
+        const dedup = new Map<string, { sku_wb: number; sku_ms: string; price_date: string; price: number; delta_pct: number | null }>()
         for (const r of parsed.priceChanges) {
-          if (r.sku_wb) dedup.set(`${r.sku_wb}|${r.price_date}`, { sku_wb: r.sku_wb, sku_ms: r.sku_ms, price_date: r.price_date, price: r.price })
-        }
-        // Также snap_date + price из снапшота
-        for (const s of parsed.snapshots) {
-          if (s.sku_wb && s.price != null && s.snap_date) {
-            const key = `${s.sku_wb}|${s.snap_date}`
-            if (!dedup.has(key)) dedup.set(key, { sku_wb: s.sku_wb, sku_ms: s.sku_ms, price_date: s.snap_date, price: s.price })
-          }
+          if (r.sku_wb) dedup.set(`${r.sku_wb}|${r.price_date}`, { sku_wb: r.sku_wb, sku_ms: r.sku_ms, price_date: r.price_date, price: r.price, delta_pct: r.delta_pct })
         }
 
         const rows = [...dedup.values()]
@@ -83,15 +76,16 @@ export async function POST(req: NextRequest) {
       }
     }
   } else {
-    // Fallback: заполнить из fact_sku_snapshot (snap_date + price)
-    type SnapRow = { sku_wb: number | null; sku_ms: string | null; snap_date: string; price: number | null }
-    const allSnaps: SnapRow[] = []
+    // Fallback: заполнить из fact_sku_daily (snap_date + price)
+    type DailySnapRow = { sku_wb: number | null; sku_ms: string; snap_date: string | null; price: number | null }
+    const allSnaps: DailySnapRow[] = []
     let offset = 0
     while (true) {
       const { data, error } = await supabase
-        .from('fact_sku_snapshot')
+        .from('fact_sku_daily')
         .select('sku_wb, sku_ms, snap_date, price')
         .not('sku_wb', 'is', null)
+        .not('snap_date', 'is', null)
         .not('price', 'is', null)
         .range(offset, offset + 999)
       if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -101,12 +95,12 @@ export async function POST(req: NextRequest) {
       offset += 1000
     }
 
-    const dedup = new Map<string, SnapRow>()
+    const dedup = new Map<string, DailySnapRow>()
     for (const r of allSnaps) {
       if (r.sku_wb && r.snap_date && r.price != null) dedup.set(`${r.sku_wb}|${r.snap_date}`, r)
     }
 
-    const rows = [...dedup.values()].map(r => ({ sku_wb: r.sku_wb!, sku_ms: r.sku_ms, price_date: r.snap_date, price: r.price! }))
+    const rows = [...dedup.values()].map(r => ({ sku_wb: r.sku_wb!, sku_ms: r.sku_ms, price_date: r.snap_date!, price: r.price! }))
     totalPriceRows = rows.length
 
     for (const batch of chunk(rows, 500)) {
@@ -118,7 +112,7 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     ok: true,
-    mode: dir ? 'xlsb_files' : 'snapshot_fallback',
+    mode: dir ? 'xlsb_files' : 'daily_fallback',
     files_processed: filesProcessed,
     total_price_rows: totalPriceRows,
     upserted: totalUpserted,

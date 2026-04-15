@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(e) }, { status: 500 })
   }
 
-  // Загружаем маппинг WB→MS из dim_sku (col 0 в Отчёте = WB арт)
+  // Загружаем маппинг WB→MS из dim_sku
   const skuMap = new Map<string, string>()
   let from = 0
   while (true) {
@@ -40,7 +40,14 @@ export async function POST(req: NextRequest) {
 
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')
-    .insert({ file_type: 'sku_report', filename, rows_count: parsed.rows_parsed, period_start: dates[0] ?? null, period_end: dates[dates.length - 1] ?? null, status: 'ok' })
+    .insert({
+      file_type: 'sku_report',
+      filename,
+      rows_count: parsed.rows_parsed,
+      period_start: dates[0] ?? null,
+      period_end: dates[dates.length - 1] ?? null,
+      status: 'ok',
+    })
     .select('id')
     .single()
 
@@ -48,6 +55,7 @@ export async function POST(req: NextRequest) {
 
   const uploadId = upload.id
 
+  // Дедупликация по sku_ms + metric_date (upsert обновит снапшотные поля при перезагрузке)
   const dedupedDaily = [...new Map(
     parsed.daily.map(r => [`${r.sku_ms}|${r.metric_date}`, r])
   ).values()]
@@ -60,44 +68,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const dedupedSnaps = [...new Map(
-    parsed.snapshots.map(r => [r.sku_ms, r])
-  ).values()]
-
-  const snapsWithUpload = dedupedSnaps.map(r => {
-    const snap = { ...r, upload_id: uploadId }
-    if (!snap.novelty_status) delete (snap as Record<string, unknown>).novelty_status
-    return snap
-  })
-
-  for (const batch of chunk(snapsWithUpload, 500)) {
-    const { error } = await supabase.from('fact_sku_snapshot').upsert(batch, { onConflict: 'sku_ms,upload_id' })
-    if (error) {
-      await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-  }
-
-  // Записать изменения цен из блока CJ-CN в fact_price_changes
-  // priceChanges уже содержат абсолютные цены, пересчитанные из дельт%
+  // Изменения цен
   const priceChangeDedup = new Map<string, typeof parsed.priceChanges[0]>()
   for (const r of parsed.priceChanges) {
     priceChangeDedup.set(`${r.sku_wb}|${r.price_date}`, r)
-  }
-  // Также добавляем snap_date + price (базовая цена отчёта)
-  for (const r of dedupedSnaps) {
-    if (r.sku_wb != null && r.price != null && r.snap_date) {
-      const key = `${r.sku_wb}|${r.snap_date}`
-      if (!priceChangeDedup.has(key)) {
-        priceChangeDedup.set(key, { sku_ms: r.sku_ms, sku_wb: r.sku_wb, price_date: r.snap_date, price: r.price })
-      }
-    }
   }
   const dedupedPriceChanges = [...priceChangeDedup.values()].map(r => ({
     sku_wb: r.sku_wb!,
     sku_ms: r.sku_ms,
     price_date: r.price_date,
     price: r.price,
+    delta_pct: r.delta_pct,
   }))
 
   for (const batch of chunk(dedupedPriceChanges, 500)) {
@@ -105,9 +86,9 @@ export async function POST(req: NextRequest) {
     if (error) console.error('fact_price_changes upsert error:', error.message)
   }
 
-  // Обновляем fact_daily_agg за даты этого отчёта через SQL-функцию
+  // Обновляем fact_daily_agg
   const aggFrom = dates[0] ?? null
-  const aggTo   = dates[dates.length - 1] ?? null
+  const aggTo = dates[dates.length - 1] ?? null
   if (aggFrom && aggTo) {
     supabase.rpc('refresh_daily_agg', { from_date: aggFrom, to_date: aggTo })
       .then(({ error }) => { if (error) console.error('refresh_daily_agg error:', error.message) })
@@ -118,12 +99,11 @@ export async function POST(req: NextRequest) {
     upload_id: uploadId,
     rows_parsed: parsed.rows_parsed,
     rows_skipped: parsed.rows_skipped,
+    daily_rows: dedupedDaily.length,
     price_change_rows: dedupedPriceChanges.length,
-    price_changes_from_deltas: parsed.priceChanges.length,
     skipped_no_map: parsed.skipped_skus.length,
     sku_map_size: skuMap.size,
     diag_daily: parsed.daily.slice(0, 2),
-    diag_snapshots: parsed.snapshots.slice(0, 2).map(s => ({ sku_ms: s.sku_ms, sku_wb: s.sku_wb, price: s.price, snap_date: s.snap_date })),
     diag_price_changes: parsed.priceChanges.slice(0, 5),
     diag_skipped_skus: parsed.skipped_skus.slice(0, 5),
     diag_service_rows: parsed.diag_service_rows,

@@ -1,8 +1,16 @@
 import { readWorkbook, sheetToRows, norm, toNum, excelToISO, parseDateVal } from './utils'
 
+/**
+ * Объединённая строка: снапшот (статика) + дневные метрики (динамика).
+ * snap_date и снапшотные поля одинаковы для всех 5 дат одного SKU.
+ * Дневные метрики (ad_spend, revenue и т.д.) — по каждой дате.
+ */
 export interface SkuDailyRow {
   sku_ms: string
   metric_date: string
+  upload_id?: string  // проставляется в route.ts
+
+  // Дневные метрики (из блоков)
   ad_spend: number | null
   revenue: number | null
   drr_total: number | null
@@ -16,12 +24,10 @@ export interface SkuDailyRow {
   spp: number | null
   spend_plan: number | null
   drr_plan: number | null
-}
 
-export interface SkuSnapshotRow {
-  sku_ms: string
-  sku_wb: number | null          // артикул WB (колонка A отчёта по SKU)
+  // Снапшотные поля (одинаковы для всех дат SKU)
   snap_date: string
+  sku_wb: number | null
   fbo_wb: number | null
   fbs_pushkino: number | null
   fbs_smolensk: number | null
@@ -29,14 +35,11 @@ export interface SkuSnapshotRow {
   stock_days: number | null
   days_to_arrival: number | null
   ots_reserve_days: number | null
-  margin_rub: number | null
-  margin_pct: number | null   // колонка Y «Маржа, %» → делённая на 100 (17.3 → 0.173)
+  margin_pct: number | null
   chmd_5d: number | null
-  spend_plan: number | null
-  drr_plan: number | null
+  price: number | null
   supply_date: string | null
   supply_qty: number | null
-  price: number | null
   shelf_date: string | null
   manager: string | null
   novelty_status: string | null
@@ -47,11 +50,11 @@ export interface SkuPriceChangeRow {
   sku_wb: number | null
   price_date: string
   price: number
+  delta_pct: number | null  // дельта % из файла (для проверки расчётов)
 }
 
 export interface ParseSkuReportResult {
   daily: SkuDailyRow[]
-  snapshots: SkuSnapshotRow[]
   priceChanges: SkuPriceChangeRow[]
   rows_parsed: number
   rows_skipped: number
@@ -62,30 +65,16 @@ export interface ParseSkuReportResult {
 }
 
 /**
- * Структура файла «Лист7» (реальная для xlsb):
- * Row 0: группы — "Характеристики SKU"(A), "Выручка Total за 5 дней"(AE/30),
- *         "ДРР Total"(AK/36), "ДРР Рекламный"(AQ/42), "CTR за 5 дней"(AW/48),
- *         "CR в корзину"(BC/54), "CR в заказ"(BI/60), "CPM"(BP/67),
- *         "CPC"(BV/73), "Доля рекламных заказов"(CB/79), "Изменение цены"(CJ/87)
+ * Структура файла «Лист7»:
+ * Row 0: группы — "Характеристики SKU", "Выручка Total за 5 дней", "ДРР Total",
+ *         "ДРР Рекламный", "CTR за 5 дней", "CR в корзину", "CR в заказ",
+ *         "CPM", "CPC", "Доля рекламных заказов", "Изменение цены"
  * Row 1: подзаголовки + Excel-даты
- *   col 0 (A): SKU WB (числовой артикул WB, напр. 15747552)
- *   col 1 (B): Категория
- *   col 2 (C): Предмет
- *   col 3 (D): Название
- *   col 4 (E): Бренд
- *   col 5 (F): Дата появления на полке
- *   col 6 (G): Менеджер
- *   col 8 (I): Статус Новинки
- *   col 10 (K): "Затраты за 5 дней" (в row0 - это «Характеристики SKU» продолжение)
- *   col 11-15: 5 дат → данные затрат
- *   col 16: Остаток на ВБ ФБО
- *   ...
- *   col 30 (AE): дата-заголовки Выручки (в row0: "Выручка Total за 5 дней")
- *   col 66 (BO): Цена
- *   col 87 (CJ): "Изменение цены" (в row0), col 88-91 = даты, данные = абс. цена
+ * Row 2+: данные SKU (col 0 = WB-артикул)
  *
- * findMetricBlock ищет сначала в row0 (группы), затем в row1 (подзаголовки),
- * и для каждого найденного заголовка собирает следующие 5 Excel-дат из row1.
+ * price_date: блок «Изменение цены» содержит дельты % за конкретные даты.
+ * Цена на начало периода (самая старая дата блока) = базовая цена «до всех изменений».
+ * Цена на snap_date (конец периода) = price из колонки «Цена».
  */
 export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>): ParseSkuReportResult {
   const wb = readWorkbook(buffer)
@@ -98,51 +87,37 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
   const headerRow = rows[1]  // строка 1: подзаголовки + даты
   const dataRows = rows.slice(2)
 
-  // ── Найти колонку SKU WB (col 0 = числовой WB-артикул) ────────────────────
-  // col 0 всегда WB-артикул. skuMap: WB→MS конвертирует его в MS-артикул.
-  const skuCol = 0
-
-  // ── Фиксированные снапшот-колонки (ищем по заголовку в row1) ──────────────
+  // ── Фиксированные снапшот-колонки ──────────────────────────────────────────
   const fc = (q: string) => headerRow.findIndex(h => norm(h).includes(q))
   const fcs = (qs: string[]) => {
-    for (const q of qs) {
-      const idx = fc(q)
-      if (idx !== -1) return idx
-    }
+    for (const q of qs) { const idx = fc(q); if (idx !== -1) return idx }
     return -1
   }
 
-  const shelfDateCol = fcs(['дата появления', 'дата полки', 'появления на полке'])
-  const managerCol = fc('менеджер')
-  const noveltyCol = fcs(['статус новинки', 'статус  новинки'])
-  const fboWbCol = fcs(['остаток на вб фбо', 'остаток на вб'])
-  const fbsPushkinoCol = fcs(['остаток fbs пушкино', 'fbs пушкино', 'фбс пушкино'])
-  const fbsSmolenskCol = fcs(['остаток fbs смоленск', 'fbs смоленск', 'фбс смоленск'])
-  const kitsStockCol = fcs(['остаток комплект'])
-  const stockDaysCol = fcs(['остаток, дни', 'остаток,дни'])
-  const daysArrivalCol = fc('дней до прихода')
-  const otsReserveCol = fcs(['запас дней до out to stock', 'запас дней до oos', 'запас дней'])
-  const marginRubCol = fcs(['маржа опер', 'маржа, руб', 'маржа руб'])
-  const marginPctCol = fcs(['маржа, %', 'маржа,%', 'маржа %'])
-  const chmd5dCol = fcs(['чмд за пять', 'чмд за 5'])
-  const spendPlanCol = fcs(['затраты план', 'spend plan'])
-  const drrPlanCol = fcs(['дрр план', 'drr план'])
-  const priceCol = fc('цена')
-  const supplyDateCol = fcs(['поставка план', 'дата поставки'])
-  const supplyQtyCol = fcs(['поступ', 'поставка шт'])
+  const shelfDateCol    = fcs(['дата появления', 'дата полки', 'появления на полке'])
+  const managerCol      = fc('менеджер')
+  const noveltyCol      = fcs(['статус новинки', 'статус  новинки'])
+  const fboWbCol        = fcs(['остаток на вб фбо', 'остаток на вб'])
+  const fbsPushkinoCol  = fcs(['остаток fbs пушкино', 'fbs пушкино', 'фбс пушкино'])
+  const fbsSmolenskCol  = fcs(['остаток fbs смоленск', 'fbs смоленск', 'фбс смоленск'])
+  const kitsStockCol    = fcs(['остаток комплект'])
+  const stockDaysCol    = fcs(['остаток, дни', 'остаток,дни'])
+  const daysArrivalCol  = fc('дней до прихода')
+  const otsReserveCol   = fcs(['запас дней до out to stock', 'запас дней до oos', 'запас дней'])
+  const marginPctCol    = fcs(['маржа, %', 'маржа,%', 'маржа %'])
+  const chmd5dCol       = fcs(['чмд за пять', 'чмд за 5'])
+  const spendPlanCol    = fcs(['затраты план', 'spend plan'])
+  const drrPlanCol      = fcs(['дрр план', 'drr план'])
+  const priceCol        = fc('цена')
+  const supplyDateCol   = fcs(['поставка план', 'дата поставки'])
+  const supplyQtyCol    = fcs(['поступ', 'поставка шт'])
 
-  // ── Найти блок метрик: ищем в row0 (группы) И row1 (подзаголовки) ─────────
-  /**
-   * Ищет заголовок блока в row0, затем row1.
-   * После нахождения col, ищет до 5 Excel-дат в row1 (cols header+1..header+7).
-   */
+  // ── Найти блок метрик ───────────────────────────────────────────────────────
   function findMetricBlock(queries: string[]): { headerCol: number; dateCols: number[] } | null {
-    // Ищем в row0 (группы блоков)
     for (let ci = 10; ci < groupRow.length - 2; ci++) {
       const h = norm(groupRow[ci])
       if (queries.some(q => h.includes(q))) {
         const dateCols: number[] = []
-        // Даты могут быть в row1 начиная с ci или ci+1
         for (let di = ci; di < ci + 8 && di < headerRow.length; di++) {
           const v = headerRow[di]
           if (typeof v === 'number' && v > 40000 && v < 60000) {
@@ -153,7 +128,7 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
         if (dateCols.length > 0) return { headerCol: ci, dateCols }
       }
     }
-    // Fallback: ищем в row1 (подзаголовки) — для обратной совместимости
+    // Fallback: row1
     for (let ci = 10; ci < headerRow.length - 5; ci++) {
       const h = norm(headerRow[ci])
       if (queries.some(q => h.includes(q))) {
@@ -171,57 +146,76 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
     return null
   }
 
-  const adSpendBlock = findMetricBlock(['затраты за 5', 'затраты рекл'])
-  const revenueBlock = findMetricBlock(['выручка total за 5', 'выручка тотал за 5', 'выручка за 5'])
+  const adSpendBlock  = findMetricBlock(['затраты за 5', 'затраты рекл'])
+  const revenueBlock  = findMetricBlock(['выручка total за 5', 'выручка тотал за 5', 'выручка за 5'])
   const drrTotalBlock = findMetricBlock(['дрр total за 5', 'дрр тотал за 5', 'дрр total'])
-  const drrAdBlock = findMetricBlock(['дрр рекл', 'дрр рекламный'])
-  const ctrBlock = findMetricBlock(['ctr за 5', 'ctr'])
-  const crCartBlock = findMetricBlock(['cr в корзину', 'cr корзину'])
-  const crOrderBlock = findMetricBlock(['cr в заказ', 'cr заказ'])
-  const cpmBlock = findMetricBlock(['cpm за 5', 'cpm'])
-  const cpcBlock = findMetricBlock(['cpc за 5', 'cpc'])
-  const adShareBlock = findMetricBlock(['доля рекламных заказов', 'доля рекл'])
-
-  // ── Блок «Изменение цены» (CJ/col87 в row0) ───────────────────────────────
-  // row0 col 87: "Изменение цены", row1 cols 88-91: Excel-даты, данные = абс. цена
+  const drrAdBlock    = findMetricBlock(['дрр рекл', 'дрр рекламный'])
+  const ctrBlock      = findMetricBlock(['ctr за 5', 'ctr'])
+  const crCartBlock   = findMetricBlock(['cr в корзину', 'cr корзину'])
+  const crOrderBlock  = findMetricBlock(['cr в заказ', 'cr заказ'])
+  const cpmBlock      = findMetricBlock(['cpm за 5', 'cpm'])
+  const cpcBlock      = findMetricBlock(['cpc за 5', 'cpc'])
+  const adShareBlock  = findMetricBlock(['доля рекламных заказов', 'доля рекл'])
   const priceChangeBlock = findMetricBlock(['изменение цены', 'изменение цен'])
 
-  // Основные даты — берём из первого найденного блока
   const primaryBlock = revenueBlock ?? adSpendBlock ?? ctrBlock
   if (!primaryBlock) throw new Error('Не найдены датированные блоки метрик в Отчёте по SKU')
 
   const dateCols = primaryBlock.dateCols
 
-  // Дата снапшота = первая (самая свежая) дата основного блока
+  // snap_date = самая НОВАЯ дата (первая в блоке — отчёт идёт от новой к старой)
   const snapDateISO = excelToISO(headerRow[dateCols[0]] as number) ?? ''
 
   // ── Парсим строки ───────────────────────────────────────────────────────────
   const daily: SkuDailyRow[] = []
-  const snapshots: SkuSnapshotRow[] = []
   const priceChanges: SkuPriceChangeRow[] = []
   let skipped = 0
   const skippedSkus: string[] = []
   const skippedService: string[] = []
 
   for (const row of dataRows) {
-    const rawSku = String(row[skuCol] ?? '').trim()
+    const rawSku = String(row[0] ?? '').trim()
     if (!rawSku || rawSku.toLowerCase() === 'итого' || rawSku === 'SKU') {
       skipped++
       if (rawSku) skippedService.push(rawSku)
       continue
     }
-    // col 0 = WB-артикул → конвертируем в MS через skuMap
     const skuMs = skuMap ? (skuMap.get(rawSku) ?? null) : rawSku
     if (!skuMs) { skipped++; skippedSkus.push(rawSku); continue }
 
     const skuWbNum = Number(rawSku) || null
 
-    const getFromBlock = (block: { dateCols: number[] } | null, di: number) => {
-      if (!block) return null
-      return toNum(row[block.dateCols[di]])
+    const getFromBlock = (block: { dateCols: number[] } | null, di: number) =>
+      block ? toNum(row[block.dateCols[di]]) : null
+
+    // Снапшотные поля (одинаковы для SKU — вычисляем один раз)
+    const marginPct = (() => {
+      if (marginPctCol < 0) return null
+      const v = toNum(row[marginPctCol])
+      return v == null ? null : v / 100
+    })()
+
+    const snapFields = {
+      snap_date: snapDateISO,
+      sku_wb: skuWbNum,
+      fbo_wb: fboWbCol >= 0 ? toNum(row[fboWbCol]) : null,
+      fbs_pushkino: fbsPushkinoCol >= 0 ? toNum(row[fbsPushkinoCol]) : null,
+      fbs_smolensk: fbsSmolenskCol >= 0 ? toNum(row[fbsSmolenskCol]) : null,
+      kits_stock: kitsStockCol >= 0 ? toNum(row[kitsStockCol]) : null,
+      stock_days: stockDaysCol >= 0 ? toNum(row[stockDaysCol]) : null,
+      days_to_arrival: daysArrivalCol >= 0 ? toNum(row[daysArrivalCol]) : null,
+      ots_reserve_days: otsReserveCol >= 0 ? toNum(row[otsReserveCol]) : null,
+      margin_pct: marginPct,
+      chmd_5d: chmd5dCol >= 0 ? toNum(row[chmd5dCol]) : null,
+      price: priceCol >= 0 ? toNum(row[priceCol]) : null,
+      supply_date: supplyDateCol >= 0 ? parseDateVal(row[supplyDateCol]) : null,
+      supply_qty: supplyQtyCol >= 0 ? toNum(row[supplyQtyCol]) : null,
+      shelf_date: shelfDateCol >= 0 ? parseDateVal(row[shelfDateCol]) : null,
+      manager: managerCol >= 0 ? String(row[managerCol] ?? '').trim() || null : null,
+      novelty_status: noveltyCol >= 0 ? String(row[noveltyCol] ?? '').trim() || null : null,
     }
 
-    // Дневные метрики (5 дат основного блока)
+    // Дневные метрики (5 дат)
     for (let di = 0; di < dateCols.length; di++) {
       const dateISO = excelToISO(headerRow[dateCols[di]] as number)
       if (!dateISO) continue
@@ -242,98 +236,82 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
         spp: null,
         spend_plan: di === 0 && spendPlanCol >= 0 ? toNum(row[spendPlanCol]) : null,
         drr_plan: di === 0 && drrPlanCol >= 0 ? toNum(row[drrPlanCol]) : null,
+        ...snapFields,
       })
     }
 
-    // ── Изменения цен из блока CJ-CN ────────────────────────────────────────
-    // Колонки CJ-CN содержат дельты в % (напр. 10.5 = +10.5%, -5.0 = -5%)
-    // Базовая цена — из колонки «Цена» (snapshot), далее цепочка пересчёта.
-    // Если delta == 0 или null — изменения не было, пропускаем.
+    // ── Изменения цен ────────────────────────────────────────────────────────
+    // Блок «Изменение цены» содержит дельты % за конкретные даты.
+    // price (col «Цена») = цена на snap_date (конец периода).
+    // Цена на начало (самую старую дату) = откат всех дельт назад от snap_date.
+    // price_date = дата начала действия цены (т.е. дата ДО которой цена была другой).
     if (priceChangeBlock && skuWbNum) {
       const basePrice = priceCol >= 0 ? toNum(row[priceCol]) : null
       if (basePrice != null && basePrice > 0) {
-        // dateCols отсортированы от новой к старой (или наоборот — нужно определить по snapDate)
-        // snapDate = самая свежая дата основного блока (dateCols[0])
-        // Предположим priceChangeBlock.dateCols[0] — самая старая из 5 дат блока
-        // Сначала сортируем даты по возрастанию (старая→новая)
+        // Собираем даты и дельты, сортируем от старой к новой
         const priceDates = priceChangeBlock.dateCols.map(c => ({
           col: c,
           iso: excelToISO(headerRow[c] as number),
+          delta: toNum(row[c]) ?? 0,
         })).filter(x => x.iso).sort((a, b) => a.iso!.localeCompare(b.iso!))
 
-        // Строим цепочку: начинаем с базовой цены (самая свежая — snap)
-        // и идём от новой к старой, чтобы пересчитать цену в прошлом
-        // Но проще: идти от старой к новой, накапливая цену
-        // Цена на snap_date = basePrice. Колонки — дни ДО snap_date.
-        // delta[i] показывает изменение цены В ЭТОТ ДЕНЬ относительно предыдущего.
-        // Идём от старой к новой дате, рассчитывая цепочку:
-        //   price[i] = price[i-1] * (1 + delta[i]/100)
-        // Начальная цена (до первой даты) = basePrice / prod(1 + delta_i/100)
-        const deltas: Array<{ iso: string; delta: number }> = priceDates
-          .map(d => ({ iso: d.iso!, delta: toNum(row[d.col]) ?? 0 }))
-          .filter(d => d.delta !== 0)
+        // Только даты с ненулевой дельтой
+        const withDelta = priceDates.filter(d => d.delta !== 0)
 
-        if (deltas.length > 0) {
-          // Вычислить цену на момент самой старой даты (до первого изменения)
-          // basePrice — это цена НА ДАТУ ОТЧЁТА (snap_date)
-          // Нужно "откатить" все изменения назад чтобы найти начальную цену
-          let runningPrice = basePrice
-          // Идём от новейшего к старейшему, делим (откатываем)
-          const reversedDeltas = [...deltas].reverse()
-          const pricesFromNew: number[] = [runningPrice]
-          for (const { delta } of reversedDeltas) {
-            runningPrice = runningPrice / (1 + delta / 100)
-            pricesFromNew.push(runningPrice)
+        if (withDelta.length > 0) {
+          // Откатываем от basePrice (snap_date) назад — находим цену до каждого изменения
+          // Идём от новейшего к старейшему, делим на (1 + delta/100)
+          const reversed = [...withDelta].reverse()
+          const priceStack: number[] = [basePrice]
+          for (const { delta } of reversed) {
+            priceStack.push(priceStack[priceStack.length - 1] / (1 + delta / 100))
           }
-          // pricesFromNew[0] = basePrice (snap_date), [1] = цена до последнего изм., ...
-          // Теперь строим записи от старой к новой
-          const pricesByDate: Array<{ iso: string; price: number }> = []
-          const sortedDeltas = deltas // уже отсортированы старая→новая
-          let p = pricesFromNew[pricesFromNew.length - 1] // самая старая цена (до всех изменений)
-          for (let i = 0; i < sortedDeltas.length; i++) {
-            const { iso, delta } = sortedDeltas[i]
-            p = p * (1 + delta / 100)
-            pricesByDate.push({ iso, price: Math.round(p) })
+          // priceStack[0] = snap_date цена, priceStack[N] = цена до всех изменений
+
+          // Строим записи: price_date = дата начала действия новой цены (после изменения)
+          // Самая старая запись: price_date = withDelta[0].iso, price = цена ПОСЛЕ первой дельты
+          // т.е. цена до первой дельты была priceStack[last], после = priceStack[last] * (1 + delta/100)
+          for (let i = 0; i < withDelta.length; i++) {
+            const { iso, delta } = withDelta[i]
+            // Цена ДО этого изменения (начальная для этой даты)
+            const priceBefore = priceStack[withDelta.length - i]
+            // Цена ПОСЛЕ (= priceBefore * (1 + delta/100))
+            const priceAfter = Math.round(priceBefore * (1 + delta / 100))
+            priceChanges.push({
+              sku_ms: skuMs,
+              sku_wb: skuWbNum,
+              price_date: iso!,
+              price: priceAfter,
+              delta_pct: delta,
+            })
           }
 
-          for (const { iso, price } of pricesByDate) {
-            priceChanges.push({ sku_ms: skuMs, sku_wb: skuWbNum, price_date: iso, price })
+          // Также записываем цену на snap_date (конец периода)
+          const snapKey = snapDateISO
+          const alreadyHasSnap = priceChanges.some(
+            p => p.sku_wb === skuWbNum && p.price_date === snapKey
+          )
+          if (!alreadyHasSnap) {
+            priceChanges.push({
+              sku_ms: skuMs,
+              sku_wb: skuWbNum,
+              price_date: snapDateISO,
+              price: basePrice,
+              delta_pct: null,
+            })
           }
+        } else {
+          // Нет изменений — записываем только snap_date цену
+          priceChanges.push({
+            sku_ms: skuMs,
+            sku_wb: skuWbNum,
+            price_date: snapDateISO,
+            price: basePrice,
+            delta_pct: null,
+          })
         }
       }
     }
-
-    // Снапшот
-    const rawNovelty = noveltyCol >= 0 ? String(row[noveltyCol] ?? '').trim() : null
-
-    snapshots.push({
-      sku_ms: skuMs,
-      sku_wb: skuWbNum,
-      snap_date: snapDateISO,
-      fbo_wb: fboWbCol >= 0 ? toNum(row[fboWbCol]) : null,
-      fbs_pushkino: fbsPushkinoCol >= 0 ? toNum(row[fbsPushkinoCol]) : null,
-      fbs_smolensk: fbsSmolenskCol >= 0 ? toNum(row[fbsSmolenskCol]) : null,
-      kits_stock: kitsStockCol >= 0 ? toNum(row[kitsStockCol]) : null,
-      stock_days: stockDaysCol >= 0 ? toNum(row[stockDaysCol]) : null,
-      days_to_arrival: daysArrivalCol >= 0 ? toNum(row[daysArrivalCol]) : null,
-      ots_reserve_days: otsReserveCol >= 0 ? toNum(row[otsReserveCol]) : null,
-      margin_rub: marginRubCol >= 0 ? toNum(row[marginRubCol]) : null,
-      margin_pct: (() => {
-        if (marginPctCol < 0) return null
-        const v = toNum(row[marginPctCol])
-        if (v == null) return null
-        return v / 100
-      })(),
-      chmd_5d: chmd5dCol >= 0 ? toNum(row[chmd5dCol]) : null,
-      spend_plan: spendPlanCol >= 0 ? toNum(row[spendPlanCol]) : null,
-      drr_plan: drrPlanCol >= 0 ? toNum(row[drrPlanCol]) : null,
-      supply_date: supplyDateCol >= 0 ? parseDateVal(row[supplyDateCol]) : null,
-      supply_qty: supplyQtyCol >= 0 ? toNum(row[supplyQtyCol]) : null,
-      price: priceCol >= 0 ? toNum(row[priceCol]) : null,
-      shelf_date: shelfDateCol >= 0 ? parseDateVal(row[shelfDateCol]) : null,
-      manager: managerCol >= 0 ? String(row[managerCol] ?? '').trim() || null : null,
-      novelty_status: rawNovelty || null,
-    })
   }
 
   const blockDiag = (b: { headerCol: number; dateCols: number[] } | null) =>
@@ -341,9 +319,8 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
 
   return {
     daily,
-    snapshots,
     priceChanges,
-    rows_parsed: snapshots.length,
+    rows_parsed: daily.length / Math.max(dateCols.length, 1),
     rows_skipped: skipped,
     skipped_skus: skippedSkus,
     diag_service_rows: skippedService,
@@ -353,6 +330,7 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
       revenueBlock: blockDiag(revenueBlock),
       ctrBlock: blockDiag(ctrBlock),
       adSpendBlock: blockDiag(adSpendBlock),
+      snapDateISO,
       row0_sample: groupRow.slice(80, 95).map((v, i) => ({ col: 80 + i, val: v })),
       row1_sample: headerRow.slice(80, 95).map((v, i) => ({ col: 80 + i, val: v })),
     },

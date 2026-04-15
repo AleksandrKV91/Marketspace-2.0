@@ -4,7 +4,7 @@ import { useState, useCallback, useRef } from 'react'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
 
-type FileType = 'catalog' | 'abc' | 'china' | 'stock' | 'sku-report'
+type FileType = 'catalog' | 'abc' | 'china' | 'sku-report'
 
 interface UploadState {
   status: 'idle' | 'uploading' | 'ok' | 'error'
@@ -39,8 +39,7 @@ const FILE_CONFIGS: Array<{
   { type: 'catalog', label: 'Свод', hint: 'Свод.xlsb — справочник SKU', accept: '.xlsb,.xlsx', order: 1 },
   { type: 'abc', label: 'АВС анализ', hint: 'АВС_анализ_*.xlsx', accept: '.xlsx,.xlsb', order: 2 },
   { type: 'china', label: 'Потребность Китай', hint: 'Потребность_Китай_*.xlsx', accept: '.xlsx,.xlsb', order: 3 },
-  { type: 'stock', label: 'Таблица остатков', hint: 'Таблица_Остатков_*.xlsb', accept: '.xlsb,.xlsx', order: 4 },
-  { type: 'sku-report', label: 'Отчёт по SKU', hint: 'Отчет_по_SKU_*.xlsb', accept: '.xlsb,.xlsx', order: 5 },
+  { type: 'sku-report', label: 'Отчёт по SKU', hint: 'Отчет_по_SKU_*.xlsb', accept: '.xlsb,.xlsx', order: 4 },
 ]
 
 // ── Загрузка через Supabase Storage → API parse ───────────────────────────────
@@ -253,7 +252,6 @@ export default function UpdateTab() {
     catalog: { status: 'idle', progress: 0, message: 'Не загружен' },
     abc: { status: 'idle', progress: 0, message: 'Не загружен' },
     china: { status: 'idle', progress: 0, message: 'Не загружен' },
-    stock: { status: 'idle', progress: 0, message: 'Не загружен' },
     'sku-report': { status: 'idle', progress: 0, message: 'Не загружен' },
   })
 
@@ -336,7 +334,6 @@ export default function UpdateTab() {
     catalog: 'Свод',
     abc: 'АВС анализ',
     china: 'Потребность Китай',
-    stock: 'Таблица остатков',
     sku_report: 'Отчёт по SKU',
   }
 
