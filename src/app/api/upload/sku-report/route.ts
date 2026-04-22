@@ -86,12 +86,14 @@ export async function POST(req: NextRequest) {
     if (error) console.error('fact_price_changes upsert error:', error.message)
   }
 
-  // Обновляем fact_daily_agg
+  // Обновляем fact_daily_agg и daily_agg_sku (в фоне, не блокируем ответ)
   const aggFrom = dates[0] ?? null
   const aggTo = dates[dates.length - 1] ?? null
   if (aggFrom && aggTo) {
     supabase.rpc('refresh_daily_agg', { from_date: aggFrom, to_date: aggTo })
       .then(({ error }) => { if (error) console.error('refresh_daily_agg error:', error.message) })
+    supabase.rpc('refresh_daily_agg_sku', { from_date: aggFrom, to_date: aggTo })
+      .then(({ error }) => { if (error) console.error('refresh_daily_agg_sku error:', error.message) })
   }
 
   return NextResponse.json({

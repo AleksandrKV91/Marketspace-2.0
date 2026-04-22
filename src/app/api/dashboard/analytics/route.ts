@@ -112,139 +112,46 @@ export async function GET(req: Request) {
     ? shiftRange(fromDate, toDate)
     : { prevFrom: null as string | null, prevTo: null as string | null }
 
-  // ── 5. fact_daily_agg — KPI и графики (быстро, малый объём) ─────────────────
+  // ── 5. fact_daily_agg — KPI и графики ───────────────────────────────────────
+  // Новая структура: одна строка на дату, без разбивки по категориям.
+  // Фильтрация по категории будет применена позже через иерархию SKU.
   type AggRow = {
-    metric_date: string; category_wb: string; subject_wb: string
-    revenue: number; ad_spend: number; chmd: number
-    margin_pct_wgt: number; price_wgt: number; drr: number
-    ctr_avg: number | null; cr_order_avg: number | null
-    cpo: number | null; sku_count: number
-  }
-
-  async function fetchAgg(from: string, to: string, catF: string, subjFilter?: string): Promise<AggRow[]> {
-    let q = supabase.from('fact_daily_agg')
-      .select('metric_date,category_wb,subject_wb,revenue,ad_spend,chmd,margin_pct_wgt,price_wgt,drr,ctr_avg,cr_order_avg,cpo,sku_count')
-      .gte('metric_date', from).lte('metric_date', to)
-    if (catF) q = q.eq('category_wb', catF)
-    if (subjFilter) q = q.eq('subject_wb', subjFilter)
-    const { data } = await q.limit(100000)
-    return (data ?? []) as AggRow[]
+    metric_date: string
+    revenue_sum: number; ad_spend_sum: number; chmd_sum: number; margin_sum: number
+    drr_total: number | null; marginality: number | null; chmd_pct: number | null
+    ctr_avg: number | null; cr_order_avg: number | null; sku_count: number
   }
 
   const safeNum = (n: unknown): number => (typeof n === 'number' && isFinite(n)) ? n : 0
 
-  // Параллельно: текущий и предыдущий периоды из агрега
-  const [aggCurrRaw, aggPrev] = fromDate && toDate
+  async function fetchAgg(from: string, to: string): Promise<AggRow[]> {
+    const { data } = await supabase.from('fact_daily_agg')
+      .select('metric_date,revenue_sum,ad_spend_sum,chmd_sum,margin_sum,drr_total,marginality,chmd_pct,ctr_avg,cr_order_avg,sku_count')
+      .gte('metric_date', from).lte('metric_date', to)
+      .limit(10000)
+    return (data ?? []) as AggRow[]
+  }
+
+  const [aggCurr, aggPrev] = fromDate && toDate
     ? await Promise.all([
-        fetchAgg(fromDate, toDate, catFilter),
-        prevFrom && prevTo ? fetchAgg(prevFrom, prevTo, catFilter) : Promise.resolve([]),
+        fetchAgg(fromDate, toDate),
+        prevFrom && prevTo ? fetchAgg(prevFrom, prevTo) : Promise.resolve([]),
       ])
     : [[], []]
 
-  // ── Fallback: если fact_daily_agg не покрывает весь диапазон — добираем из fact_sku_daily ──
-  let aggCurr = aggCurrRaw
-  if (fromDate && toDate && aggCurrRaw.length > 0) {
-    // Собираем даты которые есть в агрегате
-    const aggDates = new Set(aggCurrRaw.map(r => r.metric_date))
-    // Генерируем все даты диапазона
-    const allDates: string[] = []
-    const d = new Date(fromDate)
-    const end = new Date(toDate)
-    while (d <= end) { allDates.push(d.toISOString().split('T')[0]); d.setDate(d.getDate() + 1) }
-    const missingDates = allDates.filter(dt => !aggDates.has(dt))
-
-    if (missingDates.length > 0) {
-      // Запрашиваем пропущенные даты из fact_sku_daily напрямую
-      const missingFrom = missingDates[0]
-      const missingTo = missingDates[missingDates.length - 1]
-      let q = supabase.from('fact_sku_daily')
-        .select('metric_date,sku_ms,revenue,ad_spend,chmd,margin_pct,price')
-        .gte('metric_date', missingFrom).lte('metric_date', missingTo)
-      if (catFilter) {
-        // Фильтруем по категории через dim_sku
-        const catSkus = Object.entries(dimByMs)
-          .filter(([, d]) => d.category_wb === catFilter)
-          .map(([ms]) => ms)
-        if (catSkus.length > 0) q = q.in('sku_ms', catSkus)
-      }
-      const { data: missingRows } = await q.limit(200000)
-      if (missingRows && missingRows.length > 0) {
-        // Конвертируем в формат AggRow и дополняем aggCurr
-        const extraAgg: Record<string, AggRow> = {}
-        for (const r of missingRows) {
-          const dt = r.metric_date
-          if (!missingDates.includes(dt)) continue
-          if (!extraAgg[dt]) extraAgg[dt] = {
-            metric_date: dt, category_wb: catFilter || '', subject_wb: '',
-            revenue: 0, ad_spend: 0, chmd: 0,
-            margin_pct_wgt: 0, price_wgt: 0, drr: 0,
-            ctr_avg: null, cr_order_avg: null, cpo: null, sku_count: 0,
-          }
-          const rev = safeNum(r.revenue); const spend = safeNum(r.ad_spend)
-          const chmd = safeNum(r.chmd); const mp = safeNum(r.margin_pct)
-          const pr = safeNum(r.price)
-          extraAgg[dt].revenue   += rev
-          extraAgg[dt].ad_spend  += spend
-          extraAgg[dt].chmd      += chmd
-          // weighted margin_pct and price (по rev)
-          extraAgg[dt].margin_pct_wgt = extraAgg[dt].revenue > 0
-            ? (extraAgg[dt].margin_pct_wgt * (extraAgg[dt].revenue - rev) + mp * rev) / extraAgg[dt].revenue : mp
-          extraAgg[dt].price_wgt = extraAgg[dt].revenue > 0
-            ? (extraAgg[dt].price_wgt * (extraAgg[dt].revenue - rev) + pr * rev) / extraAgg[dt].revenue : pr
-          extraAgg[dt].sku_count += 1
-        }
-        aggCurr = [...aggCurrRaw, ...Object.values(extraAgg)]
-      }
-    }
-  } else if (fromDate && toDate && aggCurrRaw.length === 0) {
-    // fact_daily_agg пустой для этого диапазона — полный fallback на fact_sku_daily
-    let q = supabase.from('fact_sku_daily')
-      .select('metric_date,sku_ms,revenue,ad_spend,chmd,margin_pct,price')
-      .gte('metric_date', fromDate).lte('metric_date', toDate)
-    if (catFilter) {
-      const catSkus = Object.entries(dimByMs)
-        .filter(([, d]) => d.category_wb === catFilter)
-        .map(([ms]) => ms)
-      if (catSkus.length > 0) q = q.in('sku_ms', catSkus)
-    }
-    const { data: fallbackRows } = await q.limit(200000)
-    if (fallbackRows && fallbackRows.length > 0) {
-      const fbAgg: Record<string, AggRow> = {}
-      for (const r of fallbackRows) {
-        const dt = r.metric_date
-        if (!fbAgg[dt]) fbAgg[dt] = {
-          metric_date: dt, category_wb: catFilter || '', subject_wb: '',
-          revenue: 0, ad_spend: 0, chmd: 0,
-          margin_pct_wgt: 0, price_wgt: 0, drr: 0,
-          ctr_avg: null, cr_order_avg: null, cpo: null, sku_count: 0,
-        }
-        const rev = safeNum(r.revenue)
-        fbAgg[dt].revenue  += rev
-        fbAgg[dt].ad_spend += safeNum(r.ad_spend)
-        fbAgg[dt].chmd     += safeNum(r.chmd)
-        fbAgg[dt].sku_count += 1
-      }
-      aggCurr = Object.values(fbAgg)
-    }
-  }
-
-  // Агрегируем суммы текущего периода (по всем датам и категориям/предметам)
-  let totalRevenue = 0, totalAdSpend = 0, totalChmd = 0
-  let marginRevNum = 0, priceRevNum = 0
+  // Суммируем KPI за период из агрегата
+  let totalRevenue = 0, totalAdSpend = 0, totalChmd = 0, totalMargin = 0
   const dateAgg: Record<string, { revenue: number; ad_spend: number; chmd: number }> = {}
-  const aggSkuCount = new Set<string>()  // приблизительно — реальный счётчик из агрега
 
   for (const r of aggCurr) {
-    const rev   = safeNum(r.revenue)
-    const spend = safeNum(r.ad_spend)
-    const chmd  = safeNum(r.chmd)
-    const mpw   = safeNum(r.margin_pct_wgt)
-    const pw    = safeNum(r.price_wgt)
+    const rev   = safeNum(r.revenue_sum)
+    const spend = safeNum(r.ad_spend_sum)
+    const chmd  = safeNum(r.chmd_sum)
+    const margin = safeNum(r.margin_sum)
     totalRevenue  += rev
     totalAdSpend  += spend
     totalChmd     += chmd
-    marginRevNum  += mpw * rev
-    priceRevNum   += pw * rev
+    totalMargin   += margin
 
     if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0, chmd: 0 }
     dateAgg[r.metric_date].revenue  += rev
@@ -252,25 +159,22 @@ export async function GET(req: Request) {
     dateAgg[r.metric_date].chmd     += chmd
   }
 
-  const marginPct  = totalRevenue > 0 ? marginRevNum / totalRevenue : 0
+  const marginPct  = totalRevenue > 0 ? totalMargin / totalRevenue : 0
   const drr        = totalRevenue > 0 ? totalAdSpend / totalRevenue : 0
-  const priceWgt   = totalRevenue > 0 ? priceRevNum / totalRevenue : 0
-  const cpo        = priceWgt > 0 && totalAdSpend > 0
-    ? totalAdSpend / (totalRevenue / priceWgt) : null
+  const cpo: number | null = null  // рассчитывается через daily_agg_sku если нужно
   const forecast30dRevenue = periodDays > 0 ? (totalRevenue / periodDays) * 30 : 0
 
   // Предыдущий период
-  let prevRevenue = 0, prevAdSpend = 0, prevMarginRevNum = 0
+  let prevRevenue = 0, prevAdSpend = 0, prevMargin = 0
   for (const r of aggPrev) {
-    prevRevenue      += r.revenue
-    prevAdSpend      += r.ad_spend
-    prevMarginRevNum += r.margin_pct_wgt * r.revenue
+    prevRevenue += safeNum(r.revenue_sum)
+    prevAdSpend += safeNum(r.ad_spend_sum)
+    prevMargin  += safeNum(r.margin_sum)
   }
-  const prevChmd       = prevMarginRevNum - prevAdSpend  // грубо: Σ(margin_pct_wgt × rev) − ad
-  const prevMarginPct  = prevRevenue > 0 ? prevMarginRevNum / prevRevenue : 0
-  const prevDrr        = prevRevenue > 0 ? prevAdSpend / prevRevenue : 0
-  const prevCpo        = priceWgt > 0 && prevAdSpend > 0
-    ? prevAdSpend / (prevRevenue / priceWgt) : null
+  const prevChmd      = prevMargin - prevAdSpend
+  const prevMarginPct = prevRevenue > 0 ? prevMargin / prevRevenue : 0
+  const prevDrr       = prevRevenue > 0 ? prevAdSpend / prevRevenue : 0
+  const prevCpo: number | null = null
 
   // ── 6. Агрегация по SKU из fact_daily_agg (быстро, без fetchAll на 180k строк) ─
   // Получаем revenue/ad_spend по каждому SKU за текущий и предыдущий период
@@ -416,6 +320,7 @@ export async function GET(req: Request) {
   }
 
   // ── 9. Daily charts из fact_daily_agg ────────────────────────────────────────
+  // margin_pct = (chmd + ad_spend) / revenue = margin_sum / revenue
   const daily_chart = Object.entries(dateAgg)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, d]) => ({
@@ -430,7 +335,7 @@ export async function GET(req: Request) {
   // ── 10. Previous period daily (comparison chart) — из fact_daily_agg ─────────
   const prevDateAgg: Record<string, number> = {}
   for (const r of aggPrev) {
-    prevDateAgg[r.metric_date] = (prevDateAgg[r.metric_date] ?? 0) + r.revenue
+    prevDateAgg[r.metric_date] = (prevDateAgg[r.metric_date] ?? 0) + safeNum(r.revenue_sum)
   }
   const daily_chart_prev = Object.entries(prevDateAgg)
     .sort(([a], [b]) => a.localeCompare(b))
