@@ -52,6 +52,7 @@ agency-agents/
 # internal working docs (not for repo)
 Вкладки/
 Вспомогательные документы/
+graphify-out/
 03.04/
 .playwright-mcp/
 *.xlsx

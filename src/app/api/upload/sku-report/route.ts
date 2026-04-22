@@ -86,12 +86,16 @@ export async function POST(req: NextRequest) {
     if (error) console.error('fact_price_changes upsert error:', error.message)
   }
 
-  // Обновляем fact_daily_agg
+  // Пересчитываем daily_agg_sku → fact_daily_agg (fire-and-forget)
   const aggFrom = dates[0] ?? null
   const aggTo = dates[dates.length - 1] ?? null
   if (aggFrom && aggTo) {
-    supabase.rpc('refresh_daily_agg', { from_date: aggFrom, to_date: aggTo })
-      .then(({ error }) => { if (error) console.error('refresh_daily_agg error:', error.message) })
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
+    fetch(`${baseUrl}/api/admin/refresh-daily-agg-sku`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: aggFrom, to: aggTo }),
+    }).catch(e => console.error('refresh-daily-agg-sku error:', e))
   }
 
   return NextResponse.json({

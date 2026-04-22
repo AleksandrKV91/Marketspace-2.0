@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
 import { computeScore } from '@/lib/scoring'
+import { cacheGet, cacheSet } from '@/lib/cache'
 
 export const maxDuration = 60
 
@@ -66,6 +67,11 @@ export async function GET(req: Request) {
   const catFilter  = url.searchParams.get('category') ?? ''
   const mgrFilter  = url.searchParams.get('manager') ?? ''
   const novFilter  = url.searchParams.get('novelty') ?? ''   // 'Новинки' | 'Не новинки' | ''
+
+  // Быстрая проверка кэша — TTL 5 мин. Инвалидируется после загрузки нового отчёта.
+  const cacheKey = `overview|${fromParam ?? 'auto'}|${toParam ?? 'auto'}|${catFilter}|${mgrFilter}|${novFilter}`
+  const cacheHit = cacheGet<unknown>(cacheKey, 5 * 60_000)
+  if (cacheHit !== null) return NextResponse.json(cacheHit)
 
   // ── 1. Последние upload IDs ───────────────────────────────────────────────
   const { data: lastUploads } = await supabase
@@ -159,11 +165,12 @@ export async function GET(req: Request) {
   }
 
   // ── 8. fact_sku_daily — текущий период ──────────────────────────────────
-  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; ctr: number | null; cr_order: number | null }
+  // margin_pct нужен для per-day ЧМД в трендовом графике
+  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; ctr: number | null; cr_order: number | null; margin_pct: number | null }
   const dailyRows = fromDate && toDate
     ? await fetchAll<DailyRow>(
         (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order')
+          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, margin_pct')
           .gte('metric_date', fromDate!).lte('metric_date', toDate!),
         supabase,
       )
@@ -177,7 +184,7 @@ export async function GET(req: Request) {
   const prevDailyRows = prevFrom && prevTo
     ? await fetchAll<DailyRow>(
         (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order')
+          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, margin_pct')
           .gte('metric_date', prevFrom).lte('metric_date', prevTo),
         supabase,
       )
@@ -186,7 +193,7 @@ export async function GET(req: Request) {
   // ── 11. Агрегация по SKU — текущий период ────────────────────────────────
   type SkuAgg = { revenue: number; ad_spend: number; ctr: number[]; cr_order: number[]; days: Set<string> }
   const skuAgg: Record<string, SkuAgg> = {}
-  const dateAgg: Record<string, { revenue: number; ad_spend: number }> = {}
+  const dateAgg: Record<string, { revenue: number; ad_spend: number; chmd: number }> = {}
 
   for (const r of dailyRows) {
     if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0, ctr: [], cr_order: [], days: new Set() }
@@ -197,9 +204,14 @@ export async function GET(req: Request) {
     if (r.cr_order != null) s.cr_order.push(r.cr_order)
     s.days.add(r.metric_date)
 
-    if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0 }
-    dateAgg[r.metric_date].revenue += r.revenue ?? 0
-    dateAgg[r.metric_date].ad_spend += r.ad_spend ?? 0
+    if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0, chmd: 0 }
+    const rev = r.revenue ?? 0
+    const spend = r.ad_spend ?? 0
+    const mp = r.margin_pct ?? 0
+    dateAgg[r.metric_date].revenue += rev
+    dateAgg[r.metric_date].ad_spend += spend
+    // ЧМД per-SKU per-day = revenue * margin_pct − ad_spend
+    dateAgg[r.metric_date].chmd += rev * mp - spend
   }
 
   // ── 12. Агрегация по SKU — предыдущий период ─────────────────────────────
@@ -443,21 +455,22 @@ export async function GET(req: Request) {
   }
 
   // ── 19. График по дням ────────────────────────────────────────────────────
-  // Для тренда ЧМД по дням нам нужна дневная маржа per-SKU. Используем avgMarginPct
-  // как приближение (более точно — требует join по каждому дню, слишком дорого).
+  // ЧМД per-day уже аккумулирован в dateAgg[date].chmd (per-SKU per-day расчёт)
   const trend = Object.entries(dateAgg)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, d]) => {
-      const chmdDay = d.revenue * avgMarginPct - d.ad_spend
-      return { date, revenue: d.revenue, chmd: chmdDay, ad_spend: d.ad_spend }
-    })
+    .map(([date, d]) => ({
+      date,
+      revenue:  d.revenue,
+      chmd:     d.chmd,
+      ad_spend: d.ad_spend,
+    }))
 
   // ── 20. Unit-экономика по дням ────────────────────────────────────────────
   const unitEconByDay = trend.map(d => ({
     date: d.date,
     margin_pct: +(avgMarginPct * 100).toFixed(2),
-    drr_pct: d.revenue > 0 ? +((d.ad_spend / d.revenue) * 100).toFixed(2) : 0,
-    chmd_pct: d.revenue > 0 ? +((d.chmd / d.revenue) * 100).toFixed(2) : 0,
+    drr_pct:  d.revenue > 0 ? +((d.ad_spend / d.revenue) * 100).toFixed(2) : 0,
+    chmd_pct: d.revenue > 0 ? +((d.chmd  / d.revenue) * 100).toFixed(2) : 0,
   }))
 
   // ── 21. Top-15 SKU по Score ───────────────────────────────────────────────
@@ -535,7 +548,7 @@ export async function GET(req: Request) {
     // no slice — show all SKUs with losses
 
   // ── Ответ ─────────────────────────────────────────────────────────────────
-  return NextResponse.json({
+  const responseData = {
     kpi: {
       revenue:       totalRevenue,
       chmd:          totalChmd,
@@ -585,5 +598,7 @@ export async function GET(req: Request) {
       sku_with_revenue: Object.values(skuAgg).filter(s => s.revenue > 0).length,
       sku_no_revenue:   Object.values(skuAgg).filter(s => s.revenue === 0).length,
     },
-  })
+  }
+  cacheSet(cacheKey, responseData)
+  return NextResponse.json(responseData)
 }

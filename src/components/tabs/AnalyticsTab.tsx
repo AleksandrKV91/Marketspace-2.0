@@ -438,7 +438,7 @@ export default function AnalyticsTab() {
         if (!s.name.toLowerCase().includes(q) && !String(s.sku_wb ?? '').includes(q) && !s.sku_ms.toLowerCase().includes(q)) return false
       }
       if (deltaFilter === 'growth'  && (s.delta_pct == null || s.delta_pct <= 0)) return false
-      if (deltaFilter === 'decline' && (s.delta_pct == null || s.delta_pct >= 0)) return false
+      if (deltaFilter === 'decline' && (s.delta_pct != null && s.delta_pct >= 0)) return false
       // stock_days filter (from stock_qty/price approximation or snapshot days_to_arrival)
       if (stockDaysFilter !== 'all') {
         const days = s.stock_days ?? null
@@ -923,7 +923,7 @@ export default function AnalyticsTab() {
                 onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
               >
-                <Download size={12} /> CSV
+                <Download size={12} /> Excel
               </button>
             </div>
           </div>

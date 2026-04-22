@@ -271,17 +271,21 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
           delta_pct: null,
         })
 
-        // Прокатываем цену вперёд через все дельты (от старой к новой)
+        // Прокатываем цену вперёд через все дельты (от старой к новой).
+        // Excel хранит % как дробь: -6% → -0.06 (XLSX возвращает -0.06).
+        // Если значение целочисленное (напр. -6), делим на 100.
+        // Эвристика: |delta| > 1 → процент (делим на 100), иначе дробь (используем напрямую).
         let currentPrice = startPrice
         for (const { iso, delta } of priceDates) {
           if (delta === 0) continue
-          const priceAfter = Math.round(currentPrice * (1 + delta / 100))
+          const deltaFraction = Math.abs(delta) > 1 ? delta / 100 : delta
+          const priceAfter = Math.round(currentPrice * (1 + deltaFraction))
           priceChanges.push({
             sku_ms: skuMs,
             sku_wb: skuWbNum,
             price_date: iso!,
             price: priceAfter,
-            delta_pct: delta,
+            delta_pct: deltaFraction,  // всегда храним как дробь (-0.06)
           })
           currentPrice = priceAfter
         }

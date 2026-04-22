@@ -99,9 +99,7 @@ interface OverviewData {
 
 function fmt(n: number | null | undefined): string {
   if (n == null) return '—'
-  if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'М'
-  if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(0) + 'К'
-  return String(Math.round(n))
+  return Math.round(n).toLocaleString('ru-RU')
 }
 
 function fmtPct(n: number | null | undefined): string {

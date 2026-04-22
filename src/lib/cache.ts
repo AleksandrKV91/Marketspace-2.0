@@ -17,6 +17,17 @@ export async function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>
   return data
 }
 
+export function cacheGet<T>(key: string, ttlMs: number): T | null {
+  const now = Date.now()
+  const entry = cache.get(key) as CacheEntry<T> | undefined
+  if (entry && now - entry.ts < ttlMs) return entry.data
+  return null
+}
+
+export function cacheSet<T>(key: string, data: T): void {
+  cache.set(key, { data, ts: Date.now() })
+}
+
 export function invalidate(key: string) {
   cache.delete(key)
 }
