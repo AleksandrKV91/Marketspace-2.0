@@ -7,7 +7,7 @@ import { PriorityBadge } from '@/components/ui/PriorityBadge'
 import { Search, Filter, Download, X, ChevronUp, ChevronDown, SlidersHorizontal } from 'lucide-react'
 import { SkuModal } from '@/components/ui/SkuModal'
 import { useDateRange } from '@/components/ui/DateRangePicker'
-import { usePendingFilter } from '@/app/dashboard/page'
+import { usePendingFilter, useGlobalFilters } from '@/app/dashboard/page'
 
 interface SkuRow {
   sku: string
@@ -24,6 +24,7 @@ interface SkuRow {
   stock_qty: number
   stock_days: number
   cpo: number
+  forecast_30d: number | null
   score: number
   oos_status: 'critical' | 'warning' | 'ok' | 'none'
   margin_status: 'high' | 'medium' | 'low'
@@ -37,7 +38,7 @@ interface SkuTableData {
   selected_revenue: number
 }
 
-type SortKey = keyof SkuRow
+type SortKey = 'sku' | 'name' | 'manager' | 'category' | 'revenue' | 'margin_pct' | 'chmd' | 'drr' | 'ctr' | 'cr_basket' | 'cr_order' | 'stock_qty' | 'stock_days' | 'cpo' | 'forecast_30d' | 'score'
 type SortDir = 'asc' | 'desc'
 
 function fmt(n: number | null | undefined) {
@@ -92,6 +93,8 @@ export default function SkuTableTab() {
   const [filterLowMarginOnly, setFilterLowMarginOnly] = useState(false)
   const [filterWithAds, setFilterWithAds] = useState(false)
 
+  const { filters } = useGlobalFilters()
+
   const buildUrl = useCallback(() => {
     const p = new URLSearchParams()
     if (search) p.set('search', search)
@@ -103,12 +106,15 @@ export default function SkuTableTab() {
     if (filterDrrOnly) p.set('drr', 'over')
     if (filterLowMarginOnly) p.set('margin', 'low')
     if (filterWithAds) p.set('with_ads', '1')
+    if (filters.category) p.set('category', filters.category)
+    if (filters.manager)  p.set('manager', filters.manager)
+    if (filters.novelty)  p.set('gnovelty', filters.novelty)
     p.set('sort', sortKey)
     p.set('dir', sortDir)
     p.set('from', range.from)
     p.set('to', range.to)
     return '/api/dashboard/sku-table?' + p.toString()
-  }, [search, filterNovelty, filterOos, filterDrr, filterMargin, filterOosOnly, filterDrrOnly, filterLowMarginOnly, filterWithAds, sortKey, sortDir, range.from, range.to])
+  }, [search, filterNovelty, filterOos, filterDrr, filterMargin, filterOosOnly, filterDrrOnly, filterLowMarginOnly, filterWithAds, sortKey, sortDir, range.from, range.to, filters.category, filters.manager, filters.novelty])
 
   useEffect(() => {
     setLoading(true)
@@ -143,35 +149,49 @@ export default function SkuTableTab() {
   if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
 
   return (
-    <div className="px-6 py-6 space-y-4 max-w-[1440px] mx-auto">
+    <div className="px-6 py-6 space-y-4">
 
       {/* Summary bar */}
-      {data && (
-        <div className="glass px-4 py-3 flex items-center gap-4 flex-wrap text-sm">
-          <span style={{ color: 'var(--text-muted)' }}>
-            Показано: <span className="font-semibold" style={{ color: 'var(--text)' }}>{data.rows.length}</span> из <span className="font-semibold">{data.total}</span> SKU
-          </span>
-          {data.selected_revenue > 0 && (
+      {data && (() => {
+        const atRiskCount = data.rows.filter(r => r.stock_days < 7 || r.score < 3).length
+        const forecast30dTotal = data.rows.reduce((s, r) => s + (r.forecast_30d ?? 0), 0)
+        return (
+          <div className="glass px-4 py-3 flex items-center gap-3 flex-wrap text-sm">
             <span style={{ color: 'var(--text-muted)' }}>
-              Выручка: <span className="font-semibold" style={{ color: 'var(--text)' }}>{fmt(data.selected_revenue)}</span>
+              Показано: <span className="font-semibold" style={{ color: 'var(--text)' }}>{data.rows.length}</span>
+              <span className="text-xs ml-1" style={{ color: 'var(--text-subtle)' }}>из {data.total}</span>
             </span>
-          )}
-          <div className="ml-auto flex items-center gap-2">
-            {hasFilters && (
-              <button onClick={resetFilters} className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg" style={{ color: 'var(--accent)', background: 'var(--accent-glow)' }}>
-                <X size={11} /> Сбросить
+            <span style={{ color: 'var(--border-subtle)' }}>•</span>
+            {data.selected_revenue > 0 && <>
+              <span style={{ color: 'var(--text-muted)' }}>
+                Выручка: <span className="font-semibold" style={{ color: 'var(--text)' }}>{fmt(data.selected_revenue)} ₽</span>
+              </span>
+              <span style={{ color: 'var(--border-subtle)' }}>•</span>
+            </>}
+            <span style={{ color: 'var(--text-muted)' }}>
+              В риске: <span className="font-semibold" style={{ color: atRiskCount > 0 ? 'var(--danger)' : 'var(--success)' }}>{atRiskCount} SKU</span>
+            </span>
+            <span style={{ color: 'var(--border-subtle)' }}>•</span>
+            <span style={{ color: 'var(--text-muted)' }}>
+              Прогноз 30д: <span className="font-semibold" style={{ color: 'var(--text)' }}>{fmt(forecast30dTotal)} шт</span>
+            </span>
+            <div className="ml-auto flex items-center gap-2">
+              {hasFilters && (
+                <button onClick={resetFilters} className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg" style={{ color: 'var(--accent)', background: 'var(--accent-glow)' }}>
+                  <X size={11} /> Сбросить
+                </button>
+              )}
+              <button
+                onClick={() => {}}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-medium"
+                style={{ background: 'var(--border)', color: 'var(--text-muted)' }}
+              >
+                <Download size={13} /> Скачать
               </button>
-            )}
-            <button
-              onClick={() => {}}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-medium"
-              style={{ background: 'var(--border)', color: 'var(--text-muted)' }}
-            >
-              <Download size={13} /> Скачать
-            </button>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Filter bar */}
       <div className="flex flex-wrap gap-2 items-center">
@@ -288,39 +308,42 @@ export default function SkuTableTab() {
           <table className="w-full text-sm sticky-thead">
             <thead>
               <tr className="text-xs border-b" style={{ borderColor: 'var(--border)', color: 'var(--text-subtle)' }}>
-                <th className="text-left px-4 py-3 font-medium w-24">Статус</th>
-                <th className="text-left px-4 py-3 font-medium">SKU</th>
-                <th className="text-left px-4 py-3 font-medium max-w-[180px]">Название</th>
-                <th className="text-left px-4 py-3 font-medium">Менеджер</th>
-                <th className="text-left px-4 py-3 font-medium">Категория</th>
-                <th className="px-4 py-3 font-medium w-24">
+                <th className="text-left px-2 py-2.5 font-medium whitespace-nowrap">OOS</th>
+                <th className="text-left px-2 py-2.5 font-medium whitespace-nowrap">Маржа</th>
+                <th className="px-2 py-2.5 font-medium whitespace-nowrap">
                   <span className="flex items-center justify-center gap-0.5 cursor-pointer" onClick={() => toggleSort('score')} style={{ color: sortKey === 'score' ? 'var(--accent)' : 'var(--text-subtle)' }}>
                     Score <SortIcon active={sortKey === 'score'} dir={sortDir} />
                   </span>
                 </th>
+                <th className="text-left px-2 py-2.5 font-medium">SKU</th>
+                <th className="text-left px-2 py-2.5 font-medium max-w-[140px]">Название</th>
+                <th className="text-left px-2 py-2.5 font-medium max-w-[80px]">Менеджер</th>
+                <th className="text-left px-2 py-2.5 font-medium">Категория</th>
                 <Th label="Выручка" sortKey="revenue" current={sortKey} dir={sortDir} onClick={toggleSort} />
                 <Th label="Маржа%" sortKey="margin_pct" current={sortKey} dir={sortDir} onClick={toggleSort} />
                 <Th label="ЧМД" sortKey="chmd" current={sortKey} dir={sortDir} onClick={toggleSort} />
                 <Th label="ДРР" sortKey="drr" current={sortKey} dir={sortDir} onClick={toggleSort} />
                 <Th label="CTR" sortKey="ctr" current={sortKey} dir={sortDir} onClick={toggleSort} />
-                <Th label="CR к." sortKey="cr_basket" current={sortKey} dir={sortDir} onClick={toggleSort} />
                 <Th label="CR з." sortKey="cr_order" current={sortKey} dir={sortDir} onClick={toggleSort} />
                 <Th label="Остаток" sortKey="stock_qty" current={sortKey} dir={sortDir} onClick={toggleSort} />
                 <Th label="Запас дн." sortKey="stock_days" current={sortKey} dir={sortDir} onClick={toggleSort} />
                 <Th label="CPO" sortKey="cpo" current={sortKey} dir={sortDir} onClick={toggleSort} />
+                <Th label="Прогноз 30д" sortKey="forecast_30d" current={sortKey} dir={sortDir} onClick={toggleSort} />
               </tr>
             </thead>
             <tbody>
               {loading && Array.from({ length: 8 }).map((_, i) => (
                 <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
-                  {Array.from({ length: 16 }).map((__, j) => (
-                    <td key={j} className="px-4 py-3"><div className="skeleton h-4 w-full" /></td>
+                  {Array.from({ length: 17 }).map((__, j) => (
+                    <td key={j} className="px-2 py-1.5"><div className="skeleton h-4 w-full" /></td>
                   ))}
                 </tr>
               ))}
               {!loading && (data?.rows ?? []).map((row, i) => {
                 const isLowMargin = row.margin_pct < 0.10
-                const isDrrOver = row.drr > row.margin_pct && row.drr > 0
+                const isDrrOver = row.drr != null && row.drr > row.margin_pct && row.drr > 0
+                const oosColor = row.oos_status === 'critical' ? 'var(--danger)' : row.oos_status === 'warning' ? 'var(--warning)' : 'var(--text-subtle)'
+                const marginColor = row.margin_pct > 0.30 ? 'var(--success)' : row.margin_pct > 0.15 ? 'var(--warning)' : 'var(--danger)'
                 return (
                   <tr
                     key={i}
@@ -330,39 +353,65 @@ export default function SkuTableTab() {
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-hover)' }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}
                   >
-                    <td className="px-4 py-2.5">
-                      <PriorityBadge oos={row.oos_status} margin={row.margin_status} />
+                    {/* OOS badge */}
+                    <td className="px-2 py-1">
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md whitespace-nowrap"
+                        style={{ background: row.oos_status === 'critical' ? 'var(--danger-bg)' : row.oos_status === 'warning' ? 'var(--warning-bg)' : 'transparent', color: oosColor }}>
+                        {row.oos_status === 'critical' ? 'OOS' : row.oos_status === 'warning' ? 'Low' : '—'}
+                      </span>
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-xs" style={{ color: 'var(--text-muted)' }}>{row.sku}</td>
-                    <td className="px-4 py-2.5 max-w-[180px]">
-                      <span className="block truncate" style={{ color: 'var(--text)' }}>{row.name}</span>
-                      {row.novelty && <span className="text-[10px] px-1.5 rounded" style={{ background: 'var(--info-bg)', color: 'var(--info)' }}>Новинка</span>}
+                    {/* Margin badge */}
+                    <td className="px-2 py-1">
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md"
+                        style={{ background: isLowMargin ? 'var(--danger-bg)' : row.margin_pct > 0.15 ? 'var(--success-bg)' : 'var(--warning-bg)', color: marginColor }}>
+                        {fmtPct(row.margin_pct)}
+                      </span>
                     </td>
-                    <td className="px-4 py-2.5 text-xs" style={{ color: 'var(--text-muted)' }}>{row.manager}</td>
-                    <td className="px-4 py-2.5 text-xs" style={{ color: 'var(--text-muted)' }}>{row.category}</td>
-                    <td className="px-4 py-2.5"><ScoreBadge score={row.score} size="sm" /></td>
-                    <td className="px-4 py-2.5 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmt(row.revenue)}</td>
-                    <td className="px-4 py-2.5 text-right">
-                      <span className="text-xs font-medium" style={{ color: isLowMargin ? 'var(--danger)' : 'var(--success)' }}>{fmtPct(row.margin_pct)}</span>
+                    {/* Score */}
+                    <td className="px-2 py-1"><ScoreBadge score={row.score} size="sm" /></td>
+                    {/* SKU */}
+                    <td className="px-2 py-1 font-mono text-xs whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>{row.sku}</td>
+                    {/* Name */}
+                    <td className="px-2 py-1 max-w-[140px]">
+                      <span className="block truncate text-xs" title={row.name} style={{ color: 'var(--text)' }}>{row.name}</span>
+                      {row.novelty && <span className="text-[10px] px-1 rounded" style={{ background: 'var(--info-bg)', color: 'var(--info)' }}>Новинка</span>}
                     </td>
-                    <td className="px-4 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(row.chmd)}</td>
-                    <td className="px-4 py-2.5 text-right">
-                      <span className="text-xs font-medium" style={{ color: isDrrOver ? 'var(--danger)' : 'var(--text-muted)' }}>{fmtPct(row.drr)}</span>
+                    {/* Manager */}
+                    <td className="px-2 py-1 max-w-[80px]">
+                      <span className="block truncate text-xs" title={row.manager} style={{ color: 'var(--text-muted)' }}>{row.manager || '—'}</span>
                     </td>
-                    <td className="px-4 py-2.5 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmtPct(row.ctr)}</td>
-                    <td className="px-4 py-2.5 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmtPct(row.cr_basket)}</td>
-                    <td className="px-4 py-2.5 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmtPct(row.cr_order)}</td>
-                    <td className="px-4 py-2.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt(row.stock_qty)}</td>
-                    <td className="px-4 py-2.5 text-right">
-                      <span style={{ color: row.stock_days < 14 ? 'var(--danger)' : row.stock_days < 30 ? 'var(--warning)' : 'var(--text-muted)' }}>{row.stock_days}</span>
+                    {/* Category */}
+                    <td className="px-2 py-1 text-xs max-w-[100px]">
+                      <span className="block truncate" title={row.category} style={{ color: 'var(--text-muted)' }}>{row.category || '—'}</span>
                     </td>
-                    <td className="px-4 py-2.5 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmt(row.cpo)}</td>
+                    {/* Revenue */}
+                    <td className="px-2 py-1 text-right text-xs font-semibold whitespace-nowrap" title={Math.round(row.revenue).toLocaleString('ru-RU') + ' ₽'} style={{ color: 'var(--text)' }}>{fmt(row.revenue)}</td>
+                    {/* Margin % — already in badge, just show number */}
+                    <td className="px-2 py-1 text-right text-xs" style={{ color: marginColor }}>{fmtPct(row.margin_pct)}</td>
+                    {/* ЧМД */}
+                    <td className="px-2 py-1 text-right text-xs whitespace-nowrap" title={Math.round(row.chmd).toLocaleString('ru-RU') + ' ₽'} style={{ color: 'var(--text-muted)' }}>{fmt(row.chmd)}</td>
+                    {/* ДРР */}
+                    <td className="px-2 py-1 text-right text-xs" style={{ color: isDrrOver ? 'var(--danger)' : 'var(--text-muted)' }}>{fmtPct(row.drr)}</td>
+                    {/* CTR */}
+                    <td className="px-2 py-1 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmtPct(row.ctr)}</td>
+                    {/* CR заказ */}
+                    <td className="px-2 py-1 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmtPct(row.cr_order)}</td>
+                    {/* Остаток */}
+                    <td className="px-2 py-1 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmt(row.stock_qty)}</td>
+                    {/* Запас дней */}
+                    <td className="px-2 py-1 text-right text-xs">
+                      <span style={{ color: row.stock_days < 7 ? 'var(--danger)' : row.stock_days < 14 ? 'var(--warning)' : 'var(--text-muted)' }}>{row.stock_days}</span>
+                    </td>
+                    {/* CPO */}
+                    <td className="px-2 py-1 text-right text-xs whitespace-nowrap" title={row.cpo != null ? Math.round(row.cpo).toLocaleString('ru-RU') + ' ₽' : ''} style={{ color: 'var(--text-muted)' }}>{fmt(row.cpo)}</td>
+                    {/* Прогноз 30д */}
+                    <td className="px-2 py-1 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{row.forecast_30d != null ? fmt(row.forecast_30d) : '—'}</td>
                   </tr>
                 )
               })}
               {!loading && (data?.rows ?? []).length === 0 && (
                 <tr>
-                  <td colSpan={16} className="px-4 py-12 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={17} className="px-4 py-12 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
                     Нет данных по заданным фильтрам
                   </td>
                 </tr>

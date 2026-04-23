@@ -22,6 +22,9 @@ export async function GET(req: NextRequest) {
   const search = searchParams.get('search') ?? ''
   const fromParam = searchParams.get('from')
   const toParam = searchParams.get('to')
+  const categoryFilter = searchParams.get('category') ?? ''
+  const managerFilter  = searchParams.get('manager') ?? ''
+  const noveltyFilter  = searchParams.get('novelty') ?? ''
 
   // Latest upload IDs (TTL 60s)
   const latestByType = await cached('latest_uploads', 60_000, async () => {
@@ -37,8 +40,8 @@ export async function GET(req: NextRequest) {
   const skuReportId = latestByType['sku_report']
 
   // Параллельно: snapshot + dim_sku (cached)
-  type SnapRow = { sku_ms: string; sku_wb: number | null; manager: string | null; price: number | null }
-  type DimNameRow = { sku_ms: string; name: string | null; brand: string | null; subject_wb: string | null }
+  type SnapRow = { sku_ms: string; sku_wb: number | null; manager: string | null; price: number | null; novelty_status: string | null }
+  type DimNameRow = { sku_ms: string; name: string | null; brand: string | null; subject_wb: string | null; category_wb: string | null }
 
   async function fetchSnapshot(): Promise<SnapRow[]> {
     // Берём снапшот из fact_sku_daily по последней snap_date
@@ -53,7 +56,7 @@ export async function GET(req: NextRequest) {
     while (true) {
       const { data, error } = await supabase
         .from('fact_sku_daily')
-        .select('sku_ms, sku_wb, manager, price')
+        .select('sku_ms, sku_wb, manager, price, novelty_status')
         .eq('snap_date', maxSnapDate)
         .not('fbo_wb', 'is', null)
         .range(snapOffset, snapOffset + snapPageSize - 1)
@@ -69,17 +72,19 @@ export async function GET(req: NextRequest) {
     fetchSnapshot(),
     cached<DimNameRow[]>('dim_sku_names', 10 * 60_000, async () =>
       fetchAll<DimNameRow>(
-        (sb) => sb.from('dim_sku').select('sku_ms, name, brand, subject_wb'),
+        (sb) => sb.from('dim_sku').select('sku_ms, name, brand, subject_wb, category_wb'),
         supabase,
       )
     ),
   ])
 
   const managerMap: Record<string, string> = {}
+  const noveltyMap: Record<string, string> = {}
   const snapPriceMap: Record<string, number> = {}
   const snapSkuWbMap: Record<string, number> = {}
   for (const r of allSnapRows) {
     managerMap[r.sku_ms] = r.manager ?? ''
+    noveltyMap[r.sku_ms] = r.novelty_status ?? ''
     if (r.price != null) snapPriceMap[r.sku_ms] = r.price
     if (r.sku_wb != null) snapSkuWbMap[r.sku_ms] = r.sku_wb
   }
@@ -166,9 +171,28 @@ export async function GET(req: NextRequest) {
       )
     : []
 
+  // Build allowed sku_ms set when global filters are active
+  let allowedSkuMs: Set<string> | null = null
+  if (categoryFilter || managerFilter || noveltyFilter) {
+    allowedSkuMs = new Set<string>()
+    const allSkuMs = new Set([...Object.keys(managerMap), ...Object.keys(nameMap)])
+    for (const ms of allSkuMs) {
+      const meetsManager  = !managerFilter  || (managerMap[ms] ?? '') === managerFilter
+      const meetsCategory = !categoryFilter || (nameMap[ms]?.category_wb ?? '') === categoryFilter
+      const ns = noveltyMap[ms] ?? ''
+      const meetsNovelty  = !noveltyFilter  ||
+        (noveltyFilter === 'Новинки' && ns === 'Новинки') ||
+        (noveltyFilter === 'Не новинки' && ns !== 'Новинки')
+      if (meetsManager && meetsCategory && meetsNovelty) allowedSkuMs.add(ms)
+    }
+  }
+
   // Строки только за текущий период (для агрегации KPI и графиков)
   const currDailyRows = fromDaily && toDaily
-    ? dailyRows.filter(r => r.metric_date >= fromDaily! && r.metric_date <= toDaily!)
+    ? dailyRows.filter(r =>
+        r.metric_date >= fromDaily! && r.metric_date <= toDaily! &&
+        (!allowedSkuMs || allowedSkuMs.has(r.sku_ms))
+      )
     : []
 
   // Индекс daily по (sku_ms, metric_date) для быстрого поиска при расчёте дельт цен

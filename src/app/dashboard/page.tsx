@@ -348,7 +348,7 @@ export default function DashboardPage() {
 
       {/* ── Liquid Glass sticky header ── */}
       <header className="top-nav sticky top-0 z-50 px-4 lg:px-6 py-2">
-        <div className="max-w-[1440px] mx-auto w-full flex flex-col gap-1">
+        <div className="w-full flex flex-col gap-1">
         {/* Row 1: Logo + Nav + Actions */}
         <div className="flex items-center gap-4 h-[52px]">
           {/* Logo */}
@@ -500,7 +500,7 @@ export default function DashboardPage() {
       )}
 
       {/* Main content */}
-      <main className="max-w-[1440px] mx-auto px-4 lg:px-6 relative z-10">
+      <main className="w-full px-4 lg:px-6 2xl:px-12 relative z-10">
         {activeTab === 'svod'      && <TabErrorBoundary tabId="svod"><SvodTab /></TabErrorBoundary>}
         {activeTab === 'analytics' && <TabErrorBoundary tabId="analytics"><AnalyticsTab /></TabErrorBoundary>}
         {activeTab === 'price'     && <TabErrorBoundary tabId="price"><PriceTab /></TabErrorBoundary>}
