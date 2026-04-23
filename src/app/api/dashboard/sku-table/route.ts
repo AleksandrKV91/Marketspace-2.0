@@ -47,12 +47,21 @@ export async function GET(req: NextRequest) {
     const days = Math.round(
       (new Date(effectiveTo).getTime() - new Date(effectiveFrom).getTime()) / 86400000
     ) + 1
-    const pTo = new Date(effectiveFrom)
-    pTo.setDate(pTo.getDate() - 1)
-    const pFrom = new Date(pTo)
-    pFrom.setDate(pFrom.getDate() - (days - 1))
-    prevTo   = pTo.toISOString().split('T')[0]
-    prevFrom = pFrom.toISOString().split('T')[0]
+    if (days === 1) {
+      // Однодневный диапазон: сравниваем со вчера
+      const pTo = new Date(effectiveFrom)
+      pTo.setDate(pTo.getDate() - 1)
+      prevTo   = pTo.toISOString().split('T')[0]
+      prevFrom = prevTo
+    } else {
+      // Многодневный: предыдущий период той же длины
+      const pTo = new Date(effectiveFrom)
+      pTo.setDate(pTo.getDate() - 1)
+      const pFrom = new Date(pTo)
+      pFrom.setDate(pFrom.getDate() - (days - 1))
+      prevTo   = pTo.toISOString().split('T')[0]
+      prevFrom = pFrom.toISOString().split('T')[0]
+    }
   }
 
   // dim_sku — справочник
@@ -178,8 +187,9 @@ export async function GET(req: NextRequest) {
     const cpo = daily && daily.days > 0 && adSpend > 0 ? adSpend / daily.days : null
 
     const price = skuSnap?.price ?? null
-    const forecast30d = daily && daily.days > 0 && price != null && price > 0
-      ? Math.round((revenue / daily.days) * 30 / price)
+    // Прогноз 30д в рублях = (выручка за период / кол-во дней) × 30
+    const forecast30d = daily && daily.days > 0
+      ? Math.round((revenue / daily.days) * 30)
       : null
     const marginPct = skuSnap?.margin_pct ?? 0
     const chmd = skuSnap?.chmd_5d ?? 0

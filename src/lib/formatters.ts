@@ -27,3 +27,21 @@ export function fmtPct(n: number | null | undefined, decimals = 1): string {
   if (n == null) return '—'
   return Number(n).toFixed(decimals) + '%'
 }
+
+/**
+ * Delta formula: (curr - prev) / curr × 100, capped at ±100%.
+ * Returns null when either value is null/undefined.
+ * When curr === 0 and prev !== 0 → returns -100.
+ * When prev === 0 and curr !== 0 → returns +100.
+ */
+export function calcDelta(
+  curr: number | null | undefined,
+  prev: number | null | undefined,
+): number | null {
+  if (curr == null || prev == null) return null
+  if (curr === 0 && prev === 0) return null
+  if (curr === 0) return -100
+  if (prev === 0) return 100
+  const raw = ((curr - prev) / Math.abs(curr)) * 100
+  return Math.max(-100, Math.min(100, raw))
+}

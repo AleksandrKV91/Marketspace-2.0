@@ -8,3 +8,4 @@ import type { AnalyticsResponse } from '@/types/analytics'
 export const analyticsTabCache = new Map<string, AnalyticsResponse>()
 export const priceTabCache = new Map<string, unknown>()
 export const overviewTabCache = new Map<string, unknown>()
+export const skuTableCache = new Map<string, unknown>()

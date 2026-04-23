@@ -14,7 +14,7 @@ import { ChevronUp, ChevronDown, ChevronRight, Download, Search, X } from 'lucid
 import type { AnalyticsResponse, CategoryNode, SubjectNode, SkuNode } from '@/types/analytics'
 import { exportToExcelMultiSheet } from '@/lib/exportExcel'
 import { analyticsTabCache } from '@/lib/tabCache'
-import { fmtAxis } from '@/lib/formatters'
+import { fmtAxis, fmtFull } from '@/lib/formatters'
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -586,13 +586,13 @@ export default function AnalyticsTab() {
       <KPIBar items={[
         {
           label: 'Выручка',
-          value: fmt(activeKpi.revenue),
+          value: fmtFull(activeKpi.revenue) + ' ₽',
           delta: deltaRev,
           deltaPositive: activeKpi.revenue >= activeKpi.prev_revenue,
         },
         {
           label: 'ЧМД',
-          value: fmt(activeKpi.chmd),
+          value: fmtFull(activeKpi.chmd) + ' ₽',
           delta: deltaChmd,
           deltaPositive: activeKpi.chmd >= activeKpi.prev_chmd,
         },
@@ -611,14 +611,14 @@ export default function AnalyticsTab() {
         },
         {
           label: 'CPO',
-          value: activeKpi.cpo != null ? fmt(activeKpi.cpo) + ' ₽' : '—',
+          value: activeKpi.cpo != null ? fmtFull(activeKpi.cpo) + ' ₽' : '—',
           delta: deltaCpo,
           deltaPositive: activeKpi.cpo != null && activeKpi.prev_cpo != null ? activeKpi.cpo <= activeKpi.prev_cpo : undefined,
           tooltip: 'Стоимость заказа = Рекл. расходы / (Выручка / Ср. цена)',
         },
         {
           label: 'Прогноз 30д',
-          value: fmt(activeKpi.forecast_30d_revenue),
+          value: fmtFull(activeKpi.forecast_30d_revenue) + ' ₽',
           accent: true,
           hint: `(Выручка / ${kpi.period_days}д) × 30. Кликните для сортировки.`,
           onClick: handleForecastClick,

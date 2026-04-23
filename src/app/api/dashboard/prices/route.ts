@@ -58,7 +58,6 @@ export async function GET(req: NextRequest) {
         .from('fact_sku_daily')
         .select('sku_ms, sku_wb, manager, price, novelty_status')
         .eq('snap_date', maxSnapDate)
-        .not('fbo_wb', 'is', null)
         .range(snapOffset, snapOffset + snapPageSize - 1)
       if (error || !data || data.length === 0) break
       rows.push(...data)
