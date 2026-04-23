@@ -20,6 +20,7 @@ import { useGlobalFilters } from '@/app/dashboard/page'
 import { exportToExcel } from '@/lib/exportExcel'
 import { useDateRange } from '@/components/ui/DateRangePicker'
 import { overviewTabCache } from '@/lib/tabCache'
+import { fmtAxis } from '@/lib/formatters'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -99,9 +100,7 @@ interface OverviewData {
 
 function fmt(n: number | null | undefined): string {
   if (n == null) return '—'
-  if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'М'
-  if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(0) + 'К'
-  return String(Math.round(n))
+  return Math.round(n).toLocaleString('ru-RU')
 }
 
 function fmtPct(n: number | null | undefined): string {
@@ -517,7 +516,7 @@ export default function OverviewTab() {
           </p>
           {trendData.length > 0 ? (
             <ResponsiveContainer width="100%" height={280}>
-              <ComposedChart data={trendData} margin={{ top: 4, right: 8, bottom: 0, left: -8 }}>
+              <ComposedChart data={trendData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
                 <defs>
                   <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.20} />
@@ -530,8 +529,8 @@ export default function OverviewTab() {
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis yAxisId="left" orientation="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => fmt(v as number)} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => fmt(v as number)} />
+                <YAxis yAxisId="left" orientation="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={52} tickFormatter={v => fmtAxis(v as number)} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={52} tickFormatter={v => fmtAxis(v as number)} />
                 <Tooltip content={(p) => <ChartTip active={p.active} payload={p.payload as unknown as Array<{ name: string; value: number; color: string }>} label={p.label != null ? String(p.label) : undefined} />} />
                 <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
                 <Area yAxisId="left"  type="monotone" dataKey="Выручка" stroke="#3b82f6"        fill="url(#revGrad)"  strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
@@ -551,11 +550,11 @@ export default function OverviewTab() {
           </p>
           {unitEconData.length > 0 ? (
             <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={unitEconData} margin={{ top: 4, right: 8, bottom: 0, left: -8 }}>
+              <LineChart data={unitEconData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis yAxisId="left" orientation="left" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#ef4444' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => (v as number).toFixed(1) + '%'} />
-                <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#22d3ee' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => (v as number).toFixed(1) + '%'} />
+                <YAxis yAxisId="left" orientation="left" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#ef4444' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => (v as number).toFixed(1) + '%'} />
+                <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#22d3ee' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => (v as number).toFixed(1) + '%'} />
                 <Tooltip content={(p) => <ChartTip active={p.active} payload={p.payload as unknown as Array<{ name: string; value: number; color: string }>} label={p.label != null ? String(p.label) : undefined} pct />} />
                 <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
                 <Line yAxisId="left"  type="monotone" dataKey="ДРР %"  stroke="#ef4444" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />

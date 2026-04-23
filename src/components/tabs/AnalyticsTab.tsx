@@ -14,6 +14,7 @@ import { ChevronUp, ChevronDown, ChevronRight, Download, Search, X } from 'lucid
 import type { AnalyticsResponse, CategoryNode, SubjectNode, SkuNode } from '@/types/analytics'
 import { exportToExcelMultiSheet } from '@/lib/exportExcel'
 import { analyticsTabCache } from '@/lib/tabCache'
+import { fmtAxis } from '@/lib/formatters'
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -48,7 +49,7 @@ function ChartTip({ active, payload, label }: { active?: boolean; payload?: Arra
           <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
           <span style={{ color: 'var(--text-muted)' }}>{p.name}:</span>
           <span className="font-bold ml-auto">
-            {p.name.includes('%') ? `${p.value.toFixed(1)}%` : fmt(p.value)}
+            {p.name.includes('%') || p.name === 'ДРР%' ? `${p.value.toFixed(1)}%` : Math.round(p.value).toLocaleString('ru-RU')}
           </span>
         </div>
       ))}
@@ -438,7 +439,7 @@ export default function AnalyticsTab() {
         if (!s.name.toLowerCase().includes(q) && !String(s.sku_wb ?? '').includes(q) && !s.sku_ms.toLowerCase().includes(q)) return false
       }
       if (deltaFilter === 'growth'  && (s.delta_pct == null || s.delta_pct <= 0)) return false
-      if (deltaFilter === 'decline' && (s.delta_pct == null || s.delta_pct >= 0)) return false
+      if (deltaFilter === 'decline' && (s.delta_pct != null && s.delta_pct >= 0)) return false
       // stock_days filter (from stock_qty/price approximation or snapshot days_to_arrival)
       if (stockDaysFilter !== 'all') {
         const days = s.stock_days ?? null
@@ -642,13 +643,13 @@ export default function AnalyticsTab() {
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-              <YAxis yAxisId="left"  tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={48} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
-              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
+              <YAxis yAxisId="left"  tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={52} tickFormatter={v => fmt(v as number)} domain={['auto', 'auto']} />
+              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#f59e0b' }} tickLine={false} axisLine={false} width={40} tickFormatter={v => (v as number).toFixed(1) + '%'} domain={['auto', 'auto']} />
               <Tooltip content={(p) => <ChartTip active={p.active} payload={p.payload as unknown as Array<{ name: string; value: number; color: string }>} label={p.label != null ? String(p.label) : undefined} />} />
               <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
               <Area yAxisId="left"  type="monotone" dataKey="Выручка" stroke="#3b82f6" strokeWidth={2} fill="url(#aRevG)"  dot={false} />
-              <Area yAxisId="right" type="monotone" dataKey="ЧМД"     stroke="#22c55e" strokeWidth={2} fill="url(#aChmdG)" dot={false} />
-              <Line  yAxisId="right" type="monotone" dataKey="Расходы" stroke="#ef4444" strokeWidth={2.5} dot={false} />
+              <Area yAxisId="left"  type="monotone" dataKey="ЧМД"     stroke="#22c55e" strokeWidth={2} fill="url(#aChmdG)" dot={false} />
+              <Line  yAxisId="left"  type="monotone" dataKey="Расходы" stroke="#ef4444" strokeWidth={2.5} dot={false} />
               <Line  yAxisId="right" type="monotone" dataKey="ДРР%"    stroke="#f59e0b" strokeWidth={2}   dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -923,7 +924,7 @@ export default function AnalyticsTab() {
                 onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
               >
-                <Download size={12} /> CSV
+                <Download size={12} /> Excel
               </button>
             </div>
           </div>

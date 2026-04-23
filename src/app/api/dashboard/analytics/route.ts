@@ -184,13 +184,13 @@ export async function GET(req: Request) {
     // Используем RPC для агрегации на стороне БД — возвращает одну строку на SKU
     const { data, error } = await supabase.rpc('get_sku_period_agg', { p_from: from, p_to: to })
     if (error || !data) {
-      // Fallback: простой select с limit
-      const { data: fallback } = await supabase
-        .from('fact_sku_daily')
-        .select('sku_ms, revenue, ad_spend')
-        .gte('metric_date', from).lte('metric_date', to)
-        .limit(50000)
-      if (!fallback) return []
+      // Fallback: полная выборка через fetchAll (без limit)
+      const fallback = await fetchAll<{ sku_ms: string; revenue: number | null; ad_spend: number | null }>(
+        (sb) => sb.from('fact_sku_daily')
+          .select('sku_ms, revenue, ad_spend')
+          .gte('metric_date', from).lte('metric_date', to),
+        supabase,
+      )
       const agg: Record<string, SkuDailyAgg> = {}
       for (const r of fallback) {
         if (!agg[r.sku_ms]) agg[r.sku_ms] = { sku_ms: r.sku_ms, revenue: 0, ad_spend: 0 }
@@ -208,11 +208,12 @@ export async function GET(req: Request) {
     ? await Promise.all([
         fetchSkuAgg(fromDate, toDate),
         prevFrom && prevTo ? fetchSkuAgg(prevFrom, prevTo) : Promise.resolve([]),
-        supabase.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend')
-          .gte('metric_date', fromDate).lte('metric_date', toDate)
-          .limit(50000)
-          .then(r => (r.data ?? []) as DailyRow[]),
+        fetchAll<DailyRow>(
+          (sb) => sb.from('fact_sku_daily')
+            .select('sku_ms, metric_date, revenue, ad_spend')
+            .gte('metric_date', fromDate!).lte('metric_date', toDate!),
+          supabase,
+        ),
       ])
     : [[], [], []]
 

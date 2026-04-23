@@ -11,6 +11,9 @@ export async function GET(req: NextRequest) {
   const search = (searchParams.get('search') ?? '').trim()
   const fromParam = searchParams.get('from')
   const toParam = searchParams.get('to')
+  const categoryFilter = searchParams.get('category') ?? ''
+  const managerFilter  = searchParams.get('manager') ?? ''
+  const noveltyFilter  = searchParams.get('gnovelty') ?? ''
 
   // Последние upload_id
   const { data: lastUploads } = await supabase
@@ -144,6 +147,9 @@ export async function GET(req: NextRequest) {
     const cpo = daily && daily.days > 0 && adSpend > 0 ? adSpend / daily.days : null
 
     const price = skuSnap?.price ?? null
+    const forecast30d = daily && daily.days > 0 && price != null && price > 0
+      ? Math.round((revenue / daily.days) * 30 / price)
+      : null
     const marginPct = skuSnap?.margin_pct ?? 0
     const chmd = skuSnap?.chmd_5d ?? 0
     const stockDays = skuSnap?.stock_days ?? 0
@@ -186,6 +192,7 @@ export async function GET(req: NextRequest) {
       stock_days: stockDays,
       price,
       cpo,
+      forecast_30d: forecast30d,
       score,
       abc_class: abcClass,
       oos_status,
@@ -194,12 +201,21 @@ export async function GET(req: NextRequest) {
     }
   })
 
-  const totalRevenue = rows.reduce((s, r) => s + r.revenue, 0)
+  // Apply global filters (category, manager, novelty)
+  const filteredRows = rows.filter(r => {
+    if (categoryFilter && r.category !== categoryFilter) return false
+    if (managerFilter  && r.manager !== managerFilter)  return false
+    if (noveltyFilter === 'Новинки'    && !r.novelty)   return false
+    if (noveltyFilter === 'Не новинки' && r.novelty)   return false
+    return true
+  })
+
+  const totalRevenue = filteredRows.reduce((s, r) => s + r.revenue, 0)
 
   return NextResponse.json({
-    rows,
-    total: rows.length,
-    selected_count: rows.length,
+    rows: filteredRows,
+    total: filteredRows.length,
+    selected_count: filteredRows.length,
     selected_revenue: totalRevenue,
   })
 }

@@ -12,6 +12,7 @@ import { exportToExcel } from '@/lib/exportExcel'
 import { ChevronUp, ChevronDown, ChevronRight } from 'lucide-react'
 import { useDateRange } from '@/components/ui/DateRangePicker'
 import { priceTabCache } from '@/lib/tabCache'
+import { useGlobalFilters } from '@/app/dashboard/page'
 
 interface FunnelKpi {
   ctr: number
@@ -155,12 +156,21 @@ const priceCache = priceTabCache as Map<string, PriceData>
 
 export default function PriceTab() {
   const { range } = useDateRange()
+  const { filters } = useGlobalFilters()
+  // Cache key includes global filters
+  function makeCacheKey() {
+    const p = new URLSearchParams({ from: range.from, to: range.to })
+    if (filters.category) p.set('category', filters.category)
+    if (filters.manager)  p.set('manager', filters.manager)
+    if (filters.novelty)  p.set('novelty', filters.novelty)
+    return p.toString()
+  }
   // Initialize from cache immediately — no loading flash on tab switch
   const [data, setData] = useState<PriceData | null>(() =>
-    priceCache.get(`${range.from}|${range.to}`) ?? null
+    priceCache.get(makeCacheKey()) ?? null
   )
   const [loading, setLoading] = useState(() =>
-    !priceCache.has(`${range.from}|${range.to}`)
+    !priceCache.has(makeCacheKey())
   )
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -197,13 +207,17 @@ export default function PriceTab() {
   useEffect(() => { setPage(0) }, [search, priceFilter, sortKey, sortDir])
 
   useEffect(() => {
-    const cacheKey = `${range.from}|${range.to}`
+    const params = new URLSearchParams({ from: range.from, to: range.to })
+    if (filters.category) params.set('category', filters.category)
+    if (filters.manager)  params.set('manager', filters.manager)
+    if (filters.novelty)  params.set('novelty', filters.novelty)
+    const cacheKey = params.toString()
     const hit = priceCache.get(cacheKey)
     if (hit) { setData(hit); setLoading(false); return }
 
     setLoading(true)
     setError(null)
-    fetch(`/api/dashboard/prices?from=${range.from}&to=${range.to}`)
+    fetch(`/api/dashboard/prices?${params}`)
       .then(r => {
         if (!r.ok) return r.json().then(e => Promise.reject(new Error(e?.error ?? `HTTP ${r.status}`)))
         return r.json()
@@ -216,10 +230,11 @@ export default function PriceTab() {
         setLoading(false)
       })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
-  }, [range.from, range.to])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.from, range.to, filters.category, filters.manager, filters.novelty])
 
   if (loading) return (
-    <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
+    <div className="px-6 py-6 space-y-6">
       <KPIBar loading items={[
         { label: 'CTR', value: '' }, { label: 'CR в корзину', value: '' },
         { label: 'CR в заказ', value: '' }, { label: 'Доля рекл. заказов', value: '' },
@@ -297,7 +312,7 @@ export default function PriceTab() {
   const dCpo = calcDelta(f.cpo, pf?.cpo)
 
   return (
-    <div className="px-6 py-6 space-y-6 max-w-[1440px] mx-auto">
+    <div className="px-6 py-6 space-y-6">
 
       {/* KPI bar — 5 карточек */}
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
@@ -331,7 +346,7 @@ export default function PriceTab() {
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.6} />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis yAxisId="left" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={36} tickFormatter={v => `${v}%`} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={60} tickFormatter={v => Math.round(v as number).toLocaleString('ru-RU') + ' ₽'} />
+                <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={52} tickFormatter={v => Math.round(v as number).toLocaleString('ru-RU')} />
                 <Tooltip content={(p) => <ChartTip active={p.active} payload={p.payload as unknown as Array<{ name: string; value: number; color: string }>} label={p.label != null ? String(p.label) : undefined} />} />
                 <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
                 <Line yAxisId="left" type="monotone" dataKey="CTR" stroke="var(--info)" strokeWidth={2} dot={false} />
@@ -435,7 +450,7 @@ export default function PriceTab() {
                                         <td className="px-3 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtDate(row.date)}</td>
                                         <td className="px-3 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmtRub(row.price_before)}</td>
                                         <td className="px-3 py-1.5 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmtRub(row.price_after)}</td>
-                                        <td className="px-3 py-1.5 text-right"><span className="font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>{up ? '+' : ''}{row.delta_pct.toFixed(1)}%</span></td>
+                                        <td className="px-3 py-1.5 text-right"><span className="font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>{up ? '+' : ''}{(row.delta_pct * 100).toFixed(1)}%</span></td>
                                         <td className="px-3 py-1.5 text-right"><DeltaCell v={row.delta_ctr} /></td>
                                         <td className="px-3 py-1.5 text-right"><DeltaCell v={row.delta_cr_order} /></td>
                                       </tr>
@@ -543,7 +558,7 @@ export default function PriceTab() {
                     <td className="py-2 text-right font-semibold" style={{ color: 'var(--text)' }}>{row.price_after ? fmtRub(row.price_after) : '—'}</td>
                     <td className="py-2 text-right">
                       {row.has_change
-                        ? <span className="text-xs font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>{up ? '+' : ''}{row.delta_pct.toFixed(1)}%</span>
+                        ? <span className="text-xs font-semibold" style={{ color: up ? 'var(--success)' : 'var(--danger)' }}>{up ? '+' : ''}{(row.delta_pct * 100).toFixed(1)}%</span>
                         : <span style={{ color: 'var(--text-subtle)' }}>—</span>
                       }
                     </td>
