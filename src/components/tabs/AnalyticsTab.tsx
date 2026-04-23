@@ -213,8 +213,8 @@ export default function AnalyticsTab() {
   const [pageSize, setPageSize] = useState<50 | 100 | 0>(0)  // 0 = все
   const [page, setPage] = useState(0)
 
-  // View mode
-  const [flatMode, setFlatMode] = useState(true)
+  // View mode — по умолчанию иерархический вид (свёрнутый)
+  const [flatMode, setFlatMode] = useState(false)
 
   // SKU modal
   const [modalSku, setModalSku] = useState<string | null>(null)
