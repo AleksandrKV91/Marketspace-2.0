@@ -83,7 +83,7 @@ export async function GET(req: Request) {
       const rows = await fetchAll<SnapRow>(
         (sb) => sb.from('fact_sku_daily')
           .select('sku_ms, margin_pct, price, manager, novelty_status, stock_days, fbo_wb, fbs_pushkino, fbs_smolensk')
-          .eq('snap_date', maxSnapDate).not('fbo_wb', 'is', null),
+          .eq('snap_date', maxSnapDate),
         supabase,
       )
       for (const r of rows) { if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = r }
@@ -161,7 +161,7 @@ export async function GET(req: Request) {
 
   const marginPct  = totalRevenue > 0 ? totalMargin / totalRevenue : 0
   const drr        = totalRevenue > 0 ? totalAdSpend / totalRevenue : 0
-  const cpo: number | null = null  // рассчитывается через daily_agg_sku если нужно
+
   const forecast30dRevenue = periodDays > 0 ? (totalRevenue / periodDays) * 30 : 0
 
   // Предыдущий период
@@ -228,6 +228,26 @@ export async function GET(req: Request) {
   for (const r of skuAggPrev) {
     prevSkuRev[r.sku_ms] = r.revenue
   }
+
+  // Diagnostic: compare fact_daily_agg total vs fact_sku_daily total
+  const skuTotal = skuAggCurr.reduce((s, r) => s + r.revenue, 0)
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[analytics] fact_daily_agg revenue: ${Math.round(totalRevenue).toLocaleString()} ₽`)
+    console.log(`[analytics] fact_sku_daily revenue:  ${Math.round(skuTotal).toLocaleString()} ₽`)
+    console.log(`[analytics] SKU count in RPC: ${skuAggCurr.length}`)
+  }
+
+  // C.5: CPO calculation — estimate units sold from revenue / price per SKU
+  let estimatedUnits = 0
+  for (const r of skuAggCurr) {
+    const price = snapByMs[r.sku_ms]?.price
+    if (price != null && price > 0 && r.revenue > 0) {
+      estimatedUnits += r.revenue / price
+    }
+  }
+  const cpoCalc: number | null = estimatedUnits > 0 && totalAdSpend > 0
+    ? Math.round(totalAdSpend / estimatedUnits)
+    : null
 
   // ── 7. Build hierarchy ───────────────────────────────────────────────────────
   const allSkuMs = new Set<string>([...Object.keys(skuAgg), ...Object.keys(snapByMs)])
@@ -313,7 +333,7 @@ export async function GET(req: Request) {
     prev_margin_pct:      prevMarginPct,
     drr,
     prev_drr:             prevDrr,
-    cpo,
+    cpo:                  cpoCalc,
     prev_cpo:             prevCpo,
     forecast_30d_revenue: forecast30dRevenue,
     sku_count:            allSkuMs.size,

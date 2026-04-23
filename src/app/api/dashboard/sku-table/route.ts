@@ -40,6 +40,21 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // E.6: вычислить предыдущий период той же длины
+  let prevFrom: string | null = null
+  let prevTo: string | null = null
+  if (effectiveFrom && effectiveTo) {
+    const days = Math.round(
+      (new Date(effectiveTo).getTime() - new Date(effectiveFrom).getTime()) / 86400000
+    ) + 1
+    const pTo = new Date(effectiveFrom)
+    pTo.setDate(pTo.getDate() - 1)
+    const pFrom = new Date(pTo)
+    pFrom.setDate(pFrom.getDate() - (days - 1))
+    prevTo   = pTo.toISOString().split('T')[0]
+    prevFrom = pFrom.toISOString().split('T')[0]
+  }
+
   // dim_sku — справочник
   const dimRows = await fetchAll<{
     sku_ms: string; sku_wb: number | null; name: string | null
@@ -74,7 +89,7 @@ export async function GET(req: NextRequest) {
     const snapRows = await fetchAll<SnapRow>(
       (sb) => sb.from('fact_sku_daily')
         .select('sku_ms, margin_pct, chmd_5d, stock_days, novelty_status, manager, price, fbo_wb, fbs_pushkino, fbs_smolensk, kits_stock')
-        .eq('snap_date', maxSnapDate).not('fbo_wb', 'is', null),
+        .eq('snap_date', maxSnapDate),
       supabase,
     )
     for (const r of snapRows) { if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = r }
@@ -97,14 +112,30 @@ export async function GET(req: NextRequest) {
     drr_total: number | null; ctr: number | null; cr_cart: number | null
     cr_order: number | null; cpm: number | null; cpc: number | null; ad_order_share: number | null
   }
-  const dailyRows = effectiveFrom && effectiveTo
-    ? await fetchAll<DailyRow>(
-        (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
-          .gte('metric_date', effectiveFrom!).lte('metric_date', effectiveTo!),
-        supabase,
-      )
-    : []
+  const [dailyRows, prevDailyRows] = await Promise.all([
+    effectiveFrom && effectiveTo
+      ? fetchAll<DailyRow>(
+          (sb) => sb.from('fact_sku_daily')
+            .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
+            .gte('metric_date', effectiveFrom!).lte('metric_date', effectiveTo!),
+          supabase,
+        )
+      : Promise.resolve([]),
+    prevFrom && prevTo
+      ? fetchAll<Pick<DailyRow, 'sku_ms' | 'revenue'>>(
+          (sb) => sb.from('fact_sku_daily')
+            .select('sku_ms, revenue')
+            .gte('metric_date', prevFrom!).lte('metric_date', prevTo!),
+          supabase,
+        )
+      : Promise.resolve([]),
+  ])
+
+  // Агрегация предыдущего периода по SKU (только revenue для delta)
+  const prevRevByMs: Record<string, number> = {}
+  for (const r of prevDailyRows) {
+    prevRevByMs[r.sku_ms] = (prevRevByMs[r.sku_ms] ?? 0) + (r.revenue ?? 0)
+  }
 
   // Агрегация daily по SKU
   const skuMsSet = new Set(skuMsList)
@@ -193,6 +224,11 @@ export async function GET(req: NextRequest) {
       price,
       cpo,
       forecast_30d: forecast30d,
+      delta_revenue_pct: (() => {
+        const prev = prevRevByMs[sku.sku_ms]
+        if (prev == null || prev === 0) return null
+        return (revenue - prev) / prev
+      })(),
       score,
       abc_class: abcClass,
       oos_status,

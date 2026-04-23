@@ -120,7 +120,7 @@ export async function GET(req: Request) {
       const rows = await fetchAll<SnapRow>(
         (sb) => sb.from('fact_sku_daily')
           .select('sku_ms, margin_pct, chmd_5d, manager, price, stock_days, novelty_status, fbo_wb, fbs_pushkino, fbs_smolensk, snap_date')
-          .eq('snap_date', maxSnapDate).not('fbo_wb', 'is', null),
+          .eq('snap_date', maxSnapDate),
         supabase,
       )
       for (const r of rows) { if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = r }

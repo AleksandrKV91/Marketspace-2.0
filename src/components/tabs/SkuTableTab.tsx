@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { ScoreBadge } from '@/components/ui/ScoreBadge'
 import { PriorityBadge } from '@/components/ui/PriorityBadge'
@@ -8,6 +9,7 @@ import { Search, Filter, Download, X, ChevronUp, ChevronDown, SlidersHorizontal 
 import { SkuModal } from '@/components/ui/SkuModal'
 import { useDateRange } from '@/components/ui/DateRangePicker'
 import { usePendingFilter, useGlobalFilters } from '@/app/dashboard/page'
+import { fmtAxis, fmtFull } from '@/lib/formatters'
 
 interface SkuRow {
   sku: string
@@ -25,6 +27,7 @@ interface SkuRow {
   stock_days: number
   cpo: number
   forecast_30d: number | null
+  delta_revenue_pct: number | null
   score: number
   oos_status: 'critical' | 'warning' | 'ok' | 'none'
   margin_status: 'high' | 'medium' | 'low'
@@ -145,6 +148,22 @@ export default function SkuTableTab() {
     else if (pending.type === 'drr_over') setFilterDrr('over')
     setPending(null)
   }, [])
+
+  // E.4: Mini chart data — computed from loaded rows
+  const categoryChartData = useMemo(() => {
+    if (!data?.rows.length) return []
+    const catMap: Record<string, { revenue: number; count: number }> = {}
+    for (const r of data.rows) {
+      const cat = r.category || 'Без категории'
+      if (!catMap[cat]) catMap[cat] = { revenue: 0, count: 0 }
+      catMap[cat].revenue += r.revenue
+      catMap[cat].count++
+    }
+    return Object.entries(catMap)
+      .sort((a, b) => b[1].revenue - a[1].revenue)
+      .slice(0, 10)
+      .map(([name, v]) => ({ name: name.length > 14 ? name.slice(0, 13) + '…' : name, revenue: v.revenue, count: v.count }))
+  }, [data?.rows])
 
   if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
 
@@ -268,6 +287,32 @@ export default function SkuTableTab() {
         </div>
       )}
 
+      {/* E.4: Mini charts — категории по выручке */}
+      {categoryChartData.length > 0 && (
+        <GlassCard padding="none">
+          <div className="px-4 pt-3 pb-1">
+            <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-subtle)' }}>
+              Топ категорий по выручке
+            </p>
+            <ResponsiveContainer width="100%" height={140}>
+              <BarChart data={categoryChartData} margin={{ top: 0, right: 8, bottom: 0, left: 8 }} layout="vertical">
+                <XAxis type="number" hide tickFormatter={v => fmtAxis(v as number)} />
+                <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
+                <Tooltip
+                  contentStyle={{ background: 'var(--surface-popup)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }}
+                  formatter={(v, _n, p) => [fmtFull(v as number) + ' ₽ · ' + (p.payload as { count: number }).count + ' SKU', '']}
+                />
+                <Bar dataKey="revenue" radius={[0, 4, 4, 0]} maxBarSize={16}>
+                  {categoryChartData.map((_, i) => (
+                    <Cell key={i} fill={`hsl(${210 + i * 18}, 70%, ${55 - i * 2}%)`} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </GlassCard>
+      )}
+
       {/* Side panel + table layout */}
       <div className="flex gap-4 items-start">
 
@@ -385,7 +430,15 @@ export default function SkuTableTab() {
                       <span className="block truncate" title={row.category} style={{ color: 'var(--text-muted)' }}>{row.category || '—'}</span>
                     </td>
                     {/* Revenue */}
-                    <td className="px-2 py-1 text-right text-xs font-semibold whitespace-nowrap" title={Math.round(row.revenue).toLocaleString('ru-RU') + ' ₽'} style={{ color: 'var(--text)' }}>{fmt(row.revenue)}</td>
+                    <td className="px-2 py-1 text-right text-xs font-semibold whitespace-nowrap" title={fmtFull(row.revenue) + ' ₽'} style={{ color: 'var(--text)' }}>
+                      {fmt(row.revenue)}
+                      {row.delta_revenue_pct != null && (
+                        <div className="text-[10px] font-normal leading-none mt-0.5"
+                          style={{ color: row.delta_revenue_pct >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                          {row.delta_revenue_pct >= 0 ? '▲' : '▼'} {Math.abs(row.delta_revenue_pct * 100).toFixed(1)}%
+                        </div>
+                      )}
+                    </td>
                     {/* Margin % — already in badge, just show number */}
                     <td className="px-2 py-1 text-right text-xs" style={{ color: marginColor }}>{fmtPct(row.margin_pct)}</td>
                     {/* ЧМД */}
