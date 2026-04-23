@@ -283,6 +283,7 @@ export default function AnalyticsTab() {
       return
     }
 
+    setData(null)
     setLoading(true)
     setError(null)
     fetch(`/api/dashboard/analytics?${params}`)

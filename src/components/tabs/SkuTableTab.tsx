@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, ReferenceLine,
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, ReferenceLine, LabelList,
 } from 'recharts'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { ScoreBadge } from '@/components/ui/ScoreBadge'
@@ -118,7 +118,10 @@ export default function SkuTableTab() {
   const [filterDrrOnly, setFilterDrrOnly] = useState(false)
   const [filterLowMarginOnly, setFilterLowMarginOnly] = useState(false)
   const [filterWithAds, setFilterWithAds] = useState(false)
+  const [filterNoSales, setFilterNoSales] = useState(false)
   const [categoryFilter, setCategoryFilter] = useState('')
+  const [hoveredCatA, setHoveredCatA] = useState<string | null>(null)
+  const [hoveredCatB, setHoveredCatB] = useState<string | null>(null)
 
   // Sort — default revenue DESC
   const [sortKey, setSortKey] = useState<SortKey>('revenue')
@@ -193,7 +196,7 @@ export default function SkuTableTab() {
   }, [sortKey])
 
   // Reset page on filter/sort change
-  useEffect(() => { setPage(0) }, [search, filterNovelty, filterOos, filterDrr, filterMargin, filterOosOnly, filterDrrOnly, filterLowMarginOnly, filterWithAds, categoryFilter, sortKey, sortDir])
+  useEffect(() => { setPage(0) }, [search, filterNovelty, filterOos, filterDrr, filterMargin, filterOosOnly, filterDrrOnly, filterLowMarginOnly, filterWithAds, filterNoSales, categoryFilter, sortKey, sortDir])
 
   function resetFilters() {
     setSearch('')
@@ -205,6 +208,7 @@ export default function SkuTableTab() {
     setFilterDrrOnly(false)
     setFilterLowMarginOnly(false)
     setFilterWithAds(false)
+    setFilterNoSales(false)
     setCategoryFilter('')
   }
 
@@ -229,6 +233,7 @@ export default function SkuTableTab() {
       if (filterDrrOnly && (r.drr == null || r.drr <= r.margin_pct)) return false
       if (filterLowMarginOnly && r.margin_pct >= 0.15) return false
       if (filterWithAds && (r.drr == null || r.drr === 0)) return false
+      if (filterNoSales && !(r.stock_qty > 0 && r.revenue === 0)) return false
       return true
     }).sort((a, b) => {
       const mult = sortDir === 'asc' ? 1 : -1
@@ -259,9 +264,8 @@ export default function SkuTableTab() {
     }
     return Object.entries(catMap)
       .sort((a, b) => b[1].revenue - a[1].revenue)
-      .slice(0, 10)
       .map(([name, v]) => ({
-        name: name.length > 16 ? name.slice(0, 15) + '…' : name,
+        name: name.length > 22 ? name.slice(0, 21) + '…' : name,
         fullName: name,
         revenue: v.revenue,
         count: v.count,
@@ -292,10 +296,9 @@ export default function SkuTableTab() {
         count: v.count,
       }))
       .sort((a, b) => b.delta - a.delta)
-      .slice(0, 10)
   }, [data?.rows])
 
-  const hasFilters = !!(search || filterNovelty !== 'all' || filterOos !== 'all' || filterDrr !== 'all' || filterMargin !== 'all' || filterOosOnly || filterDrrOnly || filterLowMarginOnly || filterWithAds || categoryFilter)
+  const hasFilters = !!(search || filterNovelty !== 'all' || filterOos !== 'all' || filterDrr !== 'all' || filterMargin !== 'all' || filterOosOnly || filterDrrOnly || filterLowMarginOnly || filterWithAds || filterNoSales || categoryFilter)
 
   const pagedRows = pageSize === 0
     ? filteredRows
@@ -372,45 +375,55 @@ export default function SkuTableTab() {
                     </button>
                   )}
                 </p>
-                <ResponsiveContainer width="100%" height={Math.max(100, categoryChartData.length * 22)}>
-                  <BarChart
-                    data={categoryChartData}
-                    layout="vertical"
-                    margin={{ top: 0, right: 60, bottom: 0, left: 4 }}
-                    onClick={(e: unknown) => {
-                      const ev = e as { activePayload?: Array<{ payload?: { fullName?: string } }> } | null
-                      const cat = ev?.activePayload?.[0]?.payload?.fullName
-                      if (cat) setCategoryFilter(prev => prev === cat ? '' : cat)
-                    }}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <XAxis type="number" hide />
-                    <YAxis
-                      type="category"
-                      dataKey="name"
-                      width={130}
-                      tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <Tooltip
-                      contentStyle={{ background: 'var(--surface-popup)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }}
-                      formatter={(v, _n, p) => {
-                        const pl = p.payload as { count: number; sharePct: number }
-                        return [`${fmtFull(v as number)} ₽ · ${pl.count} SKU · ${pl.sharePct.toFixed(1)}%`, '']
-                      }}
-                    />
-                    <Bar dataKey="revenue" radius={[0, 4, 4, 0]} maxBarSize={18}>
-                      {categoryChartData.map((entry, i) => (
-                        <Cell
-                          key={i}
-                          fill={categoryFilter === entry.fullName ? 'var(--accent)' : `hsl(${210 + i * 16}, 65%, ${55 - i * 1.5}%)`}
-                          opacity={categoryFilter && categoryFilter !== entry.fullName ? 0.45 : 1}
+                <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+                  <div style={{ height: Math.max(120, categoryChartData.length * 32) }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={categoryChartData}
+                        layout="vertical"
+                        margin={{ top: 0, right: 8, bottom: 0, left: 8 }}
+                        onClick={(e: unknown) => {
+                          const ev = e as { activePayload?: Array<{ payload?: { fullName?: string } }> } | null
+                          const cat = ev?.activePayload?.[0]?.payload?.fullName
+                          if (cat) setCategoryFilter(prev => prev === cat ? '' : cat)
+                        }}
+                        style={{ cursor: 'pointer', outline: 'none' }}
+                      >
+                        <XAxis type="number" hide />
+                        <YAxis type="category" dataKey="name" width={0} tick={false} axisLine={false} tickLine={false} />
+                        <Tooltip
+                          cursor={{ fill: 'transparent' }}
+                          contentStyle={{ background: 'var(--surface-popup)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }}
+                          labelFormatter={() => ''}
+                          formatter={(v, _n, p) => {
+                            const pl = p.payload as { count: number; sharePct: number }
+                            return [`${fmtFull(v as number)} ₽ · ${pl.count} SKU · ${pl.sharePct.toFixed(1)}%`]
+                          }}
                         />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                        <Bar
+                          dataKey="revenue"
+                          radius={[0, 4, 4, 0]}
+                          maxBarSize={22}
+                          onMouseEnter={(d: unknown) => { const entry = d as { fullName?: string }; setHoveredCatA(entry?.fullName ?? null) }}
+                          onMouseLeave={() => setHoveredCatA(null)}
+                        >
+                          {categoryChartData.map((entry, i) => (
+                            <Cell
+                              key={i}
+                              fill={categoryFilter === entry.fullName ? 'var(--accent)' : `hsl(${210 + i * 16}, 65%, ${hoveredCatA === entry.fullName ? 72 : 55 - i * 1.5}%)`}
+                              opacity={categoryFilter && categoryFilter !== entry.fullName ? 0.4 : 1}
+                            />
+                          ))}
+                          <LabelList
+                            dataKey="name"
+                            position="insideLeft"
+                            style={{ fill: 'rgba(255,255,255,0.92)', fontSize: 11, fontWeight: 500 }}
+                          />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
                 <p className="text-[10px] mt-1" style={{ color: 'var(--text-subtle)' }}>Нажмите на категорию для фильтрации таблицы</p>
               </div>
             </GlassCard>
@@ -423,41 +436,53 @@ export default function SkuTableTab() {
                 <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-subtle)' }}>
                   Динамика категорий vs пред. период
                 </p>
-                <ResponsiveContainer width="100%" height={Math.max(100, categoryDeltaData.length * 22)}>
-                  <BarChart
-                    data={categoryDeltaData}
-                    layout="vertical"
-                    margin={{ top: 0, right: 60, bottom: 0, left: 4 }}
-                  >
-                    <XAxis type="number" tickFormatter={v => `${(v as number).toFixed(0)}%`} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
-                    <YAxis
-                      type="category"
-                      dataKey="name"
-                      width={130}
-                      tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <ReferenceLine x={0} stroke="var(--border)" strokeWidth={1} />
-                    <Tooltip
-                      contentStyle={{ background: 'var(--surface-popup)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }}
-                      formatter={(v, _n, p) => {
-                        const pl = p.payload as { count: number; revenue: number }
-                        const delta = v as number
-                        return [`${delta >= 0 ? '+' : ''}${delta.toFixed(1)}% · ${pl.count} SKU · ${fmtFull(pl.revenue)} ₽`, '']
-                      }}
-                    />
-                    <Bar dataKey="delta" radius={[0, 4, 4, 0]} maxBarSize={18}>
-                      {categoryDeltaData.map((entry, i) => (
-                        <Cell
-                          key={i}
-                          fill={entry.delta >= 0 ? '#22c55e' : '#ef4444'}
-                          opacity={0.85}
+                <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+                  <div style={{ height: Math.max(120, categoryDeltaData.length * 32) }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={categoryDeltaData}
+                        layout="vertical"
+                        margin={{ top: 0, right: 8, bottom: 0, left: 8 }}
+                        style={{ outline: 'none' }}
+                      >
+                        <XAxis type="number" tickFormatter={v => `${(v as number).toFixed(0)}%`} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
+                        <YAxis type="category" dataKey="name" width={0} tick={false} axisLine={false} tickLine={false} />
+                        <ReferenceLine x={0} stroke="var(--border)" strokeWidth={1} />
+                        <Tooltip
+                          cursor={{ fill: 'transparent' }}
+                          contentStyle={{ background: 'var(--surface-popup)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }}
+                          labelFormatter={() => ''}
+                          formatter={(v, _n, p) => {
+                            const pl = p.payload as { count: number; revenue: number }
+                            const delta = v as number
+                            return [`${delta >= 0 ? '+' : ''}${delta.toFixed(1)}% · ${pl.count} SKU · ${fmtFull(pl.revenue)} ₽`]
+                          }}
                         />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                        <Bar
+                          dataKey="delta"
+                          radius={[0, 4, 4, 0]}
+                          maxBarSize={22}
+                          onMouseEnter={(d: unknown) => { const entry = d as { fullName?: string }; setHoveredCatB(entry?.fullName ?? null) }}
+                          onMouseLeave={() => setHoveredCatB(null)}
+                        >
+                          {categoryDeltaData.map((entry, i) => (
+                            <Cell
+                              key={i}
+                              fill={entry.delta >= 0 ? '#22c55e' : '#ef4444'}
+                              opacity={hoveredCatB === entry.fullName ? 1 : 0.8}
+                              style={{ filter: hoveredCatB === entry.fullName ? 'brightness(1.25)' : '' }}
+                            />
+                          ))}
+                          <LabelList
+                            dataKey="name"
+                            position="insideLeft"
+                            style={{ fill: 'rgba(255,255,255,0.92)', fontSize: 11, fontWeight: 500 }}
+                          />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
               </div>
             </GlassCard>
           )}
@@ -574,6 +599,7 @@ export default function SkuTableTab() {
               { key: 'drr',    label: 'ДРР > Маржа',        state: filterDrrOnly,       toggle: () => setFilterDrrOnly(v => !v) },
               { key: 'margin', label: 'Маржа < 15%',        state: filterLowMarginOnly, toggle: () => setFilterLowMarginOnly(v => !v) },
               { key: 'ads',    label: 'Только с рекламой',  state: filterWithAds,       toggle: () => setFilterWithAds(v => !v) },
+              { key: 'nosales', label: 'Остаток, нет продаж', state: filterNoSales,      toggle: () => setFilterNoSales(v => !v) },
             ].map(f => (
               <label key={f.key} className="flex items-center gap-2 cursor-pointer" onClick={f.toggle}>
                 <div className="w-4 h-4 rounded flex items-center justify-center shrink-0" style={{ background: f.state ? 'var(--accent)' : 'transparent', border: f.state ? 'none' : '1px solid var(--border)' }}>
@@ -583,7 +609,7 @@ export default function SkuTableTab() {
               </label>
             ))}
             <button
-              onClick={() => { setFilterOosOnly(false); setFilterDrrOnly(false); setFilterLowMarginOnly(false); setFilterWithAds(false) }}
+              onClick={() => { setFilterOosOnly(false); setFilterDrrOnly(false); setFilterLowMarginOnly(false); setFilterWithAds(false); setFilterNoSales(false) }}
               className="w-full text-xs py-1 rounded-xl font-medium"
               style={{ background: 'var(--border)', color: 'var(--text-muted)' }}
             >
@@ -595,7 +621,7 @@ export default function SkuTableTab() {
         {/* Main table */}
         <div className="flex-1 min-w-0">
           <GlassCard padding="none">
-            <div className="overflow-x-auto">
+            <div style={{ overflowX: 'clip' }}>
               <table className="w-full text-xs">
                 <thead>
                   <tr
