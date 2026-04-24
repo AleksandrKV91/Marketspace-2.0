@@ -1,9 +1,6 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, ReferenceLine, LabelList,
-} from 'recharts'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { ScoreBadge } from '@/components/ui/ScoreBadge'
 import { Search, Filter, Download, X, ChevronUp, ChevronDown, SlidersHorizontal } from 'lucide-react'
@@ -12,6 +9,7 @@ import { useDateRange } from '@/components/ui/DateRangePicker'
 import { usePendingFilter, useGlobalFilters } from '@/app/dashboard/page'
 import { fmtAxis, fmtFull } from '@/lib/formatters'
 import { skuTableCache } from '@/lib/tabCache'
+import { exportToExcel } from '@/lib/exportExcel'
 
 interface SkuRow {
   sku: string
@@ -120,8 +118,6 @@ export default function SkuTableTab() {
   const [filterWithAds, setFilterWithAds] = useState(false)
   const [filterNoSales, setFilterNoSales] = useState(false)
   const [categoryFilter, setCategoryFilter] = useState('')
-  const [hoveredCatA, setHoveredCatA] = useState<string | null>(null)
-  const [hoveredCatB, setHoveredCatB] = useState<string | null>(null)
 
   // Sort — default revenue DESC
   const [sortKey, setSortKey] = useState<SortKey>('revenue')
@@ -233,7 +229,7 @@ export default function SkuTableTab() {
       if (filterDrrOnly && (r.drr == null || r.drr <= r.margin_pct)) return false
       if (filterLowMarginOnly && r.margin_pct >= 0.15) return false
       if (filterWithAds && (r.drr == null || r.drr === 0)) return false
-      if (filterNoSales && !(r.stock_qty > 0 && r.revenue === 0)) return false
+      if (filterNoSales && !(r.stock_qty > 0 && r.revenue < 1)) return false
       return true
     }).sort((a, b) => {
       const mult = sortDir === 'asc' ? 1 : -1
@@ -346,6 +342,28 @@ export default function SkuTableTab() {
               </button>
             )}
             <button
+              onClick={() => {
+                const rows = filteredRows.map(r => ({
+                  'SKU WB': r.sku,
+                  'SKU МС': r.sku_ms,
+                  'Название': r.name,
+                  'Менеджер': r.manager,
+                  'Категория': r.category,
+                  'Выручка, ₽': Math.round(r.revenue),
+                  'Δ выручка %': r.delta_revenue_pct != null ? +((r.delta_revenue_pct * 100).toFixed(1)) : '',
+                  'Маржа %': +((r.margin_pct * 100).toFixed(1)),
+                  'ЧМД, ₽': Math.round(r.chmd),
+                  'ДРР %': r.drr != null ? +((r.drr * 100).toFixed(1)) : '',
+                  'CTR %': r.ctr != null ? +((r.ctr * 100).toFixed(1)) : '',
+                  'CR заказ %': r.cr_order != null ? +((r.cr_order * 100).toFixed(1)) : '',
+                  'Остаток, шт': r.stock_qty,
+                  'Запас, дн.': r.stock_days,
+                  'CPO, ₽': r.cpo != null ? Math.round(r.cpo) : '',
+                  'Прогноз 30д, ₽': r.forecast_30d != null ? Math.round(r.forecast_30d) : '',
+                  'Score': r.score,
+                }))
+                exportToExcel(rows, `SKU_аналитика_${new Date().toISOString().slice(0, 10)}`)
+              }}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-medium"
               style={{ background: 'var(--border)', color: 'var(--text-muted)' }}
             >
@@ -362,69 +380,53 @@ export default function SkuTableTab() {
           {/* Chart A — Категории по выручке */}
           {categoryChartData.length > 0 && (
             <GlassCard padding="none">
-              <div className="px-4 pt-3 pb-2">
-                <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-subtle)' }}>
-                  Топ категорий по выручке
+              <div className="px-4 pt-3 pb-3">
+                <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-subtle)' }}>
+                  Категории по выручке
                   {categoryFilter && (
-                    <button
-                      onClick={() => setCategoryFilter('')}
-                      className="ml-2 text-[10px] px-1.5 py-0.5 rounded"
-                      style={{ background: 'var(--accent-glow)', color: 'var(--accent)' }}
-                    >
-                      × {categoryFilter.length > 14 ? categoryFilter.slice(0, 13) + '…' : categoryFilter}
+                    <button onClick={() => setCategoryFilter('')} className="ml-2 text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--accent-glow)', color: 'var(--accent)' }}>
+                      × сброс
                     </button>
                   )}
                 </p>
-                <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-                  <div style={{ height: Math.max(120, categoryChartData.length * 32) }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={categoryChartData}
-                        layout="vertical"
-                        margin={{ top: 0, right: 8, bottom: 0, left: 8 }}
-                        onClick={(e: unknown) => {
-                          const ev = e as { activePayload?: Array<{ payload?: { fullName?: string } }> } | null
-                          const cat = ev?.activePayload?.[0]?.payload?.fullName
-                          if (cat) setCategoryFilter(prev => prev === cat ? '' : cat)
-                        }}
-                        style={{ cursor: 'pointer', outline: 'none' }}
-                      >
-                        <XAxis type="number" hide />
-                        <YAxis type="category" dataKey="name" width={0} tick={false} axisLine={false} tickLine={false} />
-                        <Tooltip
-                          cursor={{ fill: 'transparent' }}
-                          contentStyle={{ background: 'var(--surface-popup)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }}
-                          labelFormatter={() => ''}
-                          formatter={(v, _n, p) => {
-                            const pl = p.payload as { count: number; sharePct: number }
-                            return [`${fmtFull(v as number)} ₽ · ${pl.count} SKU · ${pl.sharePct.toFixed(1)}%`]
-                          }}
-                        />
-                        <Bar
-                          dataKey="revenue"
-                          radius={[0, 4, 4, 0]}
-                          maxBarSize={22}
-                          onMouseEnter={(d: unknown) => { const entry = d as { fullName?: string }; setHoveredCatA(entry?.fullName ?? null) }}
-                          onMouseLeave={() => setHoveredCatA(null)}
+                <div style={{ maxHeight: 320, overflowY: 'auto' }} className="space-y-2 pr-1">
+                  {(() => {
+                    const maxRev = categoryChartData[0]?.revenue ?? 1
+                    return categoryChartData.map((item, i) => {
+                      const isActive = categoryFilter === item.fullName
+                      const pct = Math.max(2, (item.revenue / maxRev) * 100)
+                      return (
+                        <div
+                          key={i}
+                          className="group cursor-pointer"
+                          onClick={() => setCategoryFilter(prev => prev === item.fullName ? '' : item.fullName)}
                         >
-                          {categoryChartData.map((entry, i) => (
-                            <Cell
-                              key={i}
-                              fill={categoryFilter === entry.fullName ? 'var(--accent)' : `hsl(${210 + i * 16}, 65%, ${hoveredCatA === entry.fullName ? 72 : 55 - i * 1.5}%)`}
-                              opacity={categoryFilter && categoryFilter !== entry.fullName ? 0.4 : 1}
-                            />
-                          ))}
-                          <LabelList
-                            dataKey="name"
-                            position="insideLeft"
-                            style={{ fill: 'rgba(255,255,255,0.92)', fontSize: 11, fontWeight: 500 }}
-                          />
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+                          <div className="flex items-center justify-between mb-0.5 gap-2">
+                            <span className="text-xs truncate flex-1 font-medium" style={{ color: isActive ? 'var(--accent)' : 'var(--text)' }}>
+                              <span className="mr-1.5 text-[10px]" style={{ color: 'var(--text-subtle)' }}>{i + 1}</span>
+                              {item.fullName}
+                            </span>
+                            <span className="text-xs whitespace-nowrap font-semibold shrink-0" style={{ color: 'var(--text)' }}>
+                              {fmtAxis(item.revenue)} ₽
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+                              <div
+                                className="h-full rounded-full transition-all"
+                                style={{ width: `${pct}%`, background: isActive ? 'var(--accent)' : 'var(--accent)', opacity: categoryFilter && !isActive ? 0.3 : 0.75 }}
+                              />
+                            </div>
+                            <span className="text-[10px] shrink-0" style={{ color: 'var(--text-subtle)' }}>
+                              {item.count} SKU · {item.sharePct.toFixed(1)}%
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    })
+                  })()}
                 </div>
-                <p className="text-[10px] mt-1" style={{ color: 'var(--text-subtle)' }}>Нажмите на категорию для фильтрации таблицы</p>
+                <p className="text-[10px] mt-2" style={{ color: 'var(--text-subtle)' }}>Нажмите на категорию для фильтрации таблицы</p>
               </div>
             </GlassCard>
           )}
@@ -432,56 +434,42 @@ export default function SkuTableTab() {
           {/* Chart B — Динамика категорий (дельта %) */}
           {categoryDeltaData.length > 0 && (
             <GlassCard padding="none">
-              <div className="px-4 pt-3 pb-2">
-                <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-subtle)' }}>
+              <div className="px-4 pt-3 pb-3">
+                <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-subtle)' }}>
                   Динамика категорий vs пред. период
                 </p>
-                <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-                  <div style={{ height: Math.max(120, categoryDeltaData.length * 32) }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={categoryDeltaData}
-                        layout="vertical"
-                        margin={{ top: 0, right: 8, bottom: 0, left: 8 }}
-                        style={{ outline: 'none' }}
-                      >
-                        <XAxis type="number" tickFormatter={v => `${(v as number).toFixed(0)}%`} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
-                        <YAxis type="category" dataKey="name" width={0} tick={false} axisLine={false} tickLine={false} />
-                        <ReferenceLine x={0} stroke="var(--border)" strokeWidth={1} />
-                        <Tooltip
-                          cursor={{ fill: 'transparent' }}
-                          contentStyle={{ background: 'var(--surface-popup)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }}
-                          labelFormatter={() => ''}
-                          formatter={(v, _n, p) => {
-                            const pl = p.payload as { count: number; revenue: number }
-                            const delta = v as number
-                            return [`${delta >= 0 ? '+' : ''}${delta.toFixed(1)}% · ${pl.count} SKU · ${fmtFull(pl.revenue)} ₽`]
-                          }}
-                        />
-                        <Bar
-                          dataKey="delta"
-                          radius={[0, 4, 4, 0]}
-                          maxBarSize={22}
-                          onMouseEnter={(d: unknown) => { const entry = d as { fullName?: string }; setHoveredCatB(entry?.fullName ?? null) }}
-                          onMouseLeave={() => setHoveredCatB(null)}
-                        >
-                          {categoryDeltaData.map((entry, i) => (
-                            <Cell
-                              key={i}
-                              fill={entry.delta >= 0 ? '#22c55e' : '#ef4444'}
-                              opacity={hoveredCatB === entry.fullName ? 1 : 0.8}
-                              style={{ filter: hoveredCatB === entry.fullName ? 'brightness(1.25)' : '' }}
+                <div style={{ maxHeight: 320, overflowY: 'auto' }} className="space-y-2 pr-1">
+                  {(() => {
+                    const maxAbs = Math.max(...categoryDeltaData.map(d => Math.abs(d.delta)), 1)
+                    return categoryDeltaData.map((item, i) => {
+                      const isPos = item.delta >= 0
+                      const barPct = Math.max(2, (Math.abs(item.delta) / maxAbs) * 100)
+                      return (
+                        <div key={i}>
+                          <div className="flex items-center justify-between mb-0.5 gap-2">
+                            <span className="flex items-center gap-1 text-xs truncate flex-1 font-medium" style={{ color: 'var(--text)' }}>
+                              <span style={{ color: isPos ? '#22c55e' : '#ef4444' }}>{isPos ? '▲' : '▼'}</span>
+                              {item.fullName}
+                            </span>
+                            <div className="text-right shrink-0">
+                              <span className="text-xs font-semibold" style={{ color: isPos ? '#22c55e' : '#ef4444' }}>
+                                {isPos ? '+' : ''}{item.delta.toFixed(1)}%
+                              </span>
+                              <span className="text-[10px] ml-1.5" style={{ color: 'var(--text-subtle)' }}>
+                                {fmtAxis(item.revenue)} ₽
+                              </span>
+                            </div>
+                          </div>
+                          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+                            <div
+                              className="h-full rounded-full"
+                              style={{ width: `${barPct}%`, background: isPos ? '#22c55e' : '#ef4444', opacity: 0.75 }}
                             />
-                          ))}
-                          <LabelList
-                            dataKey="name"
-                            position="insideLeft"
-                            style={{ fill: 'rgba(255,255,255,0.92)', fontSize: 11, fontWeight: 500 }}
-                          />
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+                          </div>
+                        </div>
+                      )
+                    })
+                  })()}
                 </div>
               </div>
             </GlassCard>
@@ -636,7 +624,6 @@ export default function SkuTableTab() {
                     }}
                   >
                     <th className="text-left px-2 py-2 font-medium whitespace-nowrap" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>OOS</th>
-                    <th className="text-left px-2 py-2 font-medium whitespace-nowrap" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>М%</th>
                     <th className="px-2 py-2 font-medium whitespace-nowrap" style={{ color: sortKey === 'score' ? 'var(--accent)' : 'var(--text-subtle)', fontSize: 11, cursor: 'pointer' }} onClick={() => toggleSort('score')}>
                       <span className="inline-flex items-center gap-0.5">Score <SortIcon active={sortKey === 'score'} dir={sortDir} /></span>
                     </th>
@@ -659,7 +646,7 @@ export default function SkuTableTab() {
                 <tbody>
                   {loading && Array.from({ length: 10 }).map((_, i) => (
                     <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
-                      {Array.from({ length: 17 }).map((__, j) => (
+                      {Array.from({ length: 16 }).map((__, j) => (
                         <td key={j} className="px-2 py-1.5"><div className="skeleton h-3 w-full" /></td>
                       ))}
                     </tr>
@@ -683,13 +670,6 @@ export default function SkuTableTab() {
                           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md whitespace-nowrap"
                             style={{ background: row.oos_status === 'critical' ? 'var(--danger-bg)' : row.oos_status === 'warning' ? 'var(--warning-bg)' : 'transparent', color: oosColor }}>
                             {row.oos_status === 'critical' ? 'OOS' : row.oos_status === 'warning' ? 'Low' : '—'}
-                          </span>
-                        </td>
-                        {/* Margin badge */}
-                        <td className="px-2 py-1">
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md"
-                            style={{ background: isLowMargin ? 'var(--danger-bg)' : row.margin_pct > 0.15 ? 'var(--success-bg)' : 'var(--warning-bg)', color: marginColor }}>
-                            {fmtPct(row.margin_pct)}
                           </span>
                         </td>
                         {/* Score */}
