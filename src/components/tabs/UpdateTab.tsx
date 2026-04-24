@@ -74,16 +74,44 @@ async function uploadViaStorage(
 
   onProgress(25)
 
-  // 2. Загрузить файл напрямую по signed URL через fetch (PUT)
-  const uploadRes = await fetch(signedUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-    body: file,
-  })
+  // 2. Загрузить файл напрямую по signed URL (retry до 3 раз, таймаут 5 мин)
+  let uploadRes: Response | null = null
+  let lastUploadError = ''
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    // Получить свежий signed URL для каждой попытки
+    if (attempt > 1) {
+      try {
+        const rp = await fetch('/api/upload/presign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storageKey }),
+        })
+        const rj = await rp.json()
+        if (!rp.ok || !rj.signedUrl) { lastUploadError = rj.error ?? 'presign failed'; break }
+        signedUrl = rj.signedUrl
+      } catch (e) { lastUploadError = String(e); break }
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000) // 5 мин
+    try {
+      uploadRes = await fetch(signedUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+        signal: controller.signal,
+      })
+      clearTimeout(timer)
+      if (uploadRes.ok) break
+      lastUploadError = await uploadRes.text().catch(() => uploadRes!.statusText)
+    } catch (e) {
+      clearTimeout(timer)
+      lastUploadError = e instanceof Error ? e.message : String(e)
+      if (attempt < 3) await new Promise(r => setTimeout(r, 1500 * attempt))
+    }
+  }
 
-  if (!uploadRes.ok) {
-    const errText = await uploadRes.text().catch(() => uploadRes.statusText)
-    return { ok: false, error: `Storage upload: ${errText}` }
+  if (!uploadRes?.ok) {
+    return { ok: false, error: `Storage upload: ${lastUploadError}` }
   }
 
   onProgress(50)

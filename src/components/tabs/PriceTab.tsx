@@ -98,7 +98,9 @@ function ChartTip({ active, payload, label }: { active?: boolean; payload?: Arra
           <span className="font-bold ml-auto">
             {p.name.includes('%') || p.name === 'CTR' || p.name === 'CR корзина' || p.name === 'CR заказ'
               ? p.value.toFixed(2) + '%'
-              : fmt(p.value)}
+              : p.name === 'Цена ср.'
+                ? Math.round(p.value).toLocaleString('ru-RU') + ' ₽'
+                : fmt(p.value)}
           </span>
         </div>
       ))}
