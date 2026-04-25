@@ -236,7 +236,7 @@ function UploadCard({
             )}
             {state.detail && (
               <span
-                className="text-red-400 truncate max-w-xs cursor-help"
+                className="text-red-400 break-all cursor-help"
                 title={state.detail}
               >
                 {state.detail}
@@ -264,6 +264,162 @@ function UploadCard({
                 </div>
               </div>
             </details>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Диагностическая панель ────────────────────────────────────────────────────
+
+interface DiagResult {
+  env?: Record<string, string>
+  db_connection?: string
+  storage_buckets?: string
+  signed_url?: string
+  dim_sku?: string
+  fact_abc?: string
+  fact_sku_daily?: string
+  error?: string
+}
+
+interface DiagState {
+  status: 'idle' | 'checking' | 'done' | 'fixing' | 'fixed' | 'error'
+  result: DiagResult | null
+  setupSteps: string[]
+}
+
+function DiagPanel() {
+  const [diag, setDiag] = useState<DiagState>({ status: 'idle', result: null, setupSteps: [] })
+
+  const handleCheck = async () => {
+    setDiag({ status: 'checking', result: null, setupSteps: [] })
+    try {
+      const res = await fetch('/api/debug/storage-check')
+      const json: DiagResult = await res.json()
+      setDiag({ status: 'done', result: json, setupSteps: [] })
+    } catch (e) {
+      setDiag({ status: 'error', result: { error: String(e) }, setupSteps: [] })
+    }
+  }
+
+  const handleSetup = async () => {
+    setDiag(prev => ({ ...prev, status: 'fixing', setupSteps: [] }))
+    try {
+      const res = await fetch('/api/debug/storage-setup', { method: 'POST' })
+      const json = await res.json()
+      setDiag(prev => ({ ...prev, status: 'fixed', setupSteps: json.steps ?? [] }))
+      // Перепроверить после настройки
+      setTimeout(async () => {
+        try {
+          const checkRes = await fetch('/api/debug/storage-check')
+          const checkJson: DiagResult = await checkRes.json()
+          setDiag(prev => ({ ...prev, result: checkJson }))
+        } catch { /* ignore */ }
+      }, 1000)
+    } catch (e) {
+      setDiag(prev => ({ ...prev, status: 'error', setupSteps: [String(e)] }))
+    }
+  }
+
+  const hasBucketError = diag.result &&
+    (typeof diag.result.storage_buckets === 'string' && diag.result.storage_buckets.startsWith('❌'))
+  const hasAnyError = diag.result &&
+    Object.values(diag.result).some(v => typeof v === 'string' && v.startsWith('❌'))
+
+  return (
+    <div className="rounded-xl border border-gray-100 dark:border-white/10 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-[#1A1A2E] dark:text-white">
+          Диагностика хранилища
+        </h3>
+        <div className="flex items-center gap-2">
+          {(hasBucketError || diag.status === 'fixed') && (
+            <button
+              onClick={handleSetup}
+              disabled={diag.status === 'fixing'}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+              style={{
+                background: 'rgba(230,57,70,0.08)',
+                border: '1px solid #E63946',
+                color: '#E63946',
+                cursor: diag.status === 'fixing' ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {diag.status === 'fixing' ? '⟳ Настройка...' : '⚙ Настроить хранилище'}
+            </button>
+          )}
+          <button
+            onClick={handleCheck}
+            disabled={diag.status === 'checking' || diag.status === 'fixing'}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+            style={{
+              background: 'var(--accent-glass)',
+              border: '1px solid var(--accent)',
+              color: 'var(--accent)',
+              cursor: (diag.status === 'checking' || diag.status === 'fixing') ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {diag.status === 'checking' ? '⟳ Проверка...' : '⟳ Проверить'}
+          </button>
+        </div>
+      </div>
+
+      {diag.status === 'idle' && (
+        <p className="text-xs text-gray-400 dark:text-gray-500">
+          Если загрузка файлов не работает — нажмите «Проверить» для диагностики подключения к Supabase Storage.
+        </p>
+      )}
+
+      {diag.setupSteps.length > 0 && (
+        <div className="rounded-lg bg-gray-50 dark:bg-white/5 p-3 space-y-1">
+          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Настройка хранилища:</p>
+          {diag.setupSteps.map((step, i) => (
+            <p key={i} className="text-xs font-mono text-gray-700 dark:text-gray-300">{step}</p>
+          ))}
+        </div>
+      )}
+
+      {diag.result && (
+        <div className="rounded-lg bg-gray-50 dark:bg-white/5 p-3 space-y-1.5">
+          {[
+            ['Переменные окружения', diag.result.env
+              ? Object.entries(diag.result.env).map(([k, v]) => `${k}: ${v}`).join(' | ')
+              : undefined],
+            ['База данных', diag.result.db_connection],
+            ['Хранилище (бакеты)', diag.result.storage_buckets],
+            ['Signed URL', diag.result.signed_url],
+            ['dim_sku', diag.result.dim_sku],
+            ['fact_abc', diag.result.fact_abc],
+            ['fact_sku_daily', diag.result.fact_sku_daily],
+          ]
+            .filter(([, v]) => v !== undefined)
+            .map(([label, value]) => {
+              const isOk = typeof value === 'string' && value.startsWith('✅')
+              const isWarn = typeof value === 'string' && value.startsWith('⚠️')
+              const isErr = typeof value === 'string' && value.startsWith('❌')
+              return (
+                <div key={label as string} className="flex gap-2 text-xs">
+                  <span className="shrink-0 text-gray-400 dark:text-gray-500 w-36">{label as string}</span>
+                  <span
+                    className="break-all"
+                    style={{
+                      color: isErr ? '#ef4444' : isWarn ? '#f59e0b' : isOk ? '#22c55e' : 'inherit',
+                    }}
+                  >
+                    {value as string}
+                  </span>
+                </div>
+              )
+            })}
+          {diag.result.error && (
+            <p className="text-xs text-red-400">{diag.result.error}</p>
+          )}
+          {!hasAnyError && (
+            <p className="text-xs text-green-500 font-medium pt-1">
+              ✅ Все системы работают корректно. Если загрузка всё равно не работает — проверьте консоль браузера.
+            </p>
           )}
         </div>
       )}
@@ -416,6 +572,8 @@ export default function UpdateTab() {
           Пересчитывает агрегаты KPI и графиков по всей истории. Нужно запустить один раз после первого деплоя, затем данные обновляются автоматически при каждой загрузке отчёта по SKU.
         </p>
       </div>
+
+      <DiagPanel />
 
       <div>
         <div className="flex items-center justify-between mb-3">
