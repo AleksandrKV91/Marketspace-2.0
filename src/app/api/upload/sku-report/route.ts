@@ -1,21 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { parseSkuReport } from '@/lib/parsers/parseSkuReport'
 import { createServiceClient } from '@/lib/supabase/server'
-import { downloadFromStorage } from '@/lib/supabase/downloadFromStorage'
 import { chunk } from '@/lib/parsers/utils'
 
 export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
-  const { storageKey, filename } = await req.json()
-  if (!storageKey) return NextResponse.json({ error: 'storageKey не передан' }, { status: 400 })
 
   let buffer: ArrayBuffer
+  let filename = 'sku-report.xlsb'
   try {
-    buffer = await downloadFromStorage(supabase, storageKey)
+    const form = await req.formData()
+    const file = form.get('file') as File | null
+    if (!file) return NextResponse.json({ error: 'Файл не передан (поле file)' }, { status: 400 })
+    filename = file.name
+    buffer = await file.arrayBuffer()
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return NextResponse.json({ error: `Ошибка чтения файла: ${String(e)}` }, { status: 400 })
   }
 
   // Загружаем маппинг WB→MS из dim_sku
@@ -55,7 +57,6 @@ export async function POST(req: NextRequest) {
 
   const uploadId = upload.id
 
-  // Дедупликация по sku_ms + metric_date (upsert обновит снапшотные поля при перезагрузке)
   const dedupedDaily = [...new Map(
     parsed.daily.map(r => [`${r.sku_ms}|${r.metric_date}`, r])
   ).values()]

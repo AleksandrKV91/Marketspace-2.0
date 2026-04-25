@@ -42,86 +42,26 @@ const FILE_CONFIGS: Array<{
   { type: 'sku-report', label: 'Отчёт по SKU', hint: 'Отчет_по_SKU_*.xlsb', accept: '.xlsb,.xlsx', order: 4 },
 ]
 
-// ── Загрузка через Supabase Storage → API parse ───────────────────────────────
+// ── Загрузка через сервер (браузер → Next.js API → Supabase Storage → parse) ──
+// Файл идёт как FormData в наш API — браузер не обращается к Supabase напрямую.
+// Это устраняет проблемы с CORS, VPN и SSL при прямом PUT на supabase.co.
 
 async function uploadViaStorage(
   type: FileType,
   file: File,
   onProgress: (pct: number) => void
 ): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_skus?: string[]; error?: string }> {
-  // Уникальное имя файла чтобы избежать коллизий
-  const ext = file.name.split('.').pop()
-  const storageKey = `${type}/${Date.now()}.${ext}`
+  onProgress(10)
 
-  onProgress(15)
+  const form = new FormData()
+  form.append('file', file, file.name)
 
-  // 1. Получить signed upload URL через сервер (service role)
-  let signedUrl: string
   try {
-    const presignRes = await fetch('/api/upload/presign', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ storageKey }),
-    })
-    const presignJson = await presignRes.json()
-    if (!presignRes.ok || !presignJson.signedUrl) {
-      return { ok: false, error: `Storage presign: ${presignJson.error ?? 'unknown'}` }
-    }
-    signedUrl = presignJson.signedUrl
-  } catch (e) {
-    return { ok: false, error: `Storage presign: ${String(e)}` }
-  }
-
-  onProgress(25)
-
-  // 2. Загрузить файл напрямую по signed URL (retry до 3 раз, таймаут 5 мин)
-  let uploadRes: Response | null = null
-  let lastUploadError = ''
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    // Получить свежий signed URL для каждой попытки
-    if (attempt > 1) {
-      try {
-        const rp = await fetch('/api/upload/presign', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ storageKey }),
-        })
-        const rj = await rp.json()
-        if (!rp.ok || !rj.signedUrl) { lastUploadError = rj.error ?? 'presign failed'; break }
-        signedUrl = rj.signedUrl
-      } catch (e) { lastUploadError = String(e); break }
-    }
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000) // 5 мин
-    try {
-      uploadRes = await fetch(signedUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        body: file,
-        signal: controller.signal,
-      })
-      clearTimeout(timer)
-      if (uploadRes.ok) break
-      lastUploadError = await uploadRes.text().catch(() => uploadRes!.statusText)
-    } catch (e) {
-      clearTimeout(timer)
-      lastUploadError = e instanceof Error ? e.message : String(e)
-      if (attempt < 3) await new Promise(r => setTimeout(r, 1500 * attempt))
-    }
-  }
-
-  if (!uploadRes?.ok) {
-    return { ok: false, error: `Storage upload: ${lastUploadError}` }
-  }
-
-  onProgress(50)
-
-  // 2. Передать путь в API для парсинга
-  try {
+    // Один запрос: сервер сохраняет в Storage и парсит
     const res = await fetch(`/api/upload/${type}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ storageKey, filename: file.name }),
+      body: form,
+      // Не устанавливаем Content-Type — браузер сам выставит multipart/form-data с boundary
     })
     onProgress(90)
     const json = await res.json()

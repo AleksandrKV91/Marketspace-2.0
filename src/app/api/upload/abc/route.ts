@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { parseABC } from '@/lib/parsers/parseABC'
 import { createServiceClient } from '@/lib/supabase/server'
-import { downloadFromStorage } from '@/lib/supabase/downloadFromStorage'
 import { loadKnownSkus } from '@/lib/supabase/loadKnownSkus'
 import { chunk } from '@/lib/parsers/utils'
 
@@ -9,19 +8,22 @@ export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
-  const { storageKey, filename } = await req.json()
-  if (!storageKey) return NextResponse.json({ error: 'storageKey не передан' }, { status: 400 })
 
   let buffer: ArrayBuffer
+  let filename = 'abc.xlsx'
   try {
-    buffer = await downloadFromStorage(supabase, storageKey)
+    const form = await req.formData()
+    const file = form.get('file') as File | null
+    if (!file) return NextResponse.json({ error: 'Файл не передан (поле file)' }, { status: 400 })
+    filename = file.name
+    buffer = await file.arrayBuffer()
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return NextResponse.json({ error: `Ошибка чтения файла: ${String(e)}` }, { status: 400 })
   }
 
   let parsed
   try {
-    parsed = parseABC(buffer, filename ?? '')
+    parsed = parseABC(buffer, filename)
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 422 })
   }

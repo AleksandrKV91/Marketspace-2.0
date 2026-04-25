@@ -1,21 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { parseCatalog } from '@/lib/parsers/parseCatalog'
 import { createServiceClient } from '@/lib/supabase/server'
-import { downloadFromStorage } from '@/lib/supabase/downloadFromStorage'
 import { chunk } from '@/lib/parsers/utils'
 
 export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
-  const { storageKey, filename } = await req.json()
-  if (!storageKey) return NextResponse.json({ error: 'storageKey не передан' }, { status: 400 })
 
+  // Принимаем файл как multipart/form-data — браузер не обращается к Supabase напрямую
   let buffer: ArrayBuffer
+  let filename = 'catalog.xlsb'
   try {
-    buffer = await downloadFromStorage(supabase, storageKey)
+    const form = await req.formData()
+    const file = form.get('file') as File | null
+    if (!file) return NextResponse.json({ error: 'Файл не передан (поле file)' }, { status: 400 })
+    filename = file.name
+    buffer = await file.arrayBuffer()
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return NextResponse.json({ error: `Ошибка чтения файла: ${String(e)}` }, { status: 400 })
   }
 
   let parsed
@@ -33,8 +36,6 @@ export async function POST(req: NextRequest) {
 
   if (uploadErr) return NextResponse.json({ error: uploadErr.message }, { status: 500 })
 
-  // Дедупликация по sku_ms (PRIMARY KEY — уникален, в отличие от sku_wb)
-  // Один sku_wb может иметь несколько sku_ms (разные размеры одного товара)
   const deduped = [...new Map(parsed.rows.map(r => [r.sku_ms, r])).values()]
 
   for (const batch of chunk(deduped, 500)) {
