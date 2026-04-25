@@ -32,47 +32,7 @@ interface AbcRow {
   transport: number | null
 }
 
-interface SkuEntry {
-  sku_ms: string
-  name: string
-  revenue: number
-  chmd: number
-  chmd_clean: number | null
-  profitability: number | null
-  revenue_margin: number | null
-  ad_spend: number | null
-  storage: number | null
-  transport: number | null
-  abc_class: string
-  abc_class2: string | null
-  season_months: number[]  // 12 coefficients
-  season_start: number
-  season_peak: number
-  seasonal: boolean
-  attractiveness: number
-  availability: number
-  gmroy: number | null
-}
-
-interface NicheEntry {
-  niche: string
-  category: string
-  revenue: number
-  chmd: number
-  chmd_clean: number
-  profitability_sum: number
-  profitability_n: number
-  revenue_margin_sum: number
-  revenue_margin_n: number
-  ad_spend: number
-  storage: number
-  transport: number
-  abc_classes: string[]
-  months: number[]
-  skus: SkuEntry[]
-}
-
-// ── Seasonality helpers ───────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function buildSeasonInfo(months: number[]): {
   season_months: number[]
@@ -91,22 +51,49 @@ function buildSeasonInfo(months: number[]): {
   return { season_months: seasonal_months, season_start, season_peak, seasonal }
 }
 
-function computeAttractiveness(revenue: number, topAbc: string, isSeasonal: boolean, skuCount: number): number {
-  return Math.min(10,
-    (revenue > 1_000_000 ? 3 : revenue > 100_000 ? 2 : 1) +
-    (topAbc === 'A' ? 3 : topAbc === 'B' ? 2 : 1) +
-    (isSeasonal ? 1 : 2) +
-    Math.min(2, skuCount / 10)
-  )
+/** Returns base ABC letter (A/B/C) from full class like "AA", "AB", "убыток|A" */
+function baseAbcClass(cls: string | null): string {
+  if (!cls) return '—'
+  const s = cls.trim()
+  // "убыток|A" → убыток group
+  if (s.toLowerCase().startsWith('убыток')) return 'убыток'
+  // "AA", "AB", "A" → first char
+  const first = s.charAt(0).toUpperCase()
+  if ('ABC'.includes(first)) return first
+  return '—'
 }
 
-function topAbcClass(classes: string[]): string {
+/** ABC status: normal / убыток / н/д */
+function abcStatus(cls: string | null): 'normal' | 'loss' | 'nd' {
+  if (!cls) return 'nd'
+  const s = cls.toLowerCase()
+  if (s.startsWith('убыток')) return 'loss'
+  if (s.includes('н/д') || s.includes('nd')) return 'nd'
+  return 'normal'
+}
+
+function topAbcLetter(classes: string[]): string {
   const counts: Record<string, number> = {}
   for (const c of classes) {
-    const base = c.charAt(0).toUpperCase()
-    if ('ABC'.includes(base)) counts[base] = (counts[base] ?? 0) + 1
+    const b = baseAbcClass(c)
+    if ('ABC'.includes(b)) counts[b] = (counts[b] ?? 0) + 1
   }
   return ['A', 'B', 'C'].find(c => counts[c] > 0) ?? '—'
+}
+
+/** Safe profitability from direct field OR calculated from chmd/revenue */
+function safeProfitability(profitability: number | null, chmd_clean: number | null, chmd: number | null, revenue: number | null): number | null {
+  if (profitability != null) return profitability
+  const numerator = chmd_clean ?? chmd
+  if (numerator != null && revenue != null && revenue > 0) return (numerator / revenue) * 100
+  return null
+}
+
+/** Revenue margin fallback: revenue_margin from DB, or chmd/revenue */
+function safeRevenueMargin(revenue_margin: number | null, chmd: number | null, revenue: number | null): number | null {
+  if (revenue_margin != null) return revenue_margin
+  if (chmd != null && revenue != null && revenue > 0) return (chmd / revenue) * 100
+  return null
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────
@@ -115,7 +102,8 @@ export async function GET(req: NextRequest) {
   const supabase = createServiceClient()
   const { searchParams } = new URL(req.url)
   const seasonalFilter = searchParams.get('seasonal') ?? 'all'
-  const abcFilter = searchParams.get('abc') ?? 'all'
+  const abcFilter = searchParams.get('abc') ?? 'all'        // A / B / C / all
+  const abcStatusFilter = searchParams.get('abc_status') ?? 'all'  // normal / loss / nd / all
   const searchQ = (searchParams.get('search') ?? '').toLowerCase().trim()
   const minRevenue = searchParams.get('min_revenue') ?? 'all'
   const startMonthFilter = parseInt(searchParams.get('start_month') ?? '0') || 0
@@ -124,18 +112,23 @@ export async function GET(req: NextRequest) {
   // ── 1. Latest ABC upload ──────────────────────────────────────────────────
   const { data: lastUploads } = await supabase
     .from('uploads')
-    .select('id, file_type')
+    .select('id, file_type, uploaded_at, period_start')
     .eq('status', 'ok')
     .order('uploaded_at', { ascending: false })
     .limit(20)
 
-  const latestByType: Record<string, string> = {}
+  const latestByType: Record<string, { id: string; uploaded_at: string; period_start: string | null }> = {}
   if (lastUploads) {
     for (const u of lastUploads) {
-      if (!latestByType[u.file_type]) latestByType[u.file_type] = u.id
+      if (!latestByType[u.file_type]) {
+        latestByType[u.file_type] = { id: u.id, uploaded_at: u.uploaded_at, period_start: u.period_start }
+      }
     }
   }
-  const abcId = latestByType['abc']
+
+  const abcUpload = latestByType['abc']
+  const abcId = abcUpload?.id ?? null
+  const abcPeriod = abcUpload?.period_start ?? null
 
   // ── 2. Fetch dim_sku ──────────────────────────────────────────────────────
   const dimRows = await fetchAll<DimSkuRow>(
@@ -159,8 +152,29 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ── 4. Aggregate into niches ──────────────────────────────────────────────
-  const nicheMap: Record<string, NicheEntry> = {}
+  // ── 4. Aggregate into niches (Niche level, no Category level) ─────────────
+  interface NicheAccum {
+    niche: string
+    category: string
+    revenue: number
+    chmd: number
+    prof_sum: number; prof_n: number
+    rev_margin_sum: number; rev_margin_n: number
+    ad_spend: number; storage: number; transport: number
+    abc_classes: string[]   // full combo classes like "AA", "AB", "убыток|A"
+    months: number[]
+    has_abc: boolean
+    skus: Array<{
+      sku_ms: string; name: string; revenue: number; chmd: number
+      abc_class: string; abc_class2: string | null
+      profitability: number | null; revenue_margin: number | null
+      gmroy: number | null; season_months: number[]
+      season_start: number; season_peak: number; seasonal: boolean
+      attractiveness: number; availability: number
+    }>
+  }
+
+  const nicheMap: Record<string, NicheAccum> = {}
 
   for (const row of dimRows) {
     const niche = row.subject_wb ?? row.category_wb ?? 'Не указано'
@@ -175,11 +189,10 @@ export async function GET(req: NextRequest) {
 
     if (!nicheMap[niche]) {
       nicheMap[niche] = {
-        niche, category, revenue: 0, chmd: 0, chmd_clean: 0,
-        profitability_sum: 0, profitability_n: 0,
-        revenue_margin_sum: 0, revenue_margin_n: 0,
+        niche, category, revenue: 0, chmd: 0,
+        prof_sum: 0, prof_n: 0, rev_margin_sum: 0, rev_margin_n: 0,
         ad_spend: 0, storage: 0, transport: 0,
-        abc_classes: [], months, skus: [],
+        abc_classes: [], months, has_abc: false, skus: [],
       }
     }
 
@@ -187,45 +200,48 @@ export async function GET(req: NextRequest) {
     const rev = abc?.revenue ?? 0
     const chmd = abc?.chmd ?? 0
     const chmd_clean = abc?.chmd_clean ?? null
-    const profitability = abc?.profitability ?? null
-    const revenue_margin = abc?.revenue_margin ?? null
+    const rawProf = abc?.profitability ?? null
+    const rawRevMargin = abc?.revenue_margin ?? null
 
-    nicheMap[niche].revenue += rev
-    nicheMap[niche].chmd += chmd
-    if (chmd_clean != null) nicheMap[niche].chmd_clean += chmd_clean
-    if (profitability != null) { nicheMap[niche].profitability_sum += profitability; nicheMap[niche].profitability_n++ }
-    if (revenue_margin != null) { nicheMap[niche].revenue_margin_sum += revenue_margin; nicheMap[niche].revenue_margin_n++ }
-    nicheMap[niche].ad_spend += abc?.ad_spend ?? 0
-    nicheMap[niche].storage += abc?.storage ?? 0
-    nicheMap[niche].transport += abc?.transport ?? 0
+    // Calculate fallback profitability from available data
+    const prof = safeProfitability(rawProf, chmd_clean, chmd, abc?.revenue ?? null)
+    const revMargin = safeRevenueMargin(rawRevMargin, chmd, abc?.revenue ?? null)
 
-    const abcClass = abc?.abc_class ?? '—'
-    if (abc?.abc_class) nicheMap[niche].abc_classes.push(abc.abc_class)
+    if (abc) {
+      nicheMap[niche].has_abc = true
+      nicheMap[niche].revenue += rev
+      nicheMap[niche].chmd += chmd
+      nicheMap[niche].ad_spend += abc.ad_spend ?? 0
+      nicheMap[niche].storage += abc.storage ?? 0
+      nicheMap[niche].transport += abc.transport ?? 0
+      if (prof != null) { nicheMap[niche].prof_sum += prof; nicheMap[niche].prof_n++ }
+      if (revMargin != null) { nicheMap[niche].rev_margin_sum += revMargin; nicheMap[niche].rev_margin_n++ }
+      if (abc.abc_class) nicheMap[niche].abc_classes.push(abc.abc_class)
+    }
 
     // SKU-level seasonality
     const { season_start, season_peak, seasonal } = buildSeasonInfo(months)
-    const skuAttr = Math.min(10, (rev > 50_000 ? 2 : 1) + (abcClass === 'A' ? 3 : abcClass === 'B' ? 2 : 1) + (seasonal ? 1 : 2))
+    const abcClass = abc?.abc_class ?? '—'
+    const baseLetter = baseAbcClass(abcClass)
+    const skuRev = rev
+    const skuAttr = Math.min(10, (skuRev > 50_000 ? 2 : 1) + (baseLetter === 'A' ? 3 : baseLetter === 'B' ? 2 : 1) + (seasonal ? 1 : 2))
 
     nicheMap[niche].skus.push({
       sku_ms: row.sku_ms,
       name: row.name ?? row.sku_ms,
       revenue: rev,
       chmd,
-      chmd_clean,
-      profitability,
-      revenue_margin,
-      ad_spend: abc?.ad_spend ?? null,
-      storage: abc?.storage ?? null,
-      transport: abc?.transport ?? null,
       abc_class: abcClass,
       abc_class2: abc?.abc_class2 ?? null,
+      profitability: prof,
+      revenue_margin: revMargin,
+      gmroy: rev > 0 ? (chmd / rev) * 100 : null,
       season_months: months,
       season_start,
       season_peak,
       seasonal,
       attractiveness: skuAttr,
       availability: Math.min(10, rev / 100_000),
-      gmroy: rev > 0 ? (chmd / rev) * 100 : null,
     })
   }
 
@@ -237,70 +253,88 @@ export async function GET(req: NextRequest) {
     attractiveness: number
     revenue: number
     chmd: number
-    chmd_clean: number
     avg_profitability: number | null
     avg_revenue_margin: number | null
-    ad_spend: number
-    storage: number
-    transport: number
+    ad_spend: number; storage: number; transport: number
     seasonal: boolean
     season_months_coeffs: number[]
     season_months: number[]
     season_start: number
     season_peak: number
     availability: number
-    abc_class: string
-    abc_distribution: Record<string, number>
+    abc_class: string        // top base letter (A/B/C/—)
+    abc_combo: string        // top full combo class (AA/AB/убыток|A/etc)
+    abc_status: string       // normal / loss / nd
+    abc_distribution: Record<string, number>   // by base letter
+    abc_combo_distribution: Record<string, number>  // by full combo
     gmroy: number | null
     sku_count: number
-    skus: SkuEntry[]
+    has_abc: boolean
+    skus: NicheAccum['skus']
   }
 
   let nicheRows: NicheRow[] = Object.values(nicheMap).map(n => {
     const { season_months, season_start, season_peak, seasonal } = buildSeasonInfo(n.months)
-    const tAbc = topAbcClass(n.abc_classes)
-    const attractiveness = computeAttractiveness(n.revenue, tAbc, seasonal, n.skus.length)
+    const tAbc = topAbcLetter(n.abc_classes)
+
+    // Attractiveness: 0–100 scale (integers)
+    const attractiveness = Math.min(100,
+      (n.revenue > 1_000_000 ? 30 : n.revenue > 100_000 ? 20 : 10) +
+      (tAbc === 'A' ? 30 : tAbc === 'B' ? 20 : 10) +
+      (seasonal ? 10 : 20) +
+      Math.min(20, n.skus.length * 2)
+    )
 
     const abcDist: Record<string, number> = {}
+    const abcComboDist: Record<string, number> = {}
+    let topCombo = '—'
+    let maxComboCount = 0
+
     for (const c of n.abc_classes) {
-      const base = c.charAt(0).toUpperCase()
-      abcDist[base] = (abcDist[base] ?? 0) + 1
+      const b = baseAbcClass(c)
+      if (b !== '—' && b !== 'убыток') abcDist[b] = (abcDist[b] ?? 0) + 1
+      abcComboDist[c] = (abcComboDist[c] ?? 0) + 1
+      if ((abcComboDist[c] ?? 0) > maxComboCount) { maxComboCount = abcComboDist[c]; topCombo = c }
     }
+
+    // Determine overall ABC status for the niche
+    const statuses = n.abc_classes.map(abcStatus)
+    const status = statuses.includes('loss') ? 'loss' : statuses.includes('nd') ? 'nd' : 'normal'
 
     return {
       niche: n.niche,
       category: n.category,
-      rating: Math.round(attractiveness * 10),
+      rating: Math.round(attractiveness),
       attractiveness,
       revenue: n.revenue,
       chmd: n.chmd,
-      chmd_clean: n.chmd_clean,
-      avg_profitability: n.profitability_n > 0 ? n.profitability_sum / n.profitability_n : null,
-      avg_revenue_margin: n.revenue_margin_n > 0 ? n.revenue_margin_sum / n.revenue_margin_n : null,
-      ad_spend: n.ad_spend,
-      storage: n.storage,
-      transport: n.transport,
-      seasonal,
-      season_months_coeffs: n.months,
-      season_months,
-      season_start,
-      season_peak,
+      avg_profitability: n.prof_n > 0 ? n.prof_sum / n.prof_n : (n.revenue > 0 ? (n.chmd / n.revenue) * 100 : null),
+      avg_revenue_margin: n.rev_margin_n > 0 ? n.rev_margin_sum / n.rev_margin_n : (n.revenue > 0 ? (n.chmd / n.revenue) * 100 : null),
+      ad_spend: n.ad_spend, storage: n.storage, transport: n.transport,
+      seasonal, season_months_coeffs: n.months, season_months, season_start, season_peak,
       availability: Math.min(10, n.skus.length / 5),
       abc_class: tAbc,
+      abc_combo: topCombo,
+      abc_status: status,
       abc_distribution: abcDist,
+      abc_combo_distribution: abcComboDist,
       gmroy: n.revenue > 0 ? (n.chmd / n.revenue) * 100 : null,
       sku_count: n.skus.length,
+      has_abc: n.has_abc,
       skus: n.skus.sort((a, b) => b.revenue - a.revenue),
     }
   })
 
-  // ── 6. Client-side filtering ──────────────────────────────────────────────
+  // ── 6. Apply filters ──────────────────────────────────────────────────────
   if (searchQ) nicheRows = nicheRows.filter(r =>
     r.niche.toLowerCase().includes(searchQ) || r.category.toLowerCase().includes(searchQ)
   )
   if (seasonalFilter === 'seasonal') nicheRows = nicheRows.filter(r => r.seasonal)
   if (seasonalFilter === 'no') nicheRows = nicheRows.filter(r => !r.seasonal)
   if (abcFilter !== 'all') nicheRows = nicheRows.filter(r => r.abc_class === abcFilter)
+  if (abcStatusFilter === 'loss') nicheRows = nicheRows.filter(r => r.abc_status === 'loss')
+  if (abcStatusFilter === 'nd') nicheRows = nicheRows.filter(r => r.abc_status === 'nd')
+  if (abcStatusFilter === 'normal') nicheRows = nicheRows.filter(r => r.abc_status === 'normal')
   if (minRevenue === '100k') nicheRows = nicheRows.filter(r => r.revenue >= 100_000)
   if (minRevenue === '500k') nicheRows = nicheRows.filter(r => r.revenue >= 500_000)
   if (minRevenue === '1m') nicheRows = nicheRows.filter(r => r.revenue >= 1_000_000)
@@ -309,74 +343,55 @@ export async function GET(req: NextRequest) {
 
   nicheRows.sort((a, b) => b.revenue - a.revenue)
 
-  // ── 7. Build hierarchy: category → niches ────────────────────────────────
-  const categoryMap: Record<string, {
-    category: string
-    revenue: number
-    chmd: number
-    sku_count: number
-    abc_classes: string[]
-    niches: NicheRow[]
-  }> = {}
+  // ── 7. Summary KPIs ───────────────────────────────────────────────────────
+  const totalNiches = nicheRows.length
+  const seasonalCount = nicheRows.filter(r => r.seasonal).length
+  const avgAttr = totalNiches > 0 ? nicheRows.reduce((s, r) => s + r.attractiveness, 0) / totalNiches : 0
 
-  for (const nr of nicheRows) {
-    if (!categoryMap[nr.category]) {
-      categoryMap[nr.category] = { category: nr.category, revenue: 0, chmd: 0, sku_count: 0, abc_classes: [], niches: [] }
-    }
-    categoryMap[nr.category].revenue += nr.revenue
-    categoryMap[nr.category].chmd += nr.chmd
-    categoryMap[nr.category].sku_count += nr.sku_count
-    categoryMap[nr.category].abc_classes.push(nr.abc_class)
-    categoryMap[nr.category].niches.push(nr)
-  }
+  const withProf = nicheRows.filter(r => r.avg_profitability != null)
+  const avgChmdMargin = withProf.length > 0
+    ? withProf.reduce((s, r) => s + r.avg_profitability!, 0) / withProf.length : null
 
-  const hierarchy = Object.values(categoryMap)
-    .sort((a, b) => b.revenue - a.revenue)
-    .map(cat => ({
-      ...cat,
-      abc_class: topAbcClass(cat.abc_classes as string[]),
-      attractiveness: cat.niches.reduce((s, n) => s + n.attractiveness, 0) / Math.max(1, cat.niches.length),
-      gmroy: cat.revenue > 0 ? (cat.chmd / cat.revenue) * 100 : null,
-      niches: cat.niches,
-    }))
+  const withRevMargin = nicheRows.filter(r => r.avg_revenue_margin != null)
+  const avgRevMargin = withRevMargin.length > 0
+    ? withRevMargin.reduce((s, r) => s + r.avg_revenue_margin!, 0) / withRevMargin.length : null
 
-  // ── 8. Summary / KPIs ─────────────────────────────────────────────────────
-  const allNiches = nicheRows
-  const totalNiches = allNiches.length
-  const seasonalNiches = allNiches.filter(r => r.seasonal).length
-
-  const avgAttractiveness = totalNiches > 0
-    ? allNiches.reduce((s, r) => s + r.attractiveness, 0) / totalNiches : 0
-
-  const niches_with_prof = allNiches.filter(r => r.avg_profitability != null)
-  const avgChmdMargin = niches_with_prof.length > 0
-    ? niches_with_prof.reduce((s, r) => s + r.avg_profitability!, 0) / niches_with_prof.length : null
-
-  const niches_with_rev_margin = allNiches.filter(r => r.avg_revenue_margin != null)
-  const avgRevenueMargin = niches_with_rev_margin.length > 0
-    ? niches_with_rev_margin.reduce((s, r) => s + r.avg_revenue_margin!, 0) / niches_with_rev_margin.length : null
-
-  const allAbcClasses = allNiches.flatMap(r => r.abc_distribution ? Object.entries(r.abc_distribution).flatMap(([k, n]) => Array(n).fill(k)) : [])
-  const abcDist: Record<string, number> = {}
-  for (const c of allAbcClasses) {
-    const base = c.charAt(0).toUpperCase()
-    if ('ABC'.includes(base)) abcDist[base] = (abcDist[base] ?? 0) + 1
+  // ABC distribution summary
+  const abcDistSummary: Record<string, number> = {}
+  const abcComboDistSummary: Record<string, number> = {}
+  for (const r of nicheRows) {
+    for (const [k, v] of Object.entries(r.abc_distribution)) abcDistSummary[k] = (abcDistSummary[k] ?? 0) + v
+    for (const [k, v] of Object.entries(r.abc_combo_distribution)) abcComboDistSummary[k] = (abcComboDistSummary[k] ?? 0) + v
   }
 
   const summary = {
-    avg_attractiveness: avgAttractiveness,
-    seasonal_count: seasonalNiches,
-    non_seasonal_count: totalNiches - seasonalNiches,
-    abc_distribution: abcDist,
+    avg_attractiveness: Math.round(avgAttr),
+    seasonal_count: seasonalCount,
+    non_seasonal_count: totalNiches - seasonalCount,
+    abc_distribution: abcDistSummary,
+    abc_combo_distribution: abcComboDistSummary,
     avg_chmd_margin: avgChmdMargin,
-    avg_revenue_margin: avgRevenueMargin,
+    avg_revenue_margin: avgRevMargin,
     total_niches: totalNiches,
-    total_skus: allNiches.reduce((s, r) => s + r.sku_count, 0),
+    total_skus: nicheRows.reduce((s, r) => s + r.sku_count, 0),
+    has_abc_data: Object.keys(abcByMs).length > 0,
+    abc_period: abcPeriod,
+    dim_sku_count: dimRows.length,
   }
 
-  // ── 9. Chart data ─────────────────────────────────────────────────────────
+  // ── 8. Chart data ─────────────────────────────────────────────────────────
 
-  // Scatter: top-30 niches by revenue
+  // Rating chart — top 15
+  const rating_chart = [...nicheRows]
+    .sort((a, b) => b.rating - a.rating)
+    .slice(0, 15)
+    .map(r => ({
+      name: r.niche.length > 20 ? r.niche.slice(0, 18) + '…' : r.niche,
+      rating: r.rating,
+      abc: r.abc_class,
+    }))
+
+  // Scatter — top 30 by revenue
   const scatter = [...nicheRows]
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 30)
@@ -388,7 +403,7 @@ export async function GET(req: NextRequest) {
       abc_class: r.abc_class,
     }))
 
-  // Heatmap: top-20 niches by revenue
+  // Heatmap — top 20 by revenue
   const heatmap = [...nicheRows]
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 20)
@@ -397,32 +412,32 @@ export async function GET(req: NextRequest) {
       months: r.season_months_coeffs,
     }))
 
-  // ABC structure for stacked bar
-  const abcGroups: Record<string, { count: number; revenue: number; sku_count: number }> = {}
+  // ABC structure — SKU counts by combo group
+  const abcChartMap: Record<string, { count: number; revenue: number; sku_count: number }> = {}
   for (const r of nicheRows) {
-    const key = r.abc_class === '—' ? 'Н/Д' : r.abc_class
-    if (!abcGroups[key]) abcGroups[key] = { count: 0, revenue: 0, sku_count: 0 }
-    abcGroups[key].count++
-    abcGroups[key].revenue += r.revenue
-    abcGroups[key].sku_count += r.sku_count
+    for (const [combo, cnt] of Object.entries(r.abc_combo_distribution)) {
+      const base = baseAbcClass(combo)
+      // Group: A-классы, B-классы, C-классы, убыток, н/д
+      let group = '—'
+      if (base === 'убыток') group = 'Убыток'
+      else if (abcStatus(combo) === 'nd') group = 'Н/Д'
+      else if (base === 'A') group = 'A'
+      else if (base === 'B') group = 'B'
+      else if (base === 'C') group = 'C'
+      if (!abcChartMap[group]) abcChartMap[group] = { count: 0, revenue: 0, sku_count: 0 }
+      abcChartMap[group].count += cnt
+      abcChartMap[group].revenue += r.revenue * (cnt / Math.max(1, r.sku_count))
+      abcChartMap[group].sku_count += cnt
+    }
   }
-  const abc_chart = Object.entries(abcGroups).map(([group, v]) => ({ group, ...v }))
-    .sort((a, b) => ['A', 'B', 'C', 'Н/Д'].indexOf(a.group) - ['A', 'B', 'C', 'Н/Д'].indexOf(b.group))
-
-  // Rating chart (top 15)
-  const rating_chart = [...nicheRows]
-    .sort((a, b) => b.rating - a.rating)
-    .slice(0, 15)
-    .map(r => ({
-      name: r.niche.length > 20 ? r.niche.slice(0, 18) + '…' : r.niche,
-      rating: r.rating,
-      attractiveness: r.attractiveness,
-      abc: r.abc_class,
-    }))
+  const GROUP_ORDER = ['A', 'B', 'C', 'Убыток', 'Н/Д']
+  const abc_chart = GROUP_ORDER
+    .filter(g => abcChartMap[g])
+    .map(g => ({ group: g, ...abcChartMap[g] }))
 
   return NextResponse.json({
     summary,
-    hierarchy,
+    rows: nicheRows,     // flat list of niches (FE builds hierarchy if needed)
     scatter,
     heatmap,
     abc_chart,
