@@ -177,25 +177,24 @@ function UploadCard({
             )}
           </div>
           {state.skippedSkus && state.skippedSkus.length > 0 && (
-            <div className="mt-3 p-3 rounded-xl border" style={{ borderColor: 'var(--warning)', background: 'rgba(245,158,11,0.08)' }}>
+            <div className="mt-3 p-3 rounded-xl border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-900/15">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-xs font-semibold" style={{ color: 'var(--warning)' }}>
+                <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
                   Артикулы, добавленные как заглушки ({state.skippedSkus.length})
                 </p>
                 <button
                   onClick={() => navigator.clipboard.writeText(state.skippedSkus!.join('\n'))}
-                  className="text-xs px-2 py-1 rounded-lg"
-                  style={{ background: 'var(--border)', color: 'var(--text-muted)' }}
+                  className="text-xs px-2 py-1 rounded-lg bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-300"
                 >
                   Скопировать список
                 </button>
               </div>
-              <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
+              <p className="text-xs mb-2 text-gray-500 dark:text-gray-400">
                 Эти артикулы отсутствовали в Своде — созданы автоматически. Добавьте их в Свод для полных данных.
               </p>
               <div className="max-h-40 overflow-y-auto space-y-0.5">
                 {state.skippedSkus.map(sku => (
-                  <p key={sku} className="font-mono text-[11px]" style={{ color: 'var(--text-subtle)' }}>{sku}</p>
+                  <p key={sku} className="font-mono text-[11px] text-gray-500 dark:text-gray-400">{sku}</p>
                 ))}
               </div>
             </div>

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { parseAnalytics } from '@/lib/parsers/parseAnalytics'
 import { createServiceClient } from '@/lib/supabase/server'
-import { downloadFromStorage } from '@/lib/supabase/downloadFromStorage'
 import { loadKnownSkus } from '@/lib/supabase/loadKnownSkus'
 import { chunk } from '@/lib/parsers/utils'
 
@@ -9,19 +8,22 @@ export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
-  const { storageKey, filename } = await req.json()
-  if (!storageKey) return NextResponse.json({ error: 'storageKey не передан' }, { status: 400 })
 
   let buffer: ArrayBuffer
+  let filename = 'analytics.xlsx'
   try {
-    buffer = await downloadFromStorage(supabase, storageKey)
+    const form = await req.formData()
+    const file = form.get('file') as File | null
+    if (!file) return NextResponse.json({ error: 'Файл не передан (поле file)' }, { status: 400 })
+    filename = file.name
+    buffer = await file.arrayBuffer()
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return NextResponse.json({ error: `Ошибка чтения файла: ${String(e)}` }, { status: 400 })
   }
 
   let parsed
   try {
-    parsed = parseAnalytics(buffer, filename ?? '')
+    parsed = parseAnalytics(buffer, filename)
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 422 })
   }
@@ -31,7 +33,6 @@ export async function POST(req: NextRequest) {
 
   const knownSkus = await loadKnownSkus(supabase)
 
-  const knownRows = deduped.filter(r => knownSkus.has(r.sku_ms))
   const unknownRows = deduped.filter(r => !knownSkus.has(r.sku_ms))
   const unknownSkusList = unknownRows.map(r => r.sku_ms)
 
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
   if (unknownRows.length > 0) {
     const stubs = unknownRows.map(r => ({
       sku_ms: r.sku_ms,
-      name: r.name ?? r.sku_ms,
+      name: (r as unknown as Record<string, unknown>)['name'] as string ?? r.sku_ms,
     }))
     for (const batch of chunk(stubs, 500)) {
       await supabase
@@ -48,16 +49,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // All rows (known + newly-stubbed) go into analytics
-  const allRows = deduped
-
   // Record the upload
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')
     .insert({
       file_type: 'analytics',
       filename,
-      rows_count: allRows.length,
+      rows_count: deduped.length,
       status: 'ok',
     })
     .select('id')
@@ -68,8 +66,8 @@ export async function POST(req: NextRequest) {
   const uploadId = upload.id
 
   // Upsert into fact_analytics (overwrite mode — conflict on sku_ms only)
-  for (const batch of chunk(allRows, 500)) {
-    const payload = batch.map(({ unknown_skus: _omit, ...r }) => ({
+  for (const batch of chunk(deduped, 500)) {
+    const payload = batch.map(r => ({
       ...r,
       upload_id: uploadId,
       uploaded_at: new Date().toISOString(),
@@ -90,7 +88,7 @@ export async function POST(req: NextRequest) {
     ok: true,
     upload_id: uploadId,
     rows_parsed: parsed.rows_parsed,
-    rows_skipped: parsed.rows_skipped + (deduped.length - allRows.length),
+    rows_skipped: parsed.rows_skipped,
     unknown_skus: unknownSkusList,
   })
 }
