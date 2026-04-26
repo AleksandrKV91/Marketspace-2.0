@@ -4,7 +4,7 @@ import { useState, useCallback, useRef } from 'react'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
 
-type FileType = 'catalog' | 'abc' | 'china' | 'sku-report'
+type FileType = 'catalog' | 'abc' | 'china' | 'sku-report' | 'analytics'
 
 interface UploadState {
   status: 'idle' | 'uploading' | 'ok' | 'error'
@@ -40,6 +40,7 @@ const FILE_CONFIGS: Array<{
   { type: 'abc', label: 'АВС анализ', hint: 'АВС_анализ_*.xlsx', accept: '.xlsx,.xlsb', order: 2 },
   { type: 'china', label: 'Потребность Китай', hint: 'Потребность_Китай_*.xlsx', accept: '.xlsx,.xlsb', order: 3 },
   { type: 'sku-report', label: 'Отчёт по SKU', hint: 'Отчет_по_SKU_*.xlsb', accept: '.xlsb,.xlsx', order: 4 },
+  { type: 'analytics' as FileType, label: 'Аналитика', hint: 'Аналитика_*.xlsx', accept: '.xlsx,.xlsb', order: 5 },
 ]
 
 // ── Загрузка через Supabase Storage → API parse ───────────────────────────────
@@ -48,7 +49,7 @@ async function uploadViaStorage(
   type: FileType,
   file: File,
   onProgress: (pct: number) => void
-): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_skus?: string[]; error?: string }> {
+): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_skus?: string[]; unknown_skus?: string[]; error?: string }> {
   // Уникальное имя файла чтобы избежать коллизий
   const ext = file.name.split('.').pop()
   const storageKey = `${type}/${Date.now()}.${ext}`
@@ -102,7 +103,8 @@ async function uploadViaStorage(
         ok: true,
         rows_parsed: json.rows_parsed,
         rows_skipped: json.rows_skipped,
-        skipped_skus: json.diag_skipped_skus ?? [],
+        skipped_skus: json.diag_skipped_skus,
+        unknown_skus: json.unknown_skus,
       }
     }
     return { ok: false, error: json.error ?? 'Ошибка парсинга' }
@@ -216,26 +218,28 @@ function UploadCard({
             )}
           </div>
           {state.skippedSkus && state.skippedSkus.length > 0 && (
-            <details className="text-xs">
-              <summary className="cursor-pointer text-amber-500 hover:text-amber-600 select-none">
-                Артикулы не найдены в справочнике ({state.skippedSkus.length})
-              </summary>
-              <div className="mt-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-800/30 px-3 py-2 max-h-32 overflow-y-auto">
-                <p className="text-amber-600 dark:text-amber-400 mb-1 text-[11px]">
-                  Эти WB-артикулы отсутствуют в Своде — загрузите актуальный Свод и повторите загрузку
+            <div className="mt-3 p-3 rounded-xl border" style={{ borderColor: 'var(--warning)', background: 'rgba(245,158,11,0.08)' }}>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold" style={{ color: 'var(--warning)' }}>
+                  Артикулы, добавленные как заглушки ({state.skippedSkus.length})
                 </p>
-                <div className="flex flex-wrap gap-1">
-                  {state.skippedSkus.map(sku => (
-                    <span
-                      key={sku}
-                      className="inline-block bg-amber-100 dark:bg-amber-800/30 text-amber-700 dark:text-amber-300 rounded px-1.5 py-0.5 font-mono text-[11px]"
-                    >
-                      {sku}
-                    </span>
-                  ))}
-                </div>
+                <button
+                  onClick={() => navigator.clipboard.writeText(state.skippedSkus!.join('\n'))}
+                  className="text-xs px-2 py-1 rounded-lg"
+                  style={{ background: 'var(--border)', color: 'var(--text-muted)' }}
+                >
+                  Скопировать список
+                </button>
               </div>
-            </details>
+              <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
+                Эти артикулы отсутствовали в Своде — созданы автоматически. Добавьте их в Свод для полных данных.
+              </p>
+              <div className="max-h-40 overflow-y-auto space-y-0.5">
+                {state.skippedSkus.map(sku => (
+                  <p key={sku} className="font-mono text-[11px]" style={{ color: 'var(--text-subtle)' }}>{sku}</p>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -245,20 +249,17 @@ function UploadCard({
 
 // ── Основной компонент ────────────────────────────────────────────────────────
 
-type RefreshState = 'idle' | 'running' | 'ok' | 'error'
-
 export default function UpdateTab() {
   const [states, setStates] = useState<Record<FileType, UploadState>>({
     catalog: { status: 'idle', progress: 0, message: 'Не загружен' },
     abc: { status: 'idle', progress: 0, message: 'Не загружен' },
     china: { status: 'idle', progress: 0, message: 'Не загружен' },
     'sku-report': { status: 'idle', progress: 0, message: 'Не загружен' },
+    analytics: { status: 'idle', progress: 0, message: 'Не загружен' },
   })
 
   const [history, setHistory] = useState<UploadRecord[]>([])
   const [historyLoaded, setHistoryLoaded] = useState(false)
-  const [refreshState, setRefreshState] = useState<RefreshState>('idle')
-  const [refreshResult, setRefreshResult] = useState<string | null>(null)
 
   const loadHistory = async () => {
     try {
@@ -293,7 +294,7 @@ export default function UpdateTab() {
         lastAt: now,
         rowsCount: result.rows_parsed,
         rowsSkipped: result.rows_skipped,
-        skippedSkus: result.skipped_skus,
+        skippedSkus: result.unknown_skus ?? result.skipped_skus ?? [],
         detail: undefined,
       })
       if (historyLoaded) loadHistory()
@@ -304,29 +305,6 @@ export default function UpdateTab() {
         message: 'Ошибка',
         detail: result.error,
       })
-    }
-  }
-
-  const handleRefreshAgg = async () => {
-    setRefreshState('running')
-    setRefreshResult(null)
-    try {
-      const res = await fetch('/api/admin/refresh-daily-agg', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      })
-      const json = await res.json()
-      if (res.ok && json.ok) {
-        setRefreshState('ok')
-        setRefreshResult(`Готово: обработано ${json.rows_processed?.toLocaleString('ru-RU') ?? '?'} строк → ${json.agg_rows?.toLocaleString('ru-RU') ?? '?'} агрегатов`)
-      } else {
-        setRefreshState('error')
-        setRefreshResult(json.errors?.[0] ?? json.error ?? 'Неизвестная ошибка')
-      }
-    } catch (e) {
-      setRefreshState('error')
-      setRefreshResult(String(e))
     }
   }
 
@@ -357,36 +335,6 @@ export default function UpdateTab() {
             onFile={file => handleFile(config.type, file)}
           />
         ))}
-      </div>
-
-      {/* Служебные операции */}
-      <div className="rounded-xl border border-gray-100 dark:border-white/10 p-4 space-y-3">
-        <h3 className="text-sm font-semibold text-[#1A1A2E] dark:text-white">
-          Служебные операции
-        </h3>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={handleRefreshAgg}
-            disabled={refreshState === 'running'}
-            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-            style={{
-              background: refreshState === 'running' ? 'var(--surface)' : 'var(--accent-glass)',
-              border: '1px solid var(--accent)',
-              color: 'var(--accent)',
-              cursor: refreshState === 'running' ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {refreshState === 'running' ? '⟳ Пересчёт...' : '⟳ Пересчитать агрегаты'}
-          </button>
-          {refreshResult && (
-            <span className="text-xs" style={{ color: refreshState === 'ok' ? 'var(--success)' : 'var(--danger)' }}>
-              {refreshState === 'ok' ? '✓ ' : '✗ '}{refreshResult}
-            </span>
-          )}
-        </div>
-        <p className="text-xs text-gray-400 dark:text-gray-500">
-          Пересчитывает агрегаты KPI и графиков по всей истории. Нужно запустить один раз после первого деплоя, затем данные обновляются автоматически при каждой загрузке отчёта по SKU.
-        </p>
       </div>
 
       <div>
