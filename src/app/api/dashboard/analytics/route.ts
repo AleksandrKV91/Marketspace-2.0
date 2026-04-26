@@ -297,9 +297,15 @@ export async function GET(req: Request) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, revenue], i) => ({ day_index: i, date, revenue }))
 
-  // ── 12. daily_by_sku (для клиентской фильтрации графиков по категории/SKU) ───
+  // ── 12. daily_by_sku (для клиентской фильтрации) — только топ-200 SKU по выручке ───
+  const topSkuMs = new Set(
+    Object.entries(skuAgg)
+      .sort((a, b) => (b[1].revenue ?? 0) - (a[1].revenue ?? 0))
+      .slice(0, 200)
+      .map(([ms]) => ms)
+  )
   const daily_by_sku = currDailyRows
-    .filter(r => allSkuMs.has(r.sku_ms))
+    .filter(r => topSkuMs.has(r.sku_ms))
     .map(r => ({ sku_ms: r.sku_ms, date: r.metric_date, revenue: r.revenue ?? 0, ad_spend: r.ad_spend ?? 0 }))
 
   if (process.env.NODE_ENV !== 'production') {

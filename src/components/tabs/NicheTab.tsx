@@ -75,9 +75,9 @@ function fmtPct(n: number | null | undefined, digits = 1) {
   return v.toFixed(digits) + '%'
 }
 
-function fmtRatio(n: number | null | undefined) {
+function fmtGmroi(n: number | null | undefined) {
   if (n == null) return '—'
-  return n.toFixed(2) + 'x'
+  return (n * 100).toFixed(0) + '%'
 }
 
 function formatPeriod(iso: string): string {
@@ -363,6 +363,9 @@ function AbcStackedBar({ rows }: { rows: NicheRow[] }) {
   )
 }
 
+// ── Module-level cache ────────────────────────────────────────────────────────
+const nicheCache = new Map<string, NicheData>()
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export default function NicheTab() {
@@ -396,13 +399,15 @@ export default function NicheTab() {
   const [viewMode, setViewMode] = useState<'hierarchy' | 'list'>('hierarchy')
   const [pageSize, setPageSize] = useState<50 | 100 | 'all'>(50)
 
-  // Fetch on period change
+  // Fetch on period change (with module-level cache)
   useEffect(() => {
-    setLoading(true)
     const url = period ? `/api/dashboard/niches?period=${period}` : '/api/dashboard/niches'
+    const cached = nicheCache.get(url)
+    if (cached) { setData(cached); setLoading(false); return }
+    setLoading(true)
     fetch(url)
       .then(r => r.json())
-      .then((d: NicheData) => { setData(d); setLoading(false) })
+      .then((d: NicheData) => { nicheCache.set(url, d); setData(d); setLoading(false) })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
   }, [period])
 
@@ -519,7 +524,7 @@ export default function NicheTab() {
     <div className="py-6 space-y-4" style={{ position: 'relative' }}>
 
       {/* ── KPI ── */}
-      <div className="px-6" style={{ position: 'sticky', top: 88, zIndex: 31, background: 'var(--surface-solid)', backdropFilter: 'blur(12px)' }}>
+      <div className="px-6" style={{ position: 'sticky', top: 88, zIndex: 31, background: 'var(--bg, var(--surface-solid))' }}>
         <KPIBar loading={loading} items={[
           {
             label: 'Ср. привлекательность',
@@ -531,9 +536,8 @@ export default function NicheTab() {
           },
           {
             label: 'Сезонных / несезон.',
-            value: data
-              ? `${data.summary.seasonal_count} / ${data.summary.non_seasonal_count} (всего ${data.summary.total_niches})`
-              : '—',
+            value: data ? `${data.summary.seasonal_count} / ${data.summary.non_seasonal_count}` : '—',
+            hint: data ? `всего ${data.summary.total_niches} ниш` : undefined,
           },
           {
             label: 'Ср. рент. ЧМД,%',
@@ -624,19 +628,22 @@ export default function NicheTab() {
           style={{ background: 'var(--surface-solid)', backdropFilter: 'blur(12px)' }}
         >
           {/* Period selector */}
-          {data?.periods && data.periods.length > 1 && (
-            <select
-              value={period}
-              onChange={e => setPeriod(e.target.value)}
-              className="text-xs px-2 py-1.5 rounded-xl border outline-none"
-              style={{ background: period ? 'var(--accent-glow)' : 'var(--border)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}
-            >
-              <option value="">Последний период</option>
-              {data.periods.map(p => (
-                <option key={p} value={p}>{formatPeriod(p)}</option>
-              ))}
-            </select>
-          )}
+          <select
+            value={period}
+            onChange={e => setPeriod(e.target.value)}
+            className="text-xs px-2.5 py-1 rounded-xl font-medium whitespace-nowrap transition-all outline-none"
+            style={{
+              background: period ? 'var(--accent-glass)' : 'var(--surface)',
+              border: '1px solid ' + (period ? 'var(--accent)' : 'var(--border)'),
+              color: period ? 'var(--accent)' : 'var(--text-muted)',
+              boxShadow: 'var(--shadow-sm)',
+            }}
+          >
+            <option value="">Период: последний</option>
+            {(data?.periods ?? []).map(p => (
+              <option key={p} value={p}>{formatPeriod(p)}</option>
+            ))}
+          </select>
 
           {/* Search */}
           <input
@@ -666,11 +673,12 @@ export default function NicheTab() {
           <select
             value={filterAbcCombo}
             onChange={e => setFilterAbcCombo(e.target.value)}
-            className="text-xs px-2 py-1.5 rounded-xl border outline-none"
+            className="text-xs px-2.5 py-1 rounded-xl font-medium whitespace-nowrap transition-all outline-none"
             style={{
-              background: filterAbcCombo !== 'all' ? 'var(--accent-glow)' : 'var(--border)',
-              border: '1px solid var(--border)',
-              color: 'var(--text-muted)',
+              background: filterAbcCombo !== 'all' ? 'var(--accent-glass)' : 'var(--surface)',
+              border: '1px solid ' + (filterAbcCombo !== 'all' ? 'var(--accent)' : 'var(--border)'),
+              color: filterAbcCombo !== 'all' ? 'var(--accent)' : 'var(--text-muted)',
+              boxShadow: 'var(--shadow-sm)',
             }}
           >
             <option value="all">Класс 1: все</option>
@@ -683,11 +691,12 @@ export default function NicheTab() {
           <select
             value={filterStatus}
             onChange={e => setFilterStatus(e.target.value)}
-            className="text-xs px-2 py-1.5 rounded-xl border outline-none"
+            className="text-xs px-2.5 py-1 rounded-xl font-medium whitespace-nowrap transition-all outline-none"
             style={{
-              background: filterStatus !== 'all' ? 'var(--accent-glow)' : 'var(--border)',
-              border: '1px solid var(--border)',
-              color: 'var(--text-muted)',
+              background: filterStatus !== 'all' ? 'var(--accent-glass)' : 'var(--surface)',
+              border: '1px solid ' + (filterStatus !== 'all' ? 'var(--accent)' : 'var(--border)'),
+              color: filterStatus !== 'all' ? 'var(--accent)' : 'var(--text-muted)',
+              boxShadow: 'var(--shadow-sm)',
             }}
           >
             <option value="all">Статус: все</option>
@@ -699,11 +708,12 @@ export default function NicheTab() {
           <select
             value={filterSeasonStart}
             onChange={e => setFilterSeasonStart(Number(e.target.value))}
-            className="text-xs px-2 py-1.5 rounded-xl border outline-none"
+            className="text-xs px-2.5 py-1 rounded-xl font-medium whitespace-nowrap transition-all outline-none"
             style={{
-              background: filterSeasonStart > 0 ? 'var(--accent-glow)' : 'var(--border)',
-              border: '1px solid var(--border)',
+              background: filterSeasonStart > 0 ? 'var(--accent-glass)' : 'var(--surface)',
+              border: '1px solid ' + (filterSeasonStart > 0 ? 'var(--accent)' : 'var(--border)'),
               color: filterSeasonStart > 0 ? 'var(--accent)' : 'var(--text-muted)',
+              boxShadow: 'var(--shadow-sm)',
             }}
           >
             <option value={0}>Старт: любой</option>
@@ -714,11 +724,12 @@ export default function NicheTab() {
           <select
             value={filterSeasonPeak}
             onChange={e => setFilterSeasonPeak(Number(e.target.value))}
-            className="text-xs px-2 py-1.5 rounded-xl border outline-none"
+            className="text-xs px-2.5 py-1 rounded-xl font-medium whitespace-nowrap transition-all outline-none"
             style={{
-              background: filterSeasonPeak > 0 ? 'var(--accent-glow)' : 'var(--border)',
-              border: '1px solid var(--border)',
+              background: filterSeasonPeak > 0 ? 'var(--accent-glass)' : 'var(--surface)',
+              border: '1px solid ' + (filterSeasonPeak > 0 ? 'var(--accent)' : 'var(--border)'),
               color: filterSeasonPeak > 0 ? 'var(--accent)' : 'var(--text-muted)',
+              boxShadow: 'var(--shadow-sm)',
             }}
           >
             <option value={0}>Пик: любой</option>
@@ -772,117 +783,88 @@ export default function NicheTab() {
                     </tr>
                   ))}
 
-                  {!loading && categoryGroups.map(([cat, niches]) => {
-                    const catRevenue = niches.reduce((s, r) => s + r.revenue, 0)
-                    const catExpanded = expandedCategories.has(cat)
+                  {!loading && filteredRows.map(row => {
+                    const nicheExpanded = expandedNiches.has(row.niche)
                     return [
-                      // Category row
+                      // Niche row (top level — no category grouping)
                       <tr
-                        key={`cat-${cat}`}
-                        className="border-t cursor-pointer"
-                        style={{ borderColor: 'var(--border)', background: 'var(--surface-alt, rgba(255,255,255,0.03))' }}
-                        onClick={() => toggleCategory(cat)}
+                        key={`niche-${row.niche}`}
+                        className="border-t cursor-pointer transition-colors"
+                        style={{ borderColor: 'var(--border)' }}
+                        onClick={() => toggleNiche(row.niche)}
+                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-hover)' }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}
                       >
-                        <td className="px-3 py-2.5" colSpan={1}>
+                        <td className="px-3 py-2">
                           <div className="flex items-center gap-2">
-                            <span style={{ color: 'var(--text-muted)', transition: 'transform .2s', display: 'inline-block', transform: catExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
-                              <ChevronRight size={13} />
-                            </span>
-                            <span className="font-semibold text-[11px]" style={{ color: 'var(--text)' }}>{cat}</span>
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--border)', color: 'var(--text-subtle)' }}>
-                              {niches.length} ниш
-                            </span>
+                            {row.skus.length > 0 && (
+                              <span style={{ color: 'var(--text-subtle)', display: 'inline-block', transform: nicheExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform .2s' }}>
+                                <ChevronRight size={12} />
+                              </span>
+                            )}
+                            <span className="font-medium text-[11px]" style={{ color: 'var(--text)' }}>{row.niche}</span>
+                            <span className="text-[10px]" style={{ color: 'var(--text-subtle)' }}>{row.category}</span>
                           </div>
                         </td>
-                        <td className="px-3 py-2.5 text-right" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>—</td>
-                        <td className="px-3 py-2.5 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmtFull(catRevenue)} ₽</td>
-                        <td colSpan={9} />
+                        <td className="px-3 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.attractiveness.toFixed(1)}</td>
+                        <td className="px-3 py-2 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmtFull(row.revenue)} ₽</td>
+                        <td className="px-3 py-2 text-center">
+                          <SeasonSparkline values={row.months} seasonMonths={row.season_months} peakMonth={row.season_peak} />
+                        </td>
+                        <td className="px-3 py-2 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                          {row.season_start ? MONTHS[row.season_start - 1] : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-right text-[11px] font-semibold" style={{ color: '#FF3B5C' }}>
+                          {row.season_peak ? MONTHS[row.season_peak - 1] : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <span className="font-bold text-[11px]" style={{ color: abcColor(row.abc_class) }}>{row.abc_class}</span>
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <span className="font-bold text-[11px]" style={{ color: abcColor(row.final_class_1) }}>{row.final_class_1 || '—'}</span>
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{row.final_class_2 || '—'}</span>
+                        </td>
+                        <td className="px-3 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmtGmroi(row.gmroi)}</td>
+                        <td className="px-3 py-2 text-right" style={{ color: 'var(--text-subtle)' }}>{row.sku_count}</td>
+                        <td className="px-3 py-2 text-right" style={{ color: 'var(--text-subtle)' }}>{row.buyout_pct != null ? fmtPct(row.buyout_pct) : '—'}</td>
                       </tr>,
 
-                      // Niche rows (if category expanded)
-                      ...(catExpanded ? niches.map(row => {
-                        const nicheExpanded = expandedNiches.has(row.niche)
-                        return [
-                          // Niche row
-                          <tr
-                            key={`niche-${row.niche}`}
-                            className="border-t cursor-pointer transition-colors"
-                            style={{ borderColor: 'var(--border)' }}
-                            onClick={() => toggleNiche(row.niche)}
-                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-hover)' }}
-                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}
-                          >
-                            <td className="px-3 py-2">
-                              <div className="flex items-center gap-2 pl-5">
-                                {row.skus.length > 0 && (
-                                  <span style={{ color: 'var(--text-subtle)', display: 'inline-block', transform: nicheExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform .2s' }}>
-                                    <ChevronRight size={12} />
-                                  </span>
-                                )}
-                                <span className="font-medium text-[11px]" style={{ color: 'var(--text)' }}>{row.niche}</span>
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.attractiveness.toFixed(1)}</td>
-                            <td className="px-3 py-2 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmtFull(row.revenue)} ₽</td>
-                            <td className="px-3 py-2 text-center">
-                              <SeasonSparkline values={row.months} seasonMonths={row.season_months} peakMonth={row.season_peak} />
-                            </td>
-                            <td className="px-3 py-2 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              {row.season_start ? MONTHS[row.season_start - 1] : '—'}
-                            </td>
-                            <td className="px-3 py-2 text-right text-[11px] font-semibold" style={{ color: '#FF3B5C' }}>
-                              {row.season_peak ? MONTHS[row.season_peak - 1] : '—'}
-                            </td>
-                            <td className="px-3 py-2 text-center">
-                              <span className="font-bold text-[11px]" style={{ color: abcColor(row.abc_class) }}>{row.abc_class}</span>
-                            </td>
-                            <td className="px-3 py-2 text-center">
-                              <span className="font-bold text-[11px]" style={{ color: abcColor(row.final_class_1) }}>{row.final_class_1 || '—'}</span>
-                            </td>
-                            <td className="px-3 py-2 text-center">
-                              <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{row.final_class_2 || '—'}</span>
-                            </td>
-                            <td className="px-3 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmtRatio(row.gmroi)}</td>
-                            <td className="px-3 py-2 text-right" style={{ color: 'var(--text-subtle)' }}>{row.sku_count}</td>
-                            <td className="px-3 py-2 text-right" style={{ color: 'var(--text-subtle)' }}>{row.buyout_pct != null ? fmtPct(row.buyout_pct) : '—'}</td>
-                          </tr>,
-
-                          // SKU rows (if niche expanded)
-                          ...(nicheExpanded ? row.skus.map(sku => (
-                            <tr
-                              key={`sku-${sku.sku_ms}`}
-                              className="border-t cursor-pointer transition-colors"
-                              style={{ borderColor: 'var(--border)', background: 'var(--surface-deep, rgba(0,0,0,0.08))' }}
-                              onClick={() => setSelectedSku(sku.sku_ms)}
-                              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '0.8' }}
-                              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
-                            >
-                              <td className="px-3 py-1.5">
-                                <div className="pl-12 flex items-center gap-2">
-                                  <span className="font-mono text-[10px]" style={{ color: 'var(--text-subtle)' }}>{sku.sku_ms}</span>
-                                  <span className="text-[11px] truncate max-w-[200px]" style={{ color: 'var(--text-muted)' }} title={sku.name}>{sku.name}</span>
-                                </div>
-                              </td>
-                              <td colSpan={1} />
-                              <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtFull(sku.revenue)} ₽</td>
-                              <td colSpan={3} />
-                              <td className="px-3 py-1.5 text-center">
-                                <span className="font-bold text-[10px]" style={{ color: abcColor(sku.abc_class) }}>{sku.abc_class || '—'}</span>
-                              </td>
-                              <td className="px-3 py-1.5 text-center">
-                                <span className="font-bold text-[10px]" style={{ color: abcColor(sku.final_class_1) }}>{sku.final_class_1 || '—'}</span>
-                              </td>
-                              <td className="px-3 py-1.5 text-center">
-                                <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{sku.final_class_2 || '—'}</span>
-                              </td>
-                              <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtRatio(sku.gmroi)}</td>
-                              <td colSpan={2} />
-                            </tr>
-                          )) : []),
-                        ]
-                      }).flat() : []),
+                      // SKU rows (if niche expanded)
+                      ...(nicheExpanded ? row.skus.map(sku => (
+                        <tr
+                          key={`sku-${sku.sku_ms}`}
+                          className="border-t cursor-pointer transition-colors"
+                          style={{ borderColor: 'var(--border)', background: 'var(--surface-deep, rgba(0,0,0,0.08))' }}
+                          onClick={() => setSelectedSku(sku.sku_ms)}
+                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '0.8' }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
+                        >
+                          <td className="px-3 py-1.5">
+                            <div className="pl-8 flex items-center gap-2">
+                              <span className="font-mono text-[10px]" style={{ color: 'var(--text-subtle)' }}>{sku.sku_ms}</span>
+                              <span className="text-[11px] truncate max-w-[200px]" style={{ color: 'var(--text-muted)' }} title={sku.name}>{sku.name}</span>
+                            </div>
+                          </td>
+                          <td colSpan={1} />
+                          <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtFull(sku.revenue)} ₽</td>
+                          <td colSpan={3} />
+                          <td className="px-3 py-1.5 text-center">
+                            <span className="font-bold text-[10px]" style={{ color: abcColor(sku.abc_class) }}>{sku.abc_class || '—'}</span>
+                          </td>
+                          <td className="px-3 py-1.5 text-center">
+                            <span className="font-bold text-[10px]" style={{ color: abcColor(sku.final_class_1) }}>{sku.final_class_1 || '—'}</span>
+                          </td>
+                          <td className="px-3 py-1.5 text-center">
+                            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{sku.final_class_2 || '—'}</span>
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtGmroi(sku.gmroi)}</td>
+                          <td colSpan={2} />
+                        </tr>
+                      )) : []),
                     ]
-                  }).flat()}
+                  })}
 
                   {!loading && filteredRows.length === 0 && (
                     <tr>
@@ -954,7 +936,7 @@ export default function NicheTab() {
                         </td>
                         <td className="px-3 py-1.5 text-right font-semibold text-[11px]" style={{ color: 'var(--text)' }}>{fmtFull(sku.revenue)} ₽</td>
                         <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtPct(sku.profitability)}</td>
-                        <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtRatio(sku.gmroi)}</td>
+                        <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtGmroi(sku.gmroi)}</td>
                       </tr>
                     ))}
 

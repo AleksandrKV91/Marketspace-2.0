@@ -50,52 +50,11 @@ async function uploadViaStorage(
   file: File,
   onProgress: (pct: number) => void
 ): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_skus?: string[]; unknown_skus?: string[]; error?: string }> {
-  // Уникальное имя файла чтобы избежать коллизий
-  const ext = file.name.split('.').pop()
-  const storageKey = `${type}/${Date.now()}.${ext}`
-
-  onProgress(15)
-
-  // 1. Получить signed upload URL через сервер (service role)
-  let signedUrl: string
+  onProgress(20)
+  const form = new FormData()
+  form.append('file', file, file.name)
   try {
-    const presignRes = await fetch('/api/upload/presign', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ storageKey }),
-    })
-    const presignJson = await presignRes.json()
-    if (!presignRes.ok || !presignJson.signedUrl) {
-      return { ok: false, error: `Storage presign: ${presignJson.error ?? 'unknown'}` }
-    }
-    signedUrl = presignJson.signedUrl
-  } catch (e) {
-    return { ok: false, error: `Storage presign: ${String(e)}` }
-  }
-
-  onProgress(25)
-
-  // 2. Загрузить файл напрямую по signed URL через fetch (PUT)
-  const uploadRes = await fetch(signedUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-    body: file,
-  })
-
-  if (!uploadRes.ok) {
-    const errText = await uploadRes.text().catch(() => uploadRes.statusText)
-    return { ok: false, error: `Storage upload: ${errText}` }
-  }
-
-  onProgress(50)
-
-  // 2. Передать путь в API для парсинга
-  try {
-    const res = await fetch(`/api/upload/${type}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ storageKey, filename: file.name }),
-    })
+    const res = await fetch(`/api/upload/${type}`, { method: 'POST', body: form })
     onProgress(90)
     const json = await res.json()
     if (res.ok && json.ok) {
