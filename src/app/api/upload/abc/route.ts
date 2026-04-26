@@ -30,18 +30,24 @@ export async function POST(req: NextRequest) {
 
   const knownSkus = await loadKnownSkus(supabase)
   const deduped = [...new Map(parsed.rows.map(r => [r.sku_ms, r])).values()]
-  const filtered = deduped.filter(r => knownSkus.has(r.sku_ms))
+
+  const unknownList = deduped.filter(r => !knownSkus.has(r.sku_ms))
+
+  if (unknownList.length > 0) {
+    const stubs = unknownList.map(r => ({ sku_ms: r.sku_ms, name: r.product_name ?? r.sku_ms }))
+    await supabase.from('dim_sku').upsert(stubs, { onConflict: 'sku_ms', ignoreDuplicates: true })
+  }
 
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')
-    .insert({ file_type: 'abc', filename, rows_count: filtered.length, period_start: parsed.period_month, status: 'ok' })
+    .insert({ file_type: 'abc', filename, rows_count: deduped.length, period_start: parsed.period_month, status: 'ok' })
     .select('id')
     .single()
 
   if (uploadErr) return NextResponse.json({ error: uploadErr.message }, { status: 500 })
 
   const uploadId = upload.id
-  const rowsWithUpload = filtered.map(r => ({ ...r, upload_id: uploadId }))
+  const rowsWithUpload = deduped.map(r => ({ ...r, upload_id: uploadId }))
   for (const batch of chunk(rowsWithUpload, 500)) {
     const { error } = await supabase.from('fact_abc').upsert(batch, { onConflict: 'sku_ms,upload_id' })
     if (error) {
@@ -54,8 +60,8 @@ export async function POST(req: NextRequest) {
     ok: true,
     upload_id: uploadId,
     period_month: parsed.period_month,
-    rows_parsed: filtered.length,
-    rows_skipped: parsed.rows_skipped + (deduped.length - filtered.length),
-    sample: filtered.slice(0, 2).map(r => ({ sku_ms: r.sku_ms, abc_class: r.abc_class })),
+    rows_parsed: deduped.length,
+    rows_skipped: parsed.rows_skipped,
+    unknown_skus: unknownList.map(r => r.sku_ms),
   })
 }

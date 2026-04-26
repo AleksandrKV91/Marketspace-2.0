@@ -4,7 +4,7 @@ import { useState, useCallback, useRef } from 'react'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
 
-type FileType = 'catalog' | 'abc' | 'china' | 'sku-report'
+type FileType = 'catalog' | 'abc' | 'china' | 'sku-report' | 'analytics'
 
 interface UploadState {
   status: 'idle' | 'uploading' | 'ok' | 'error'
@@ -40,28 +40,61 @@ const FILE_CONFIGS: Array<{
   { type: 'abc', label: 'АВС анализ', hint: 'АВС_анализ_*.xlsx', accept: '.xlsx,.xlsb', order: 2 },
   { type: 'china', label: 'Потребность Китай', hint: 'Потребность_Китай_*.xlsx', accept: '.xlsx,.xlsb', order: 3 },
   { type: 'sku-report', label: 'Отчёт по SKU', hint: 'Отчет_по_SKU_*.xlsb', accept: '.xlsb,.xlsx', order: 4 },
+  { type: 'analytics' as FileType, label: 'Аналитика', hint: 'Аналитика_*.xlsx', accept: '.xlsx,.xlsb', order: 5 },
 ]
 
-// ── Загрузка через сервер (браузер → Next.js API → Supabase Storage → parse) ──
-// Файл идёт как FormData в наш API — браузер не обращается к Supabase напрямую.
-// Это устраняет проблемы с CORS, VPN и SSL при прямом PUT на supabase.co.
+// ── Загрузка через Supabase Storage → API parse ───────────────────────────────
 
 async function uploadViaStorage(
   type: FileType,
   file: File,
   onProgress: (pct: number) => void
-): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_skus?: string[]; error?: string }> {
-  onProgress(10)
+): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_skus?: string[]; unknown_skus?: string[]; error?: string }> {
+  // Уникальное имя файла чтобы избежать коллизий
+  const ext = file.name.split('.').pop()
+  const storageKey = `${type}/${Date.now()}.${ext}`
 
-  const form = new FormData()
-  form.append('file', file, file.name)
+  onProgress(15)
 
+  // 1. Получить signed upload URL через сервер (service role)
+  let signedUrl: string
   try {
-    // Один запрос: сервер сохраняет в Storage и парсит
+    const presignRes = await fetch('/api/upload/presign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storageKey }),
+    })
+    const presignJson = await presignRes.json()
+    if (!presignRes.ok || !presignJson.signedUrl) {
+      return { ok: false, error: `Storage presign: ${presignJson.error ?? 'unknown'}` }
+    }
+    signedUrl = presignJson.signedUrl
+  } catch (e) {
+    return { ok: false, error: `Storage presign: ${String(e)}` }
+  }
+
+  onProgress(25)
+
+  // 2. Загрузить файл напрямую по signed URL через fetch (PUT)
+  const uploadRes = await fetch(signedUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  })
+
+  if (!uploadRes.ok) {
+    const errText = await uploadRes.text().catch(() => uploadRes.statusText)
+    return { ok: false, error: `Storage upload: ${errText}` }
+  }
+
+  onProgress(50)
+
+  // 2. Передать путь в API для парсинга
+  try {
     const res = await fetch(`/api/upload/${type}`, {
       method: 'POST',
-      body: form,
-      // Не устанавливаем Content-Type — браузер сам выставит multipart/form-data с boundary
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storageKey, filename: file.name }),
     })
     onProgress(90)
     const json = await res.json()
@@ -70,7 +103,8 @@ async function uploadViaStorage(
         ok: true,
         rows_parsed: json.rows_parsed,
         rows_skipped: json.rows_skipped,
-        skipped_skus: json.diag_skipped_skus ?? [],
+        skipped_skus: json.diag_skipped_skus,
+        unknown_skus: json.unknown_skus,
       }
     }
     return { ok: false, error: json.error ?? 'Ошибка парсинга' }
@@ -176,7 +210,7 @@ function UploadCard({
             )}
             {state.detail && (
               <span
-                className="text-red-400 break-all cursor-help"
+                className="text-red-400 truncate max-w-xs cursor-help"
                 title={state.detail}
               >
                 {state.detail}
@@ -184,182 +218,28 @@ function UploadCard({
             )}
           </div>
           {state.skippedSkus && state.skippedSkus.length > 0 && (
-            <details className="text-xs">
-              <summary className="cursor-pointer text-amber-500 hover:text-amber-600 select-none">
-                Артикулы не найдены в справочнике ({state.skippedSkus.length})
-              </summary>
-              <div className="mt-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-800/30 px-3 py-2 max-h-32 overflow-y-auto">
-                <p className="text-amber-600 dark:text-amber-400 mb-1 text-[11px]">
-                  Эти WB-артикулы отсутствуют в Своде — загрузите актуальный Свод и повторите загрузку
+            <div className="mt-3 p-3 rounded-xl border" style={{ borderColor: 'var(--warning)', background: 'rgba(245,158,11,0.08)' }}>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold" style={{ color: 'var(--warning)' }}>
+                  Артикулы, добавленные как заглушки ({state.skippedSkus.length})
                 </p>
-                <div className="flex flex-wrap gap-1">
-                  {state.skippedSkus.map(sku => (
-                    <span
-                      key={sku}
-                      className="inline-block bg-amber-100 dark:bg-amber-800/30 text-amber-700 dark:text-amber-300 rounded px-1.5 py-0.5 font-mono text-[11px]"
-                    >
-                      {sku}
-                    </span>
-                  ))}
-                </div>
+                <button
+                  onClick={() => navigator.clipboard.writeText(state.skippedSkus!.join('\n'))}
+                  className="text-xs px-2 py-1 rounded-lg"
+                  style={{ background: 'var(--border)', color: 'var(--text-muted)' }}
+                >
+                  Скопировать список
+                </button>
               </div>
-            </details>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Диагностическая панель ────────────────────────────────────────────────────
-
-interface DiagResult {
-  env?: Record<string, string>
-  db_connection?: string
-  storage_buckets?: string
-  signed_url?: string
-  dim_sku?: string
-  fact_abc?: string
-  fact_sku_daily?: string
-  error?: string
-}
-
-interface DiagState {
-  status: 'idle' | 'checking' | 'done' | 'fixing' | 'fixed' | 'error'
-  result: DiagResult | null
-  setupSteps: string[]
-}
-
-function DiagPanel() {
-  const [diag, setDiag] = useState<DiagState>({ status: 'idle', result: null, setupSteps: [] })
-
-  const handleCheck = async () => {
-    setDiag({ status: 'checking', result: null, setupSteps: [] })
-    try {
-      const res = await fetch('/api/debug/storage-check')
-      const json: DiagResult = await res.json()
-      setDiag({ status: 'done', result: json, setupSteps: [] })
-    } catch (e) {
-      setDiag({ status: 'error', result: { error: String(e) }, setupSteps: [] })
-    }
-  }
-
-  const handleSetup = async () => {
-    setDiag(prev => ({ ...prev, status: 'fixing', setupSteps: [] }))
-    try {
-      const res = await fetch('/api/debug/storage-setup', { method: 'POST' })
-      const json = await res.json()
-      setDiag(prev => ({ ...prev, status: 'fixed', setupSteps: json.steps ?? [] }))
-      // Перепроверить после настройки
-      setTimeout(async () => {
-        try {
-          const checkRes = await fetch('/api/debug/storage-check')
-          const checkJson: DiagResult = await checkRes.json()
-          setDiag(prev => ({ ...prev, result: checkJson }))
-        } catch { /* ignore */ }
-      }, 1000)
-    } catch (e) {
-      setDiag(prev => ({ ...prev, status: 'error', setupSteps: [String(e)] }))
-    }
-  }
-
-  const hasBucketError = diag.result &&
-    (typeof diag.result.storage_buckets === 'string' && diag.result.storage_buckets.startsWith('❌'))
-  const hasAnyError = diag.result &&
-    Object.values(diag.result).some(v => typeof v === 'string' && v.startsWith('❌'))
-
-  return (
-    <div className="rounded-xl border border-gray-100 dark:border-white/10 p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-[#1A1A2E] dark:text-white">
-          Диагностика хранилища
-        </h3>
-        <div className="flex items-center gap-2">
-          {(hasBucketError || diag.status === 'fixed') && (
-            <button
-              onClick={handleSetup}
-              disabled={diag.status === 'fixing'}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
-              style={{
-                background: 'rgba(230,57,70,0.08)',
-                border: '1px solid #E63946',
-                color: '#E63946',
-                cursor: diag.status === 'fixing' ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {diag.status === 'fixing' ? '⟳ Настройка...' : '⚙ Настроить хранилище'}
-            </button>
-          )}
-          <button
-            onClick={handleCheck}
-            disabled={diag.status === 'checking' || diag.status === 'fixing'}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
-            style={{
-              background: 'var(--accent-glass)',
-              border: '1px solid var(--accent)',
-              color: 'var(--accent)',
-              cursor: (diag.status === 'checking' || diag.status === 'fixing') ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {diag.status === 'checking' ? '⟳ Проверка...' : '⟳ Проверить'}
-          </button>
-        </div>
-      </div>
-
-      {diag.status === 'idle' && (
-        <p className="text-xs text-gray-400 dark:text-gray-500">
-          Если загрузка файлов не работает — нажмите «Проверить» для диагностики подключения к Supabase Storage.
-        </p>
-      )}
-
-      {diag.setupSteps.length > 0 && (
-        <div className="rounded-lg bg-gray-50 dark:bg-white/5 p-3 space-y-1">
-          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Настройка хранилища:</p>
-          {diag.setupSteps.map((step, i) => (
-            <p key={i} className="text-xs font-mono text-gray-700 dark:text-gray-300">{step}</p>
-          ))}
-        </div>
-      )}
-
-      {diag.result && (
-        <div className="rounded-lg bg-gray-50 dark:bg-white/5 p-3 space-y-1.5">
-          {[
-            ['Переменные окружения', diag.result.env
-              ? Object.entries(diag.result.env).map(([k, v]) => `${k}: ${v}`).join(' | ')
-              : undefined],
-            ['База данных', diag.result.db_connection],
-            ['Хранилище (бакеты)', diag.result.storage_buckets],
-            ['Signed URL', diag.result.signed_url],
-            ['dim_sku', diag.result.dim_sku],
-            ['fact_abc', diag.result.fact_abc],
-            ['fact_sku_daily', diag.result.fact_sku_daily],
-          ]
-            .filter(([, v]) => v !== undefined)
-            .map(([label, value]) => {
-              const isOk = typeof value === 'string' && value.startsWith('✅')
-              const isWarn = typeof value === 'string' && value.startsWith('⚠️')
-              const isErr = typeof value === 'string' && value.startsWith('❌')
-              return (
-                <div key={label as string} className="flex gap-2 text-xs">
-                  <span className="shrink-0 text-gray-400 dark:text-gray-500 w-36">{label as string}</span>
-                  <span
-                    className="break-all"
-                    style={{
-                      color: isErr ? '#ef4444' : isWarn ? '#f59e0b' : isOk ? '#22c55e' : 'inherit',
-                    }}
-                  >
-                    {value as string}
-                  </span>
-                </div>
-              )
-            })}
-          {diag.result.error && (
-            <p className="text-xs text-red-400">{diag.result.error}</p>
-          )}
-          {!hasAnyError && (
-            <p className="text-xs text-green-500 font-medium pt-1">
-              ✅ Все системы работают корректно. Если загрузка всё равно не работает — проверьте консоль браузера.
-            </p>
+              <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
+                Эти артикулы отсутствовали в Своде — созданы автоматически. Добавьте их в Свод для полных данных.
+              </p>
+              <div className="max-h-40 overflow-y-auto space-y-0.5">
+                {state.skippedSkus.map(sku => (
+                  <p key={sku} className="font-mono text-[11px]" style={{ color: 'var(--text-subtle)' }}>{sku}</p>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -369,20 +249,17 @@ function DiagPanel() {
 
 // ── Основной компонент ────────────────────────────────────────────────────────
 
-type RefreshState = 'idle' | 'running' | 'ok' | 'error'
-
 export default function UpdateTab() {
   const [states, setStates] = useState<Record<FileType, UploadState>>({
     catalog: { status: 'idle', progress: 0, message: 'Не загружен' },
     abc: { status: 'idle', progress: 0, message: 'Не загружен' },
     china: { status: 'idle', progress: 0, message: 'Не загружен' },
     'sku-report': { status: 'idle', progress: 0, message: 'Не загружен' },
+    analytics: { status: 'idle', progress: 0, message: 'Не загружен' },
   })
 
   const [history, setHistory] = useState<UploadRecord[]>([])
   const [historyLoaded, setHistoryLoaded] = useState(false)
-  const [refreshState, setRefreshState] = useState<RefreshState>('idle')
-  const [refreshResult, setRefreshResult] = useState<string | null>(null)
 
   const loadHistory = async () => {
     try {
@@ -417,7 +294,7 @@ export default function UpdateTab() {
         lastAt: now,
         rowsCount: result.rows_parsed,
         rowsSkipped: result.rows_skipped,
-        skippedSkus: result.skipped_skus,
+        skippedSkus: result.unknown_skus ?? result.skipped_skus ?? [],
         detail: undefined,
       })
       if (historyLoaded) loadHistory()
@@ -428,29 +305,6 @@ export default function UpdateTab() {
         message: 'Ошибка',
         detail: result.error,
       })
-    }
-  }
-
-  const handleRefreshAgg = async () => {
-    setRefreshState('running')
-    setRefreshResult(null)
-    try {
-      const res = await fetch('/api/admin/refresh-daily-agg', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      })
-      const json = await res.json()
-      if (res.ok && json.ok) {
-        setRefreshState('ok')
-        setRefreshResult(`Готово: обработано ${json.rows_processed?.toLocaleString('ru-RU') ?? '?'} строк → ${json.agg_rows?.toLocaleString('ru-RU') ?? '?'} агрегатов`)
-      } else {
-        setRefreshState('error')
-        setRefreshResult(json.errors?.[0] ?? json.error ?? 'Неизвестная ошибка')
-      }
-    } catch (e) {
-      setRefreshState('error')
-      setRefreshResult(String(e))
     }
   }
 
@@ -482,38 +336,6 @@ export default function UpdateTab() {
           />
         ))}
       </div>
-
-      {/* Служебные операции */}
-      <div className="rounded-xl border border-gray-100 dark:border-white/10 p-4 space-y-3">
-        <h3 className="text-sm font-semibold text-[#1A1A2E] dark:text-white">
-          Служебные операции
-        </h3>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={handleRefreshAgg}
-            disabled={refreshState === 'running'}
-            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-            style={{
-              background: refreshState === 'running' ? 'var(--surface)' : 'var(--accent-glass)',
-              border: '1px solid var(--accent)',
-              color: 'var(--accent)',
-              cursor: refreshState === 'running' ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {refreshState === 'running' ? '⟳ Пересчёт...' : '⟳ Пересчитать агрегаты'}
-          </button>
-          {refreshResult && (
-            <span className="text-xs" style={{ color: refreshState === 'ok' ? 'var(--success)' : 'var(--danger)' }}>
-              {refreshState === 'ok' ? '✓ ' : '✗ '}{refreshResult}
-            </span>
-          )}
-        </div>
-        <p className="text-xs text-gray-400 dark:text-gray-500">
-          Пересчитывает агрегаты KPI и графиков по всей истории. Нужно запустить один раз после первого деплоя, затем данные обновляются автоматически при каждой загрузке отчёта по SKU.
-        </p>
-      </div>
-
-      <DiagPanel />
 
       <div>
         <div className="flex items-center justify-between mb-3">

@@ -433,42 +433,44 @@ export default function DashboardPage() {
         </div>
 
         {/* Row 2: DateRangePicker + global filters */}
-        <div className="flex items-center justify-center gap-2 h-[28px] flex-wrap">
-          <DateRangePicker />
-          <PeriodButtons />
-          <div className="w-px h-4 shrink-0" style={{ background: 'var(--border)' }} />
-          <FilterDropdown
-            value={globalFilters.category}
-            onChange={v => setGlobalFilters(f => ({ ...f, category: v }))}
-            options={meta.categories}
-            placeholder="Категория"
-          />
-          <FilterDropdown
-            value={globalFilters.novelty}
-            onChange={v => setGlobalFilters(f => ({ ...f, novelty: v }))}
-            options={['Новинки', 'Не новинки']}
-            placeholder="Новинка"
-          />
-          <FilterDropdown
-            value={globalFilters.manager}
-            onChange={v => setGlobalFilters(f => ({ ...f, manager: v }))}
-            options={meta.managers}
-            placeholder="Менеджер"
-          />
-          {hasFilters && (
-            <button
-              onClick={resetFilters}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-all"
-              style={{
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                color: 'var(--text-muted)',
-              }}
-            >
-              <X size={10} /> Сбросить
-            </button>
-          )}
-        </div>
+        {activeTab !== 'niche' && activeTab !== 'update' && (
+          <div className="flex items-center justify-center gap-2 h-[28px] flex-wrap">
+            <DateRangePicker />
+            <PeriodButtons />
+            <div className="w-px h-4 shrink-0" style={{ background: 'var(--border)' }} />
+            <FilterDropdown
+              value={globalFilters.category}
+              onChange={v => setGlobalFilters(f => ({ ...f, category: v }))}
+              options={meta.categories}
+              placeholder="Категория"
+            />
+            <FilterDropdown
+              value={globalFilters.novelty}
+              onChange={v => setGlobalFilters(f => ({ ...f, novelty: v }))}
+              options={['Новинки', 'Не новинки']}
+              placeholder="Новинка"
+            />
+            <FilterDropdown
+              value={globalFilters.manager}
+              onChange={v => setGlobalFilters(f => ({ ...f, manager: v }))}
+              options={meta.managers}
+              placeholder="Менеджер"
+            />
+            {hasFilters && (
+              <button
+                onClick={resetFilters}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-all"
+                style={{
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-muted)',
+                }}
+              >
+                <X size={10} /> Сбросить
+              </button>
+            )}
+          </div>
+        )}
         </div>{/* /max-w wrapper */}
       </header>
 
