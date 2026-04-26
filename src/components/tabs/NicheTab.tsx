@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { KPIBar } from '@/components/ui/KPIBar'
 import { SkuModal } from '@/components/ui/SkuModal'
@@ -261,49 +261,79 @@ function SeasonHeatmap({ rows }: { rows: NicheRow[] }) {
   )
 }
 
-// ── AbcStackedBar ─────────────────────────────────────────────────────────────
+// ── ABC Chart components ──────────────────────────────────────────────────────
 
-const ABC_SEGMENTS = ['AA','AB','AC','BA','BB','BC','CA','CB','CC','убыток','н/д'] as const
-const ABC_COLORS: Record<string, string> = {
+const SEGS_1 = ['AA','AB','BA','BB','CA','CB','CC'] as const
+const SEGS_2 = ['AA','AB','AC','BA','BB','BC','CA','CB','CC','A|н/д','B|н/д','C|н/д','убыток|A','убыток|B','убыток|C','убыток|н/д'] as const
+
+const ABC_COLORS_ALL: Record<string, string> = {
   'AA': '#15803d', 'AB': '#16a34a', 'AC': '#22c55e',
   'BA': '#92400e', 'BB': '#b45309', 'BC': '#d97706',
   'CA': '#991b1b', 'CB': '#b91c1c', 'CC': '#ef4444',
-  'убыток': '#7f1d1d',
-  'н/д': '#6b7280',
+  'A|н/д': '#86efac', 'B|н/д': '#fde68a', 'C|н/д': '#fca5a5',
+  'убыток|A': '#7f1d1d', 'убыток|B': '#7c2d12', 'убыток|C': '#4c0519',
+  'убыток|н/д': '#44403c',
 }
 
-function getSegment(cls: string | null): string {
-  if (!cls || cls === '—') return 'н/д'
-  const lower = cls.toLowerCase()
-  if (lower.startsWith('убыток')) return 'убыток'
-  const up = cls.toUpperCase()
-  if (/^[ABC]{2}$/.test(up)) return up
-  if (/^[ABC]$/.test(up)) return up
-  if (up.includes('Н/Д') || lower.includes('н/д')) return 'н/д'
-  const first = cls.charAt(0).toUpperCase()
-  return first || 'н/д'
+function normSeg1(cls: string | null): string {
+  if (!cls) return ''
+  const up = cls.toUpperCase().trim()
+  return (SEGS_1 as readonly string[]).includes(up) ? up : ''
+}
+
+function normSeg2(cls: string | null): string {
+  if (!cls) return ''
+  const lo = cls.toLowerCase().trim()
+  const up2 = lo.toUpperCase()
+  if (/^[ABC]{2}$/.test(up2)) return up2
+  if (/^убыток\|[aа]$/.test(lo)) return 'убыток|A'
+  if (/^убыток\|[bб]$/.test(lo)) return 'убыток|B'
+  if (/^убыток\|[cс]$/.test(lo)) return 'убыток|C'
+  if (lo.startsWith('убыток')) return 'убыток|н/д'
+  if (/^[aа]\|н\/д$/.test(lo)) return 'A|н/д'
+  if (/^[bб]\|н\/д$/.test(lo)) return 'B|н/д'
+  if (/^[cс]\|н\/д$/.test(lo)) return 'C|н/д'
+  return ''
+}
+
+function OneBar({ rows, getKey, segments, mode }: {
+  rows: NicheRow[]
+  getKey: (sku: SkuInNiche) => string
+  segments: readonly string[]
+  mode: 'revenue' | 'sku'
+}) {
+  const counts: Record<string, { revenue: number; sku: number }> = {}
+  for (const seg of segments) counts[seg] = { revenue: 0, sku: 0 }
+  for (const row of rows) {
+    for (const sku of row.skus) {
+      const seg = getKey(sku)
+      if (!seg || !(seg in counts)) continue
+      counts[seg].revenue += sku.revenue
+      counts[seg].sku += 1
+    }
+  }
+  const key = mode === 'revenue' ? 'revenue' : 'sku'
+  const total = segments.reduce((s, seg) => s + counts[seg][key], 0)
+  return (
+    <div className="relative h-7 w-full rounded-lg overflow-hidden flex" style={{ background: 'var(--border)' }}>
+      {segments.map(seg => {
+        const val = counts[seg][key]
+        const pct = total > 0 ? (val / total) * 100 : 0
+        if (pct < 0.5) return null
+        return (
+          <div
+            key={seg}
+            style={{ width: `${pct}%`, background: ABC_COLORS_ALL[seg] ?? '#6b7280' }}
+            title={`${seg}: ${mode === 'revenue' ? fmtFull(val) : val + ' SKU'} (${pct.toFixed(1)}%)`}
+          />
+        )
+      })}
+    </div>
+  )
 }
 
 function AbcStackedBar({ rows }: { rows: NicheRow[] }) {
   const [mode, setMode] = useState<'revenue' | 'sku'>('revenue')
-
-  const allSkus = rows.flatMap(r => r.skus)
-
-  const counts: Record<string, { revenue: number; sku: number }> = {}
-  for (const seg of ABC_SEGMENTS) counts[seg] = { revenue: 0, sku: 0 }
-
-  for (const sku of allSkus) {
-    const seg = getSegment(sku.final_class_1)
-    const key = (ABC_SEGMENTS as readonly string[]).includes(seg) ? seg : 'н/д'
-    counts[key].revenue += sku.revenue
-    counts[key].sku++
-  }
-
-  const total = mode === 'revenue'
-    ? Object.values(counts).reduce((s, v) => s + v.revenue, 0)
-    : Object.values(counts).reduce((s, v) => s + v.sku, 0)
-
-  const segments = (ABC_SEGMENTS as readonly string[]).filter(s => counts[s][mode === 'revenue' ? 'revenue' : 'sku'] > 0)
 
   return (
     <GlassCard padding="none">
@@ -329,37 +359,94 @@ function AbcStackedBar({ rows }: { rows: NicheRow[] }) {
           </div>
         </div>
 
-        {/* Stacked bar */}
-        <div className="relative h-8 w-full rounded-lg overflow-hidden flex" style={{ background: 'var(--border)' }}>
-          {segments.map(seg => {
-            const val = mode === 'revenue' ? counts[seg].revenue : counts[seg].sku
-            const pct = total > 0 ? (val / total) * 100 : 0
-            if (pct < 0.5) return null
-            return (
-              <div
-                key={seg}
-                style={{ width: `${pct}%`, background: ABC_COLORS[seg], position: 'relative' }}
-                title={`${seg}: ${mode === 'revenue' ? fmtFull(val) + ' ₽' : val + ' SKU'} (${pct.toFixed(1)}%)`}
-              />
-            )
-          })}
+        <div className="space-y-2">
+          <div>
+            <p className="text-[10px] mb-1 font-medium" style={{ color: 'var(--text-subtle)' }}>ЧМД / Выручка</p>
+            <OneBar rows={rows} getKey={s => normSeg1(s.final_class_1)} segments={SEGS_1} mode={mode} />
+          </div>
+          <div>
+            <p className="text-[10px] mb-1 font-medium" style={{ color: 'var(--text-subtle)' }}>Рент. / Об.</p>
+            <OneBar rows={rows} getKey={s => normSeg2(s.final_class_2)} segments={SEGS_2} mode={mode} />
+          </div>
         </div>
 
-        {/* Legend */}
-        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
-          {segments.map(seg => {
-            const val = mode === 'revenue' ? counts[seg].revenue : counts[seg].sku
-            const pct = total > 0 ? (val / total * 100).toFixed(1) : '0'
-            return (
-              <div key={seg} className="flex items-center gap-1">
-                <div className="w-2.5 h-2.5 rounded-sm" style={{ background: ABC_COLORS[seg] }} />
-                <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{seg} {pct}%</span>
-              </div>
-            )
-          })}
+        <div className="flex flex-wrap gap-x-2 gap-y-1 mt-3">
+          {['AA','AB','AC','BA','BB','BC','CA','CB','CC','A|н/д','B|н/д','C|н/д','убыток|A','убыток|B','убыток|C','убыток|н/д'].map(seg => (
+            <div key={seg} className="flex items-center gap-1">
+              <div className="w-2 h-2 rounded-sm" style={{ background: ABC_COLORS_ALL[seg] }} />
+              <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{seg}</span>
+            </div>
+          ))}
         </div>
       </div>
     </GlassCard>
+  )
+}
+
+// ── NicheSelect — custom dropdown ────────────────────────────────────────────
+
+function NicheSelect<T extends string | number>({
+  value, onChange, options,
+}: {
+  value: T
+  onChange: (v: T) => void
+  options: Array<{ value: T; label: string }>
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const label = options.find(o => o.value === value)?.label ?? String(value)
+  const isActive = options.length > 0 && options[0].value !== value
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-medium whitespace-nowrap transition-all"
+        style={{
+          background: isActive ? 'var(--accent-glass)' : 'var(--surface)',
+          border: '1px solid ' + (isActive ? 'var(--accent)' : 'var(--border)'),
+          color: isActive ? 'var(--accent)' : 'var(--text-muted)',
+          boxShadow: 'var(--shadow-sm)',
+        }}
+      >
+        {label}
+        <span style={{ fontSize: 9, opacity: 0.7 }}>▼</span>
+      </button>
+      {open && (
+        <div
+          className="absolute left-0 top-[calc(100%+4px)] z-[300] py-1 min-w-max max-h-48 overflow-y-auto"
+          style={{
+            background: 'var(--surface-popup, var(--surface-solid))',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-xl)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+          }}
+        >
+          {options.map(o => (
+            <button
+              key={String(o.value)}
+              onClick={() => { onChange(o.value); setOpen(false) }}
+              className="w-full text-left px-3 py-1.5 text-[11px] whitespace-nowrap"
+              style={{ color: value === o.value ? 'var(--accent)' : 'var(--text)' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent-glass)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -628,22 +715,14 @@ export default function NicheTab() {
           style={{ background: 'var(--surface-solid)', backdropFilter: 'blur(12px)' }}
         >
           {/* Period selector */}
-          <select
+          <NicheSelect
             value={period}
-            onChange={e => setPeriod(e.target.value)}
-            className="text-xs px-2.5 py-1 rounded-xl font-medium whitespace-nowrap transition-all outline-none"
-            style={{
-              background: period ? 'var(--accent-glass)' : 'var(--surface)',
-              border: '1px solid ' + (period ? 'var(--accent)' : 'var(--border)'),
-              color: period ? 'var(--accent)' : 'var(--text-muted)',
-              boxShadow: 'var(--shadow-sm)',
-            }}
-          >
-            <option value="">Период: последний</option>
-            {(data?.periods ?? []).map(p => (
-              <option key={p} value={p}>{formatPeriod(p)}</option>
-            ))}
-          </select>
+            onChange={setPeriod}
+            options={[
+              { value: '' as string, label: 'Период: последний' },
+              ...(data?.periods ?? []).map(p => ({ value: p, label: formatPeriod(p) })),
+            ]}
+          />
 
           {/* Search */}
           <input
@@ -670,71 +749,45 @@ export default function NicheTab() {
           ))}
 
           {/* ABC Combo filter */}
-          <select
+          <NicheSelect
             value={filterAbcCombo}
-            onChange={e => setFilterAbcCombo(e.target.value)}
-            className="text-xs px-2.5 py-1 rounded-xl font-medium whitespace-nowrap transition-all outline-none"
-            style={{
-              background: filterAbcCombo !== 'all' ? 'var(--accent-glass)' : 'var(--surface)',
-              border: '1px solid ' + (filterAbcCombo !== 'all' ? 'var(--accent)' : 'var(--border)'),
-              color: filterAbcCombo !== 'all' ? 'var(--accent)' : 'var(--text-muted)',
-              boxShadow: 'var(--shadow-sm)',
-            }}
-          >
-            <option value="all">Класс 1: все</option>
-            {['AA','AB','AC','BA','BB','BC','CA','CB','CC'].map(c => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
+            onChange={setFilterAbcCombo}
+            options={[
+              { value: 'all', label: 'Класс 1: все' },
+              ...['AA','AB','AC','BA','BB','BC','CA','CB','CC'].map(c => ({ value: c, label: c })),
+            ]}
+          />
 
           {/* Status filter */}
-          <select
+          <NicheSelect
             value={filterStatus}
-            onChange={e => setFilterStatus(e.target.value)}
-            className="text-xs px-2.5 py-1 rounded-xl font-medium whitespace-nowrap transition-all outline-none"
-            style={{
-              background: filterStatus !== 'all' ? 'var(--accent-glass)' : 'var(--surface)',
-              border: '1px solid ' + (filterStatus !== 'all' ? 'var(--accent)' : 'var(--border)'),
-              color: filterStatus !== 'all' ? 'var(--accent)' : 'var(--text-muted)',
-              boxShadow: 'var(--shadow-sm)',
-            }}
-          >
-            <option value="all">Статус: все</option>
-            <option value="убыток">убыток</option>
-            <option value="н/д">н/д</option>
-          </select>
+            onChange={setFilterStatus}
+            options={[
+              { value: 'all', label: 'Статус: все' },
+              { value: 'убыток', label: 'убыток' },
+              { value: 'н/д', label: 'н/д' },
+            ]}
+          />
 
           {/* Season start */}
-          <select
+          <NicheSelect
             value={filterSeasonStart}
-            onChange={e => setFilterSeasonStart(Number(e.target.value))}
-            className="text-xs px-2.5 py-1 rounded-xl font-medium whitespace-nowrap transition-all outline-none"
-            style={{
-              background: filterSeasonStart > 0 ? 'var(--accent-glass)' : 'var(--surface)',
-              border: '1px solid ' + (filterSeasonStart > 0 ? 'var(--accent)' : 'var(--border)'),
-              color: filterSeasonStart > 0 ? 'var(--accent)' : 'var(--text-muted)',
-              boxShadow: 'var(--shadow-sm)',
-            }}
-          >
-            <option value={0}>Старт: любой</option>
-            {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-          </select>
+            onChange={setFilterSeasonStart}
+            options={[
+              { value: 0, label: 'Старт: любой' },
+              ...MONTHS.map((m, i) => ({ value: i + 1, label: m })),
+            ]}
+          />
 
           {/* Season peak */}
-          <select
+          <NicheSelect
             value={filterSeasonPeak}
-            onChange={e => setFilterSeasonPeak(Number(e.target.value))}
-            className="text-xs px-2.5 py-1 rounded-xl font-medium whitespace-nowrap transition-all outline-none"
-            style={{
-              background: filterSeasonPeak > 0 ? 'var(--accent-glass)' : 'var(--surface)',
-              border: '1px solid ' + (filterSeasonPeak > 0 ? 'var(--accent)' : 'var(--border)'),
-              color: filterSeasonPeak > 0 ? 'var(--accent)' : 'var(--text-muted)',
-              boxShadow: 'var(--shadow-sm)',
-            }}
-          >
-            <option value={0}>Пик: любой</option>
-            {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-          </select>
+            onChange={setFilterSeasonPeak}
+            options={[
+              { value: 0, label: 'Пик: любой' },
+              ...MONTHS.map((m, i) => ({ value: i + 1, label: m })),
+            ]}
+          />
         </div>
       </div>
 
@@ -807,7 +860,7 @@ export default function NicheTab() {
                           </div>
                         </td>
                         <td className="px-3 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{row.attractiveness.toFixed(1)}</td>
-                        <td className="px-3 py-2 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmtFull(row.revenue)} ₽</td>
+                        <td className="px-3 py-2 text-right font-semibold" style={{ color: 'var(--text)' }}>{fmtFull(row.revenue)}</td>
                         <td className="px-3 py-2 text-center">
                           <SeasonSparkline values={row.months} seasonMonths={row.season_months} peakMonth={row.season_peak} />
                         </td>
@@ -848,7 +901,7 @@ export default function NicheTab() {
                             </div>
                           </td>
                           <td colSpan={1} />
-                          <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtFull(sku.revenue)} ₽</td>
+                          <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtFull(sku.revenue)}</td>
                           <td colSpan={3} />
                           <td className="px-3 py-1.5 text-center">
                             <span className="font-bold text-[10px]" style={{ color: abcColor(sku.abc_class) }}>{sku.abc_class || '—'}</span>
@@ -934,7 +987,7 @@ export default function NicheTab() {
                         <td className="px-3 py-1.5 text-center">
                           <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{sku.final_class_2 || '—'}</span>
                         </td>
-                        <td className="px-3 py-1.5 text-right font-semibold text-[11px]" style={{ color: 'var(--text)' }}>{fmtFull(sku.revenue)} ₽</td>
+                        <td className="px-3 py-1.5 text-right font-semibold text-[11px]" style={{ color: 'var(--text)' }}>{fmtFull(sku.revenue)}</td>
                         <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtPct(sku.profitability)}</td>
                         <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtGmroi(sku.gmroi)}</td>
                       </tr>

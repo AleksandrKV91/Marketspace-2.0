@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
     ok: true,
     upload_id: uploadId,
     rows_parsed: parsed.rows_parsed,
-    rows_skipped: parsed.rows_skipped,
+    rows_skipped: parsed.skipped_skus.length,
     daily_rows: dedupedDaily.length,
     price_change_rows: dedupedPriceChanges.length,
     skipped_no_map: parsed.skipped_skus.length,
