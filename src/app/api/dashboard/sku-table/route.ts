@@ -27,16 +27,6 @@ async function handler(req: NextRequest) {
   const managerFilter  = searchParams.get('manager') ?? ''
   const noveltyFilter  = searchParams.get('gnovelty') ?? ''
 
-  // Последние upload_id
-  const { data: lastUploads } = await supabase
-    .from('uploads').select('id, file_type').eq('status', 'ok')
-    .order('uploaded_at', { ascending: false }).limit(20)
-  const latestByType: Record<string, string> = {}
-  if (lastUploads) for (const u of lastUploads) {
-    if (!latestByType[u.file_type]) latestByType[u.file_type] = u.id
-  }
-  const abcId = latestByType['abc']
-
   // Если даты не переданы — берём последние 7 дней из fact_sku_daily
   let effectiveFrom = fromParam
   let effectiveTo = toParam
@@ -115,16 +105,6 @@ async function handler(req: NextRequest) {
     for (const r of snapRows) { if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = r }
   }
 
-  // ABC
-  type AbcRow = { sku_ms: string; abc_class: string | null }
-  const abcByMs: Record<string, AbcRow> = {}
-  if (abcId) {
-    const abcRows = await fetchAll<AbcRow>(
-      (sb) => sb.from('fact_abc').select('sku_ms, abc_class').eq('upload_id', abcId),
-      supabase,
-    )
-    for (const r of abcRows) abcByMs[r.sku_ms] = r
-  }
 
   // fact_sku_daily — метрики за период
   type DailyRow = {
@@ -180,7 +160,6 @@ async function handler(req: NextRequest) {
   // Собираем строки
   const rows = dimRows.map(sku => {
     const skuSnap = snapByMs[sku.sku_ms]
-    const abc = abcByMs[sku.sku_ms]
     const daily = dailyByMs[sku.sku_ms]
 
     const fbo = skuSnap?.fbo_wb ?? 0
@@ -202,7 +181,6 @@ async function handler(req: NextRequest) {
     const marginPct = 0
     const chmd = 0
     const stockDays = 0
-    const abcClass = abc?.abc_class ?? null
 
     const oos_status: 'critical' | 'warning' | 'ok' =
       totalStock === 0 ? 'critical' : totalStock < 30 ? 'warning' : 'ok'
@@ -248,7 +226,7 @@ async function handler(req: NextRequest) {
         return (revenue - prev) / prev
       })(),
       score,
-      abc_class: abcClass,
+      abc_class: null,
       oos_status,
       margin_status,
       novelty: false,
