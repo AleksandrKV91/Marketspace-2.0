@@ -313,19 +313,27 @@ function OneBar({ rows, getKey, segments, mode }: {
     }
   }
   const key = mode === 'revenue' ? 'revenue' : 'sku'
-  const total = segments.reduce((s, seg) => s + counts[seg][key], 0)
+  const maxVal = Math.max(...segments.map(seg => counts[seg][key]), 1)
+  const hasAny = segments.some(seg => counts[seg][key] > 0)
+  if (!hasAny) return <p className="text-[11px] py-2" style={{ color: 'var(--text-subtle)' }}>Нет данных</p>
   return (
-    <div className="relative h-7 w-full rounded-lg overflow-hidden flex" style={{ background: 'var(--border)' }}>
+    <div className="space-y-1 mt-1">
       {segments.map(seg => {
         const val = counts[seg][key]
-        const pct = total > 0 ? (val / total) * 100 : 0
-        if (pct < 0.5) return null
+        const pct = (val / maxVal) * 100
         return (
-          <div
-            key={seg}
-            style={{ width: `${pct}%`, background: ABC_COLORS_ALL[seg] ?? '#6b7280' }}
-            title={`${seg}: ${mode === 'revenue' ? fmtFull(val) : val + ' SKU'} (${pct.toFixed(1)}%)`}
-          />
+          <div key={seg} className="flex items-center gap-2">
+            <span className="text-[9px] shrink-0 text-right" style={{ width: 56, color: 'var(--text-subtle)' }}>{seg}</span>
+            <div className="flex-1 h-4 rounded-sm overflow-hidden" style={{ background: 'var(--border)' }}>
+              <div
+                style={{ width: `${pct}%`, height: '100%', background: ABC_COLORS_ALL[seg] ?? '#6b7280', transition: 'width .3s' }}
+                title={`${seg}: ${mode === 'revenue' ? fmtFull(val) : val + ' SKU'}`}
+              />
+            </div>
+            <span className="text-[9px] shrink-0" style={{ width: 44, color: 'var(--text-muted)' }}>
+              {val === 0 ? '—' : mode === 'revenue' ? fmtAxis(val) : val}
+            </span>
+          </div>
         )
       })}
     </div>
@@ -484,6 +492,7 @@ export default function NicheTab() {
   const [search, setSearch] = useState('')
   const [filterSeasonal, setFilterSeasonal] = useState<'all' | 'seasonal' | 'no'>('all')
   const [filterAbcCombo, setFilterAbcCombo] = useState('all')
+  const [filterAbcCombo2, setFilterAbcCombo2] = useState('all')
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterSeasonStart, setFilterSeasonStart] = useState(0)
   const [filterSeasonPeak, setFilterSeasonPeak] = useState(0)
@@ -551,6 +560,9 @@ export default function NicheTab() {
       if (filterAbcCombo !== 'all') {
         if (!r.final_class_1.toUpperCase().startsWith(filterAbcCombo)) return false
       }
+      if (filterAbcCombo2 !== 'all') {
+        if (normSeg2(r.final_class_2) !== filterAbcCombo2) return false
+      }
       if (filterStatus !== 'all') {
         if (filterStatus === 'убыток' && !r.final_class_1.toLowerCase().startsWith('убыток')) return false
         if (filterStatus === 'н/д' && !r.final_class_1.toLowerCase().includes('н/д')) return false
@@ -565,7 +577,7 @@ export default function NicheTab() {
       if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * mult
       return String(av ?? '').localeCompare(String(bv ?? '')) * mult
     })
-  }, [data?.rows, search, filterSeasonal, filterAbcCombo, filterStatus, filterSeasonStart, filterSeasonPeak, sortKey, sortDir])
+  }, [data?.rows, search, filterSeasonal, filterAbcCombo, filterAbcCombo2, filterStatus, filterSeasonStart, filterSeasonPeak, sortKey, sortDir])
 
   // Group by category
   const categoryGroups = useMemo(() => {
@@ -589,12 +601,13 @@ export default function NicheTab() {
   const visibleSkus = pageSize === 'all' ? allSkusList : allSkusList.slice(0, pageSize)
 
   const filteredRevenue = filteredRows.reduce((s, r) => s + r.revenue, 0)
-  const hasFilters = !!(search || filterSeasonal !== 'all' || filterAbcCombo !== 'all' || filterStatus !== 'all' || filterSeasonStart > 0 || filterSeasonPeak > 0)
+  const hasFilters = !!(search || filterSeasonal !== 'all' || filterAbcCombo !== 'all' || filterAbcCombo2 !== 'all' || filterStatus !== 'all' || filterSeasonStart > 0 || filterSeasonPeak > 0)
 
   function resetFilters() {
     setSearch('')
     setFilterSeasonal('all')
     setFilterAbcCombo('all')
+    setFilterAbcCombo2('all')
     setFilterStatus('all')
     setFilterSeasonStart(0)
     setFilterSeasonPeak(0)
@@ -766,13 +779,23 @@ export default function NicheTab() {
             </button>
           ))}
 
-          {/* ABC Combo filter */}
+          {/* ABC Combo filter (Class 1) */}
           <NicheSelect
             value={filterAbcCombo}
             onChange={setFilterAbcCombo}
             options={[
               { value: 'all', label: 'Класс 1: все' },
               ...['AA','AB','AC','BA','BB','BC','CA','CB','CC'].map(c => ({ value: c, label: c })),
+            ]}
+          />
+
+          {/* ABC Combo filter (Class 2) */}
+          <NicheSelect
+            value={filterAbcCombo2}
+            onChange={setFilterAbcCombo2}
+            options={[
+              { value: 'all', label: 'Класс 2: все' },
+              ...(SEGS_2 as readonly string[]).map(c => ({ value: c, label: c })),
             ]}
           />
 
@@ -812,7 +835,7 @@ export default function NicheTab() {
       {/* ── Table ── */}
       <div className="px-6">
         <GlassCard padding="none">
-          <div style={{ overflowX: 'clip' }}>
+          <div style={{ overflowX: 'auto' }}>
 
             {/* ── Hierarchy Mode ── */}
             {viewMode === 'hierarchy' && (
@@ -837,7 +860,6 @@ export default function NicheTab() {
                     <th className="text-center px-3 py-2 font-medium whitespace-nowrap" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>Сезонность</th>
                     <SortTh label="Старт" sk="season_start" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                     <SortTh label="Пик" sk="season_peak" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                    <th className="text-center px-3 py-2 font-medium whitespace-nowrap" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>ABC</th>
                     <th className="text-center px-3 py-2 font-medium whitespace-nowrap" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>Класс 1 (ЧМД/Выр.)</th>
                     <th className="text-center px-3 py-2 font-medium whitespace-nowrap" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>Класс 2 (Рент./Об.)</th>
                     <SortTh label="GMROI" sk="gmroi" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -848,7 +870,7 @@ export default function NicheTab() {
                 <tbody>
                   {loading && Array.from({ length: 8 }).map((_, i) => (
                     <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
-                      {Array.from({ length: 12 }).map((__, j) => (
+                      {Array.from({ length: 11 }).map((__, j) => (
                         <td key={j} className="px-3 py-2"><div className="skeleton h-3 w-full" /></td>
                       ))}
                     </tr>
@@ -889,13 +911,10 @@ export default function NicheTab() {
                           {row.season_peak ? MONTHS[row.season_peak - 1] : '—'}
                         </td>
                         <td className="px-3 py-2 text-center">
-                          <span className="font-bold text-[11px]" style={{ color: abcColor(row.abc_class) }}>{row.abc_class}</span>
-                        </td>
-                        <td className="px-3 py-2 text-center">
                           <span className="font-bold text-[11px]" style={{ color: abcColor(row.final_class_1) }}>{row.final_class_1 || '—'}</span>
                         </td>
                         <td className="px-3 py-2 text-center">
-                          <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{row.final_class_2 || '—'}</span>
+                          <span className="font-bold text-[11px]" style={{ color: abcColor(row.final_class_2) }}>{row.final_class_2 || '—'}</span>
                         </td>
                         <td className="px-3 py-2 text-right" style={{ color: 'var(--text-muted)' }}>{fmtGmroi(row.gmroi)}</td>
                         <td className="px-3 py-2 text-right" style={{ color: 'var(--text-subtle)' }}>{row.sku_count}</td>
@@ -922,13 +941,10 @@ export default function NicheTab() {
                           <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtFull(sku.revenue)}</td>
                           <td colSpan={3} />
                           <td className="px-3 py-1.5 text-center">
-                            <span className="font-bold text-[10px]" style={{ color: abcColor(sku.abc_class) }}>{sku.abc_class || '—'}</span>
-                          </td>
-                          <td className="px-3 py-1.5 text-center">
                             <span className="font-bold text-[10px]" style={{ color: abcColor(sku.final_class_1) }}>{sku.final_class_1 || '—'}</span>
                           </td>
                           <td className="px-3 py-1.5 text-center">
-                            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{sku.final_class_2 || '—'}</span>
+                            <span className="font-bold text-[10px]" style={{ color: abcColor(sku.final_class_2) }}>{sku.final_class_2 || '—'}</span>
                           </td>
                           <td className="px-3 py-1.5 text-right text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtGmroi(sku.gmroi)}</td>
                           <td colSpan={2} />
@@ -939,7 +955,7 @@ export default function NicheTab() {
 
                   {!loading && filteredRows.length === 0 && (
                     <tr>
-                      <td colSpan={12} className="px-4 py-12 text-center" style={{ color: 'var(--text-muted)' }}>
+                      <td colSpan={11} className="px-4 py-12 text-center" style={{ color: 'var(--text-muted)' }}>
                         Нет данных по заданным фильтрам
                       </td>
                     </tr>

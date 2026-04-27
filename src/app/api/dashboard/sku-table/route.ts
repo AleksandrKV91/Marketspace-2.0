@@ -24,7 +24,6 @@ async function handler(req: NextRequest) {
   const fromParam = searchParams.get('from')
   const toParam = searchParams.get('to')
   const categoryFilter = searchParams.get('category') ?? ''
-  const managerFilter  = searchParams.get('manager') ?? ''
   const noveltyFilter  = searchParams.get('gnovelty') ?? ''
 
   // Если даты не переданы — берём последние 7 дней из fact_sku_daily
@@ -66,22 +65,66 @@ async function handler(req: NextRequest) {
     }
   }
 
-  // dim_sku — справочник
-  const dimRows = await fetchAll<{
-    sku_ms: string; sku_wb: number | null; name: string | null
-    brand: string | null; supplier: string | null
-    subject_wb: string | null; category_wb: string | null
-  }>(
-    (sb) => {
-      let q = sb.from('dim_sku').select('sku_ms, sku_wb, name, brand, supplier, subject_wb, category_wb')
-      if (search) q = q.or(`name.ilike.%${search}%,sku_ms.ilike.%${search}%,brand.ilike.%${search}%`)
-      return q
-    },
-    supabase,
-  )
-  if (!dimRows.length) return NextResponse.json({ rows: [], total: 0, selected_count: 0, selected_revenue: 0 })
+  // fact_sku_daily — primary source, universe of SKUs
+  type DailyRow = {
+    sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null
+    drr_total: number | null; ctr: number | null; cr_cart: number | null
+    cr_order: number | null; cpm: number | null; cpc: number | null; ad_order_share: number | null
+  }
+  const dailyRows = effectiveFrom && effectiveTo
+    ? await fetchAll<DailyRow>(
+        (sb) => sb.from('fact_sku_daily')
+          .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
+          .gte('metric_date', effectiveFrom!).lte('metric_date', effectiveTo!),
+        supabase,
+      )
+    : []
 
-  const skuMsList = dimRows.map(r => r.sku_ms)
+  if (!dailyRows.length) return NextResponse.json({ rows: [], total: 0, selected_count: 0, selected_revenue: 0 })
+
+  // Unique SKUs from fact_sku_daily
+  const skuMsSet = new Set(dailyRows.map(r => r.sku_ms))
+  const skuMsList = Array.from(skuMsSet)
+
+  // dim_sku — optional enrichment (name, brand, category); ignore errors
+  type DimRow = { sku_ms: string; sku_wb: number | null; name: string | null; brand: string | null; subject_wb: string | null; category_wb: string | null }
+  const dimByMs: Record<string, DimRow> = {}
+  const { data: dimData } = await supabase.from('dim_sku')
+    .select('sku_ms, sku_wb, name, brand, subject_wb, category_wb')
+    .in('sku_ms', skuMsList)
+  if (dimData) for (const r of dimData) dimByMs[r.sku_ms] = r
+
+  // Prev period from fact_sku_daily
+  const prevDailyRows = prevFrom && prevTo
+    ? await fetchAll<Pick<DailyRow, 'sku_ms' | 'revenue'>>(
+        (sb) => sb.from('fact_sku_daily')
+          .select('sku_ms, revenue')
+          .gte('metric_date', prevFrom!).lte('metric_date', prevTo!),
+        supabase,
+      )
+    : []
+
+  // Агрегация предыдущего периода по SKU (только revenue для delta)
+  const prevRevByMs: Record<string, number> = {}
+  for (const r of prevDailyRows) {
+    prevRevByMs[r.sku_ms] = (prevRevByMs[r.sku_ms] ?? 0) + (r.revenue ?? 0)
+  }
+
+  // Агрегация daily по SKU
+  type DailyAgg = { revenue: number; ad_spend: number; drr: number[]; ctr: number[]; cr_cart: number[]; cr_order: number[]; cpm: number[]; days: number }
+  const dailyByMs: Record<string, DailyAgg> = {}
+  for (const r of dailyRows) {
+    if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = { revenue: 0, ad_spend: 0, drr: [], ctr: [], cr_cart: [], cr_order: [], cpm: [], days: 0 }
+    const d = dailyByMs[r.sku_ms]
+    d.revenue += r.revenue ?? 0
+    d.ad_spend += r.ad_spend ?? 0
+    if (r.drr_total != null) d.drr.push(r.drr_total)
+    if (r.ctr != null) d.ctr.push(r.ctr)
+    if (r.cr_cart != null) d.cr_cart.push(r.cr_cart)
+    if (r.cr_order != null) d.cr_order.push(r.cr_order)
+    if (r.cpm != null) d.cpm.push(r.cpm)
+    d.days++
+  }
 
   // Снапшот из fact_sku_snapshot (последняя snap_date)
   const { data: maxSnapRow } = await supabase.from('fact_sku_snapshot')
@@ -105,62 +148,13 @@ async function handler(req: NextRequest) {
     for (const r of snapRows) { if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = r }
   }
 
-
-  // fact_sku_daily — метрики за период
-  type DailyRow = {
-    sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null
-    drr_total: number | null; ctr: number | null; cr_cart: number | null
-    cr_order: number | null; cpm: number | null; cpc: number | null; ad_order_share: number | null
-  }
-  const [dailyRows, prevDailyRows] = await Promise.all([
-    effectiveFrom && effectiveTo
-      ? fetchAll<DailyRow>(
-          (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
-            .gte('metric_date', effectiveFrom!).lte('metric_date', effectiveTo!),
-          supabase,
-        )
-      : Promise.resolve([]),
-    prevFrom && prevTo
-      ? fetchAll<Pick<DailyRow, 'sku_ms' | 'revenue'>>(
-          (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, revenue')
-            .gte('metric_date', prevFrom!).lte('metric_date', prevTo!),
-          supabase,
-        )
-      : Promise.resolve([]),
-  ])
-
-  // Агрегация предыдущего периода по SKU (только revenue для delta)
-  const prevRevByMs: Record<string, number> = {}
-  for (const r of prevDailyRows) {
-    prevRevByMs[r.sku_ms] = (prevRevByMs[r.sku_ms] ?? 0) + (r.revenue ?? 0)
-  }
-
-  // Агрегация daily по SKU
-  const skuMsSet = new Set(skuMsList)
-  type DailyAgg = { revenue: number; ad_spend: number; drr: number[]; ctr: number[]; cr_cart: number[]; cr_order: number[]; cpm: number[]; days: number }
-  const dailyByMs: Record<string, DailyAgg> = {}
-  for (const r of dailyRows) {
-    if (!skuMsSet.has(r.sku_ms)) continue
-    if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = { revenue: 0, ad_spend: 0, drr: [], ctr: [], cr_cart: [], cr_order: [], cpm: [], days: 0 }
-    const d = dailyByMs[r.sku_ms]
-    d.revenue += r.revenue ?? 0
-    d.ad_spend += r.ad_spend ?? 0
-    if (r.drr_total != null) d.drr.push(r.drr_total)
-    if (r.ctr != null) d.ctr.push(r.ctr)
-    if (r.cr_cart != null) d.cr_cart.push(r.cr_cart)
-    if (r.cr_order != null) d.cr_order.push(r.cr_order)
-    if (r.cpm != null) d.cpm.push(r.cpm)
-    d.days++
-  }
-
   const avg = (arr: number[]) => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null
 
-  // Собираем строки
-  const rows = dimRows.map(sku => {
-    const skuSnap = snapByMs[sku.sku_ms]
-    const daily = dailyByMs[sku.sku_ms]
+  // Собираем строки — итерируем по skuMsList (из fact_sku_daily)
+  const rows = skuMsList.map(skuMs => {
+    const dim = dimByMs[skuMs]
+    const skuSnap = snapByMs[skuMs]
+    const daily = dailyByMs[skuMs]
 
     const fbo = skuSnap?.fbo_wb ?? 0
     const fbsPush = skuSnap?.fbs_pushkino ?? 0
@@ -199,11 +193,11 @@ async function handler(req: NextRequest) {
     })
 
     return {
-      sku: String(sku.sku_wb || sku.sku_ms),
-      sku_ms: sku.sku_ms,
-      name: sku.name ?? '',
+      sku: String(dim?.sku_wb ?? skuMs),
+      sku_ms: skuMs,
+      name: dim?.name ?? '',
       manager: '',
-      category: sku.category_wb ?? sku.subject_wb ?? '',
+      category: dim?.category_wb ?? dim?.subject_wb ?? '',
       revenue,
       margin_pct: marginPct,
       chmd,
@@ -221,7 +215,7 @@ async function handler(req: NextRequest) {
       cpo,
       forecast_30d: forecast30d,
       delta_revenue_pct: (() => {
-        const prev = prevRevByMs[sku.sku_ms]
+        const prev = prevRevByMs[skuMs]
         if (prev == null || prev === 0) return null
         return (revenue - prev) / prev
       })(),
@@ -233,8 +227,17 @@ async function handler(req: NextRequest) {
     }
   })
 
+  // Apply search filter in JS
+  const searchLower = search.toLowerCase()
+  const searchFiltered = search
+    ? rows.filter(r =>
+        r.sku_ms.toLowerCase().includes(searchLower) ||
+        r.name.toLowerCase().includes(searchLower)
+      )
+    : rows
+
   // Apply global filters (category, novelty)
-  const filteredRows = rows.filter(r => {
+  const filteredRows = searchFiltered.filter(r => {
     if (categoryFilter && r.category !== categoryFilter) return false
     if (noveltyFilter === 'Новинки'    && !r.novelty)   return false
     if (noveltyFilter === 'Не новинки' && r.novelty)   return false

@@ -11,38 +11,29 @@ export async function GET(req: NextRequest) {
   const seasonal = searchParams.get('seasonal') ?? 'all'
   const periodParam = searchParams.get('period') ?? ''
 
-  // A) Load available periods
-  const { data: periodRows } = await supabase
-    .from('fact_abc')
-    .select('period_month')
-    .not('period_month', 'is', null)
-    .order('period_month', { ascending: false })
+  // A) Load all successful ABC uploads with their periods
+  const { data: abcUploads } = await supabase
+    .from('uploads')
+    .select('id, period_start')
+    .eq('file_type', 'abc')
+    .eq('status', 'ok')
+    .not('period_start', 'is', null)
+    .order('period_start', { ascending: false })
 
-  const periodsSet = new Set<string>()
-  if (periodRows) {
-    for (const r of periodRows) {
-      if (r.period_month) periodsSet.add(r.period_month)
+  // Build ordered list of distinct periods and a map to the latest upload per period
+  const periods: string[] = []
+  const latestByPeriod: Record<string, string> = {}
+  for (const u of abcUploads ?? []) {
+    const p = u.period_start as string
+    if (!p) continue
+    if (!latestByPeriod[p]) {
+      latestByPeriod[p] = u.id
+      periods.push(p)
     }
   }
-  const periods = Array.from(periodsSet)
 
   const selectedPeriod = periodParam || periods[0] || null
-
-  // A) Find latest abc upload for the selected period
-  let abcId: string | null = null
-  if (selectedPeriod) {
-    const { data: uploadRows } = await supabase
-      .from('uploads')
-      .select('id')
-      .eq('file_type', 'abc')
-      .eq('status', 'ok')
-      .eq('period_start', selectedPeriod)
-      .order('uploaded_at', { ascending: false })
-      .limit(1)
-    if (uploadRows && uploadRows.length > 0) {
-      abcId = uploadRows[0].id
-    }
-  }
+  const abcId = selectedPeriod ? (latestByPeriod[selectedPeriod] ?? null) : null
 
   // dim_sku — все поля включая свод-данные и сезонность
   const dimRows = await fetchAll<{
