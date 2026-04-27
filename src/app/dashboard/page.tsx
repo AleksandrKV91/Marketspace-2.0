@@ -19,29 +19,39 @@ import UpdateTab    from '@/components/tabs/UpdateTab'
 // ── Error Boundary ─────────────────────────────────────────────────────────────
 class TabErrorBoundary extends Component<
   { children: React.ReactNode; tabId: string },
-  { error: string | null }
+  { error: string | null; stack: string | null }
 > {
   state = { error: null as string | null, stack: null as string | null }
   static getDerivedStateFromError(e: Error) { return { error: e.message, stack: e.stack ?? null } }
   componentDidCatch(e: Error, info: React.ErrorInfo) { console.error('[TabErrorBoundary]', e, info.componentStack) }
   render() {
     if (this.state.error) {
+      const fullText = `${this.state.error}\n\n${this.state.stack ?? ''}`
       return (
         <div className="py-16 text-center space-y-3">
           <p className="text-sm font-semibold" style={{ color: 'var(--danger)' }}>
             Ошибка рендера вкладки
           </p>
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{this.state.error}</p>
-          <pre className="text-[10px] text-left max-w-xl mx-auto overflow-auto max-h-40 mt-2 p-2 rounded" style={{ background: 'var(--surface)', color: 'var(--text-muted)' }}>
-            {this.state.stack?.split('\n').slice(0, 8).join('\n')}
+          <pre className="text-[10px] text-left max-w-2xl mx-auto overflow-auto max-h-80 mt-2 p-3 rounded whitespace-pre-wrap" style={{ background: 'var(--surface)', color: 'var(--text-muted)' }}>
+            {this.state.stack?.split('\n').slice(0, 20).join('\n')}
           </pre>
-          <button
-            className="px-4 py-2 rounded-xl text-xs font-medium"
-            style={{ background: 'var(--accent)', color: 'white' }}
-            onClick={() => this.setState({ error: null })}
-          >
-            Повторить
-          </button>
+          <div className="flex gap-2 justify-center">
+            <button
+              className="px-4 py-2 rounded-xl text-xs font-medium"
+              style={{ background: 'var(--accent)', color: 'white' }}
+              onClick={() => this.setState({ error: null, stack: null })}
+            >
+              Повторить
+            </button>
+            <button
+              className="px-4 py-2 rounded-xl text-xs font-medium"
+              style={{ background: 'var(--border)', color: 'var(--text-muted)' }}
+              onClick={() => navigator.clipboard.writeText(fullText)}
+            >
+              Скопировать стек
+            </button>
+          </div>
         </div>
       )
     }

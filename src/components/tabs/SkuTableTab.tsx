@@ -86,9 +86,9 @@ export default function SkuTableTab() {
   const { filters } = useGlobalFilters()
   const { pending, setPending } = usePendingFilter()
 
-  // Build cache key
+  // Build cache key (defensive: fall back to empty strings if range somehow lacks fields)
   function makeCacheKey(extra?: Record<string, string>) {
-    const p = new URLSearchParams({ from: range.from, to: range.to })
+    const p = new URLSearchParams({ from: range?.from ?? '', to: range?.to ?? '' })
     if (filters.category) p.set('category', filters.category)
     if (filters.manager)  p.set('manager', filters.manager)
     if (filters.novelty)  p.set('gnovelty', filters.novelty)
@@ -154,6 +154,7 @@ export default function SkuTableTab() {
 
   // Fetch data
   useEffect(() => {
+    if (!range?.from || !range?.to) return  // wait for DateRangeProvider to settle
     const p = new URLSearchParams({ from: range.from, to: range.to })
     if (filters.category) p.set('category', filters.category)
     if (filters.manager)  p.set('manager', filters.manager)
