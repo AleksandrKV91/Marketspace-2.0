@@ -48,9 +48,15 @@ const MONTH_MAP: Record<string, string> = {
 
 function excelSerialToYearMonth(serial: number): string {
   const date = new Date((serial - 25569) * 86400 * 1000)
-  const y = date.getUTCFullYear()
-  const m = String(date.getUTCMonth() + 1).padStart(2, '0')
-  return `${y}-${m}-01`
+  let y = date.getUTCFullYear()
+  let m = date.getUTCMonth() + 1  // 1-12
+  // Russian ABC reports label qty columns as the 1st of the NEXT month —
+  // "количество за январь" → column header date = Feb 1. Step back by one month.
+  if (date.getUTCDate() === 1) {
+    m--
+    if (m === 0) { m = 12; y-- }
+  }
+  return `${y}-${String(m).padStart(2, '0')}-01`
 }
 
 function isExcelDateSerial(v: unknown): v is number {
