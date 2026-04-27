@@ -32,9 +32,11 @@ async function handler(req: NextRequest) {
     brand: string | null; subject_wb: string | null; category_wb: string | null
   }
   const dimByMs: Record<string, DimRow> = {}
-  const { data: dimData } = await supabase.from('dim_sku')
-    .select('sku_ms, sku_wb, name, brand, subject_wb, category_wb')
-  if (dimData) for (const r of dimData) dimByMs[r.sku_ms] = r
+  const dimData = await fetchAll<DimRow>(
+    (sb) => sb.from('dim_sku').select('sku_ms, sku_wb, name, brand, subject_wb, category_wb'),
+    supabase,
+  )
+  for (const r of dimData) dimByMs[r.sku_ms] = r
 
   // ── 2. fact_sku_daily — snap data (latest snap_date) ─────────────────────
   // Same approach as orders/analytics routes — sku_wb comes from here

@@ -131,7 +131,6 @@ export async function GET(req: Request) {
   const skuAgg: Record<string, { revenue: number; ad_spend: number }> = {}
 
   for (const r of currDailyRows) {
-    if (!dimByMs[r.sku_ms]) continue  // only count SKUs that exist in dim_sku
     const rev   = r.revenue   ?? 0
     const spend = r.ad_spend  ?? 0
     const mPct  = snapByMs[r.sku_ms]?.margin_pct ?? 0

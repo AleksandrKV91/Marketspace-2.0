@@ -859,8 +859,8 @@ export default function NicheTab() {
 
       {/* ── Table ── */}
       <div className="px-6">
-        <GlassCard padding="none">
-          <div style={{ overflowX: 'auto', isolation: 'auto' }}>
+        <GlassCard padding="none" style={{ isolation: 'auto' }}>
+          <div style={{ overflowX: 'clip' }}>
 
             {/* ── Hierarchy Mode ── */}
             {viewMode === 'hierarchy' && (

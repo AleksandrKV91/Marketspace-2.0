@@ -628,8 +628,7 @@ export default function SkuTableTab() {
                     <th className="px-2 py-2 font-medium whitespace-nowrap" style={{ color: sortKey === 'score' ? 'var(--accent)' : 'var(--text-subtle)', fontSize: 11, cursor: 'pointer' }} onClick={() => toggleSort('score')}>
                       <span className="inline-flex items-center gap-0.5">Score <SortIcon active={sortKey === 'score'} dir={sortDir} /></span>
                     </th>
-                    <th className="text-left px-2 py-2 font-medium" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>SKU</th>
-                    <th className="text-left px-2 py-2 font-medium max-w-[140px]" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>Название</th>
+                    <th className="text-left px-2 py-2 font-medium" style={{ color: 'var(--text-subtle)', fontSize: 11, minWidth: 180 }}>SKU / Название</th>
                     <th className="text-left px-2 py-2 font-medium max-w-[80px]" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>Менеджер</th>
                     <th className="text-left px-2 py-2 font-medium" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>Категория</th>
                     <Th label="Выручка"    sortKey="revenue"     current={sortKey} dir={sortDir} onClick={toggleSort} />
@@ -647,7 +646,7 @@ export default function SkuTableTab() {
                 <tbody>
                   {loading && Array.from({ length: 10 }).map((_, i) => (
                     <tr key={i} className="border-t" style={{ borderColor: 'var(--border)' }}>
-                      {Array.from({ length: 16 }).map((__, j) => (
+                      {Array.from({ length: 15 }).map((__, j) => (
                         <td key={j} className="px-2 py-1.5"><div className="skeleton h-3 w-full" /></td>
                       ))}
                     </tr>
@@ -675,11 +674,10 @@ export default function SkuTableTab() {
                         </td>
                         {/* Score */}
                         <td className="px-2 py-1"><ScoreBadge score={row.score} size="sm" /></td>
-                        {/* SKU */}
-                        <td className="px-2 py-1 font-mono whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>{row.sku}</td>
-                        {/* Name */}
-                        <td className="px-2 py-1 max-w-[140px]">
-                          <span className="block truncate" title={row.name} style={{ color: 'var(--text)' }}>{row.name}</span>
+                        {/* SKU / Name combined */}
+                        <td className="px-2 py-1" style={{ minWidth: 180 }}>
+                          <span className="block font-mono text-[10px] whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>{row.sku}</span>
+                          <span className="block truncate text-[11px]" title={row.name} style={{ color: 'var(--text)' }}>{row.name}</span>
                           {row.novelty && <span className="text-[10px] px-1 rounded" style={{ background: 'var(--info-bg)', color: 'var(--info)' }}>Новинка</span>}
                         </td>
                         {/* Manager */}

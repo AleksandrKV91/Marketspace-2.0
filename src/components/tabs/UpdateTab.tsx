@@ -56,7 +56,12 @@ async function uploadViaStorage(
   try {
     const res = await fetch(`/api/upload/${type}`, { method: 'POST', body: form })
     onProgress(90)
-    const json = await res.json()
+    let json: { ok?: boolean; rows_parsed?: number; rows_skipped?: number; diag_skipped_skus?: string[]; unknown_skus?: string[]; error?: string }
+    try {
+      json = await res.json()
+    } catch {
+      return { ok: false, error: res.status === 413 ? 'Файл слишком большой для загрузки' : `Сервер вернул ошибку ${res.status}` }
+    }
     if (res.ok && json.ok) {
       return {
         ok: true,
