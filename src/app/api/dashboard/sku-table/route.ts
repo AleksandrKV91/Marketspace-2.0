@@ -94,6 +94,21 @@ async function handler(req: NextRequest) {
     .in('sku_ms', skuMsList)
   if (dimData) for (const r of dimData) dimByMs[r.sku_ms] = r
 
+  // daily_agg_sku — reliable sku_wb mapping (latest date)
+  const skuWbByMs: Record<string, number> = {}
+  const { data: maxAggDateRow } = await supabase.from('daily_agg_sku')
+    .select('metric_date').order('metric_date', { ascending: false }).limit(1)
+  const maxAggDate = maxAggDateRow?.[0]?.metric_date
+  if (maxAggDate) {
+    const { data: aggData } = await supabase.from('daily_agg_sku')
+      .select('sku_ms, sku_wb')
+      .eq('metric_date', maxAggDate)
+      .in('sku_ms', skuMsList)
+    if (aggData) for (const r of aggData) {
+      if (r.sku_wb && !skuWbByMs[r.sku_ms]) skuWbByMs[r.sku_ms] = r.sku_wb
+    }
+  }
+
   // Prev period from fact_sku_daily
   const prevDailyRows = prevFrom && prevTo
     ? await fetchAll<Pick<DailyRow, 'sku_ms' | 'revenue'>>(
@@ -193,7 +208,7 @@ async function handler(req: NextRequest) {
     })
 
     return {
-      sku: String(dim?.sku_wb ?? skuMs),
+      sku: String(skuWbByMs[skuMs] ?? dim?.sku_wb ?? skuMs),
       sku_ms: skuMs,
       name: dim?.name ?? '',
       manager: '',
