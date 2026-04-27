@@ -268,9 +268,9 @@ const SEGS_2 = ['AA','AB','AC','BA','BB','BC','CA','CB','CC','A|н/д','B|н/д'
 
 const ABC_COLORS_ALL: Record<string, string> = {
   'AA': '#15803d', 'AB': '#16a34a', 'AC': '#22c55e',
-  'BA': '#92400e', 'BB': '#b45309', 'BC': '#d97706',
+  'BA': '#a16207', 'BB': '#ca8a04', 'BC': '#eab308',
   'CA': '#991b1b', 'CB': '#b91c1c', 'CC': '#ef4444',
-  'A|н/д': '#86efac', 'B|н/д': '#fde68a', 'C|н/д': '#fca5a5',
+  'A|н/д': '#86efac', 'B|н/д': '#fef08a', 'C|н/д': '#fca5a5',
   'убыток|A': '#7f1d1d', 'убыток|B': '#7c2d12', 'убыток|C': '#4c0519',
   'убыток|н/д': '#44403c',
 }
@@ -389,7 +389,6 @@ function AbcBarChmd({ rows }: { rows: NicheRow[] }) {
       <div className="px-4 pt-3 pb-3">
         <AbcCardHeader title="ABC: ЧМД / Выручка" mode={mode} setMode={setMode} />
         <OneBar rows={rows} getKey={s => normSeg1(s.final_class_1)} segments={SEGS_1} mode={mode} />
-        <AbcLegend segments={SEGS_1} />
       </div>
     </GlassCard>
   )
@@ -402,7 +401,6 @@ function AbcBarRent({ rows }: { rows: NicheRow[] }) {
       <div className="px-4 pt-3 pb-3">
         <AbcCardHeader title="ABC: Рент. / Оборот" mode={mode} setMode={setMode} />
         <OneBar rows={rows} getKey={s => normSeg2(s.final_class_2)} segments={SEGS_2} mode={mode} />
-        <AbcLegend segments={SEGS_2} />
       </div>
     </GlassCard>
   )
@@ -511,6 +509,19 @@ export default function NicheTab() {
   // View mode
   const [viewMode, setViewMode] = useState<'hierarchy' | 'list'>('hierarchy')
   const [pageSize, setPageSize] = useState<50 | 100 | 'all'>(50)
+
+  // Dynamic sticky header top — tracks filter bar height
+  const filterBarRef = useRef<HTMLDivElement>(null)
+  const [theadTop, setTheadTop] = useState(228)
+  useEffect(() => {
+    const el = filterBarRef.current
+    if (!el) return
+    const update = () => setTheadTop(180 + el.offsetHeight)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // Fetch on period change (with module-level cache)
   useEffect(() => {
@@ -742,6 +753,7 @@ export default function NicheTab() {
         style={{ position: 'sticky', top: 180, zIndex: 29 }}
       >
         <div
+          ref={filterBarRef}
           className="py-2 flex flex-wrap gap-2 items-center"
           style={{ background: 'var(--surface-solid)', backdropFilter: 'blur(12px)' }}
         >
@@ -846,7 +858,7 @@ export default function NicheTab() {
                     style={{
                       borderColor: 'var(--border)',
                       position: 'sticky',
-                      top: 228,
+                      top: theadTop,
                       zIndex: 28,
                       background: 'var(--surface-solid)',
                       backdropFilter: 'blur(12px)',
