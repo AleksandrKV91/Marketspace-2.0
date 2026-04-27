@@ -510,18 +510,30 @@ export default function NicheTab() {
   const [viewMode, setViewMode] = useState<'hierarchy' | 'list'>('hierarchy')
   const [pageSize, setPageSize] = useState<50 | 100 | 'all'>(50)
 
-  // Dynamic sticky header top — tracks filter bar height
-  const filterBarRef = useRef<HTMLDivElement>(null)
-  const [theadTop, setTheadTop] = useState(228)
+  // Dynamic sticky layout — measure all sticky bars (same approach as AnalyticsTab)
+  const kpiBarRef     = useRef<HTMLDivElement>(null)
+  const summaryBarRef = useRef<HTMLDivElement>(null)
+  const filterBarRef  = useRef<HTMLDivElement>(null)
+  const [stickyTop, setStickyTop] = useState({ kpi: 88, summary: 132, filter: 180, thead: 228 })
+
   useEffect(() => {
-    const el = filterBarRef.current
-    if (!el) return
-    const update = () => setTheadTop(180 + el.offsetHeight)
-    update()
-    const ro = new ResizeObserver(update)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
+    function measure() {
+      const nav     = document.querySelector('header.top-nav') as HTMLElement | null
+      const navH    = nav ? nav.getBoundingClientRect().height : 88
+      const kpiH    = kpiBarRef.current    ? kpiBarRef.current.getBoundingClientRect().height    : 44
+      const summaryH = summaryBarRef.current ? summaryBarRef.current.getBoundingClientRect().height : 48
+      const filterH  = filterBarRef.current  ? filterBarRef.current.getBoundingClientRect().height  : 48
+      setStickyTop({
+        kpi:     navH,
+        summary: navH + kpiH,
+        filter:  navH + kpiH + summaryH,
+        thead:   navH + kpiH + summaryH + filterH,
+      })
+    }
+    const t = setTimeout(() => requestAnimationFrame(measure), 100)
+    window.addEventListener('resize', measure)
+    return () => { clearTimeout(t); window.removeEventListener('resize', measure) }
+  }, [loading])
 
   // Fetch on period change (with module-level cache)
   useEffect(() => {
@@ -652,7 +664,7 @@ export default function NicheTab() {
     <div className="py-6 space-y-4" style={{ position: 'relative' }}>
 
       {/* ── KPI ── */}
-      <div className="px-6" style={{ position: 'sticky', top: 88, zIndex: 31, background: 'var(--bg, var(--surface-solid))' }}>
+      <div ref={kpiBarRef} className="px-6" style={{ position: 'sticky', top: stickyTop.kpi, zIndex: 31, background: 'var(--bg, var(--surface-solid))' }}>
         <KPIBar loading={loading} items={[
           {
             label: 'Ср. привлекательность',
@@ -693,8 +705,9 @@ export default function NicheTab() {
 
       {/* ── Summary bar (sticky) ── */}
       <div
+        ref={summaryBarRef}
         className="px-6"
-        style={{ position: 'sticky', top: 132, zIndex: 30 }}
+        style={{ position: 'sticky', top: stickyTop.summary, zIndex: 30 }}
       >
         <div
           className="glass px-4 py-2.5 flex items-center gap-3 flex-wrap text-sm"
@@ -750,7 +763,7 @@ export default function NicheTab() {
       {/* ── Filter bar (sticky) ── */}
       <div
         className="px-6"
-        style={{ position: 'sticky', top: 180, zIndex: 29 }}
+        style={{ position: 'sticky', top: stickyTop.filter, zIndex: 29 }}
       >
         <div
           ref={filterBarRef}
@@ -847,7 +860,7 @@ export default function NicheTab() {
       {/* ── Table ── */}
       <div className="px-6">
         <GlassCard padding="none">
-          <div style={{ overflowX: 'auto' }}>
+          <div style={{ overflowX: 'auto', isolation: 'auto' }}>
 
             {/* ── Hierarchy Mode ── */}
             {viewMode === 'hierarchy' && (
@@ -858,7 +871,7 @@ export default function NicheTab() {
                     style={{
                       borderColor: 'var(--border)',
                       position: 'sticky',
-                      top: theadTop,
+                      top: stickyTop.thead,
                       zIndex: 28,
                       background: 'var(--surface-solid)',
                       backdropFilter: 'blur(12px)',
