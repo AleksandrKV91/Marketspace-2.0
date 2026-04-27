@@ -67,11 +67,15 @@ export async function POST(req: NextRequest) {
 
   // Upsert into fact_analytics (overwrite mode — conflict on sku_ms only)
   for (const batch of chunk(deduped, 500)) {
-    const payload = batch.map(r => ({
-      ...r,
-      upload_id: uploadId,
-      uploaded_at: new Date().toISOString(),
-    }))
+    const payload = batch.map(r => {
+      const { unknown_skus: _drop, ...rest } = r as typeof r & { unknown_skus?: unknown }
+      void _drop
+      return {
+        ...rest,
+        upload_id: uploadId,
+        uploaded_at: new Date().toISOString(),
+      }
+    })
     const { error } = await supabase
       .from('fact_analytics')
       .upsert(payload, { onConflict: 'sku_ms' })

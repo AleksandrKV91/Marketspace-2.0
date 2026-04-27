@@ -51,13 +51,28 @@ const DateRangeContext = createContext<DateRangeCtx>({
   setRange: () => {},
 })
 
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+function isValidRange(v: unknown): v is DateRange {
+  if (!v || typeof v !== 'object') return false
+  const r = v as Partial<DateRange>
+  return typeof r.from === 'string' && typeof r.to === 'string'
+    && ISO_DATE_RE.test(r.from) && ISO_DATE_RE.test(r.to)
+}
+
 export function DateRangeProvider({ children }: { children: React.ReactNode }) {
   const [range, setRangeState] = useState<DateRange>(() => {
     if (typeof window === 'undefined') return defaultRange()
     try {
       const saved = localStorage.getItem('dashDateRange')
-      if (saved) return JSON.parse(saved) as DateRange
-    } catch {}
+      if (saved) {
+        const parsed = JSON.parse(saved) as unknown
+        if (isValidRange(parsed)) return parsed
+        localStorage.removeItem('dashDateRange')
+      }
+    } catch {
+      try { localStorage.removeItem('dashDateRange') } catch {}
+    }
     return defaultRange()
   })
 

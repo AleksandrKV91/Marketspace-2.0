@@ -332,52 +332,69 @@ function OneBar({ rows, getKey, segments, mode }: {
   )
 }
 
-function AbcStackedBar({ rows }: { rows: NicheRow[] }) {
-  const [mode, setMode] = useState<'revenue' | 'sku'>('revenue')
+function AbcCardHeader({ title, mode, setMode }: {
+  title: string
+  mode: 'revenue' | 'sku'
+  setMode: (m: 'revenue' | 'sku') => void
+}) {
+  return (
+    <div className="flex items-center justify-between mb-3">
+      <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-subtle)' }}>
+        {title}
+      </p>
+      <div className="flex gap-1">
+        {(['revenue', 'sku'] as const).map(m => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            className="text-[10px] px-2 py-0.5 rounded-lg font-medium"
+            style={{
+              background: mode === m ? 'var(--accent)' : 'var(--border)',
+              color: mode === m ? 'white' : 'var(--text-muted)',
+            }}
+          >
+            {m === 'revenue' ? 'Выручка' : 'SKU'}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
+function AbcLegend({ segments }: { segments: readonly string[] }) {
+  return (
+    <div className="flex flex-wrap gap-x-2 gap-y-1 mt-3">
+      {segments.map(seg => (
+        <div key={seg} className="flex items-center gap-1">
+          <div className="w-2 h-2 rounded-sm" style={{ background: ABC_COLORS_ALL[seg] }} />
+          <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{seg}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function AbcBarChmd({ rows }: { rows: NicheRow[] }) {
+  const [mode, setMode] = useState<'revenue' | 'sku'>('revenue')
   return (
     <GlassCard padding="none">
       <div className="px-4 pt-3 pb-3">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-subtle)' }}>
-            ABC-структура портфеля
-          </p>
-          <div className="flex gap-1">
-            {(['revenue', 'sku'] as const).map(m => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className="text-[10px] px-2 py-0.5 rounded-lg font-medium"
-                style={{
-                  background: mode === m ? 'var(--accent)' : 'var(--border)',
-                  color: mode === m ? 'white' : 'var(--text-muted)',
-                }}
-              >
-                {m === 'revenue' ? 'Выручка' : 'SKU'}
-              </button>
-            ))}
-          </div>
-        </div>
+        <AbcCardHeader title="ABC: ЧМД / Выручка" mode={mode} setMode={setMode} />
+        <OneBar rows={rows} getKey={s => normSeg1(s.final_class_1)} segments={SEGS_1} mode={mode} />
+        <AbcLegend segments={SEGS_1} />
+      </div>
+    </GlassCard>
+  )
+}
 
-        <div className="space-y-2">
-          <div>
-            <p className="text-[10px] mb-1 font-medium" style={{ color: 'var(--text-subtle)' }}>ЧМД / Выручка</p>
-            <OneBar rows={rows} getKey={s => normSeg1(s.final_class_1)} segments={SEGS_1} mode={mode} />
-          </div>
-          <div>
-            <p className="text-[10px] mb-1 font-medium" style={{ color: 'var(--text-subtle)' }}>Рент. / Об.</p>
-            <OneBar rows={rows} getKey={s => normSeg2(s.final_class_2)} segments={SEGS_2} mode={mode} />
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-x-2 gap-y-1 mt-3">
-          {['AA','AB','AC','BA','BB','BC','CA','CB','CC','A|н/д','B|н/д','C|н/д','убыток|A','убыток|B','убыток|C','убыток|н/д'].map(seg => (
-            <div key={seg} className="flex items-center gap-1">
-              <div className="w-2 h-2 rounded-sm" style={{ background: ABC_COLORS_ALL[seg] }} />
-              <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{seg}</span>
-            </div>
-          ))}
-        </div>
+function AbcBarRent({ rows }: { rows: NicheRow[] }) {
+  const [mode, setMode] = useState<'revenue' | 'sku'>('revenue')
+  return (
+    <GlassCard padding="none">
+      <div className="px-4 pt-3 pb-3">
+        <AbcCardHeader title="ABC: Рент. / Оборот" mode={mode} setMode={setMode} />
+        <OneBar rows={rows} getKey={s => normSeg2(s.final_class_2)} segments={SEGS_2} mode={mode} />
+        <AbcLegend segments={SEGS_2} />
       </div>
     </GlassCard>
   )
@@ -641,11 +658,12 @@ export default function NicheTab() {
         ]} />
       </div>
 
-      {/* ── Charts 1x2 ── */}
+      {/* ── Charts: Heatmap + 2 ABC bars ── */}
       {!loading && (
-        <div className="px-6 grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="px-6 grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
           <SeasonHeatmap rows={filteredRows} />
-          <AbcStackedBar rows={filteredRows} />
+          <AbcBarChmd rows={filteredRows} />
+          <AbcBarRent rows={filteredRows} />
         </div>
       )}
 

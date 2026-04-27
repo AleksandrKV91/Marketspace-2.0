@@ -160,42 +160,65 @@ function UploadCard({
       )}
 
       {(state.status === 'ok' || state.status === 'error') && (
-        <div className="mt-3 space-y-1.5">
-          <div className="text-xs text-gray-400 dark:text-gray-500 flex gap-4">
+        <div className="mt-3 space-y-2">
+          <div className="text-xs text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-3 gap-y-1 items-center">
             {state.lastAt && <span>{state.lastAt}</span>}
-            {state.rowsCount !== undefined && <span>{state.rowsCount} строк</span>}
-            {state.rowsSkipped !== undefined && state.rowsSkipped > 0 && (
-              <span className="text-amber-500">{state.rowsSkipped} пропущено</span>
+            {state.rowsCount !== undefined && (
+              <>
+                <span className="text-gray-300 dark:text-gray-600">·</span>
+                <span>{state.rowsCount} строк</span>
+              </>
             )}
-            {state.detail && (
-              <span
-                className="text-red-400 truncate max-w-xs cursor-help"
-                title={state.detail}
-              >
-                {state.detail}
-              </span>
+            {state.rowsSkipped !== undefined && state.rowsSkipped > 0 && (
+              <>
+                <span className="text-gray-300 dark:text-gray-600">·</span>
+                <span className="text-amber-600 dark:text-amber-400 font-medium">{state.rowsSkipped} пропущено</span>
+              </>
             )}
           </div>
+          {state.detail && (
+            <div className="text-xs text-red-500 dark:text-red-400 p-2 rounded-lg bg-red-50 dark:bg-red-900/15 break-words whitespace-pre-wrap">
+              {state.detail}
+            </div>
+          )}
           {state.skippedSkus && state.skippedSkus.length > 0 && (
             <div className="mt-3 p-3 rounded-xl border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-900/15">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+              <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">
                   Артикулы, добавленные как заглушки ({state.skippedSkus.length})
                 </p>
-                <button
-                  onClick={() => navigator.clipboard.writeText(state.skippedSkus!.join('\n'))}
-                  className="text-xs px-2 py-1 rounded-lg bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-300"
-                >
-                  Скопировать список
-                </button>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => navigator.clipboard.writeText(state.skippedSkus!.join('\n'))}
+                    className="text-xs px-2.5 py-1 rounded-lg bg-white dark:bg-white/10 text-gray-700 dark:text-gray-200 border border-amber-200 dark:border-amber-500/30 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors"
+                  >
+                    Скопировать ({state.skippedSkus.length})
+                  </button>
+                  <button
+                    onClick={() => {
+                      const blob = new Blob([state.skippedSkus!.join('\n')], { type: 'text/plain;charset=utf-8' })
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = url
+                      a.download = `skipped_skus_${new Date().toISOString().slice(0, 10)}.txt`
+                      a.click()
+                      URL.revokeObjectURL(url)
+                    }}
+                    className="text-xs px-2.5 py-1 rounded-lg bg-white dark:bg-white/10 text-gray-700 dark:text-gray-200 border border-amber-200 dark:border-amber-500/30 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors"
+                  >
+                    Скачать .txt
+                  </button>
+                </div>
               </div>
-              <p className="text-xs mb-2 text-gray-500 dark:text-gray-400">
+              <p className="text-xs mb-2 text-gray-600 dark:text-gray-400">
                 Эти артикулы отсутствовали в Своде — созданы автоматически. Добавьте их в Свод для полных данных.
               </p>
-              <div className="max-h-40 overflow-y-auto space-y-0.5">
-                {state.skippedSkus.map(sku => (
-                  <p key={sku} className="font-mono text-[11px] text-gray-500 dark:text-gray-400">{sku}</p>
-                ))}
+              <div className="max-h-72 overflow-y-auto p-2 rounded-lg bg-white/60 dark:bg-black/20 border border-amber-200/50 dark:border-amber-500/20">
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-x-3 gap-y-0.5">
+                  {state.skippedSkus.map(sku => (
+                    <p key={sku} className="font-mono text-xs text-gray-700 dark:text-gray-300 truncate" title={sku}>{sku}</p>
+                  ))}
+                </div>
               </div>
             </div>
           )}
@@ -271,10 +294,11 @@ export default function UpdateTab() {
     abc: 'АВС анализ',
     china: 'Потребность Китай',
     sku_report: 'Отчёт по SKU',
+    analytics: 'Аналитика',
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
+    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-[#1A1A2E] dark:text-white mb-1">
           Обновление данных
