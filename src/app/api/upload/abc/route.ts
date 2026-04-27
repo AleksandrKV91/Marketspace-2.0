@@ -90,13 +90,16 @@ export async function POST(req: NextRequest) {
   const aggregated = aggregateBySkuMs(parsed.rows)
   const skippedVariants = parsed.rows.length - aggregated.length
 
+  // Upsert dim_sku: create stubs for new SKUs, update name for all
+  const dimUpdates = aggregated
+    .filter(r => r.product_name)
+    .map(r => ({ sku_ms: r.sku_ms, name: r.product_name! }))
+  for (const batch of chunk(dimUpdates, 500)) {
+    await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
+  }
+
   const knownSkus = await loadKnownSkus(supabase)
   const unknownList = aggregated.filter(r => !knownSkus.has(r.sku_ms))
-
-  if (unknownList.length > 0) {
-    const stubs = unknownList.map(r => ({ sku_ms: r.sku_ms, name: r.product_name ?? r.sku_ms }))
-    await supabase.from('dim_sku').upsert(stubs, { onConflict: 'sku_ms', ignoreDuplicates: true })
-  }
 
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')
@@ -127,7 +130,7 @@ export async function POST(req: NextRequest) {
     upload_id: uploadId,
     period_month: parsed.period_month,
     rows_parsed: aggregated.length,
-    rows_skipped: parsed.rows_skipped + skippedVariants,
+    rows_skipped: parsed.rows_skipped,
     skipped_variants: skippedVariants,
     unknown_skus: unknownList.map(r => r.sku_ms),
   })

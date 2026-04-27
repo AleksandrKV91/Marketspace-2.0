@@ -87,6 +87,14 @@ export async function POST(req: NextRequest) {
     if (error) console.error('fact_price_changes upsert error:', error.message)
   }
 
+  // Update dim_sku.sku_wb for any SKUs where it is missing
+  const wbUpdates = [...new Map(
+    dedupedDaily.filter(r => r.sku_wb != null).map(r => [r.sku_ms, { sku_ms: r.sku_ms, sku_wb: r.sku_wb! }])
+  ).values()]
+  for (const batch of chunk(wbUpdates, 500)) {
+    await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
+  }
+
   // Пересчитываем daily_agg_sku → fact_daily_agg (fire-and-forget)
   const aggFrom = dates[0] ?? null
   const aggTo = dates[dates.length - 1] ?? null

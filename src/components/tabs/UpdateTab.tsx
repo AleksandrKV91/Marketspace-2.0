@@ -14,6 +14,7 @@ interface UploadState {
   lastAt?: string
   rowsCount?: number
   rowsSkipped?: number
+  variantsAggregated?: number
   skippedSkus?: string[]
 }
 
@@ -49,14 +50,14 @@ async function uploadViaStorage(
   type: FileType,
   file: File,
   onProgress: (pct: number) => void
-): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_skus?: string[]; unknown_skus?: string[]; error?: string }> {
+): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_variants?: number; skipped_skus?: string[]; unknown_skus?: string[]; error?: string }> {
   onProgress(20)
   const form = new FormData()
   form.append('file', file, file.name)
   try {
     const res = await fetch(`/api/upload/${type}`, { method: 'POST', body: form })
     onProgress(90)
-    let json: { ok?: boolean; rows_parsed?: number; rows_skipped?: number; diag_skipped_skus?: string[]; unknown_skus?: string[]; error?: string }
+    let json: { ok?: boolean; rows_parsed?: number; rows_skipped?: number; skipped_variants?: number; diag_skipped_skus?: string[]; unknown_skus?: string[]; error?: string }
     try {
       json = await res.json()
     } catch {
@@ -67,6 +68,7 @@ async function uploadViaStorage(
         ok: true,
         rows_parsed: json.rows_parsed,
         rows_skipped: json.rows_skipped,
+        skipped_variants: json.skipped_variants,
         skipped_skus: json.diag_skipped_skus,
         unknown_skus: json.unknown_skus,
       }
@@ -172,6 +174,12 @@ function UploadCard({
               <>
                 <span className="text-gray-300 dark:text-gray-600">·</span>
                 <span>{state.rowsCount} строк</span>
+              </>
+            )}
+            {state.variantsAggregated !== undefined && state.variantsAggregated > 0 && (
+              <>
+                <span className="text-gray-300 dark:text-gray-600">·</span>
+                <span className="text-blue-600 dark:text-blue-400 font-medium">{state.variantsAggregated} вариантов размеров объединено</span>
               </>
             )}
             {state.rowsSkipped !== undefined && state.rowsSkipped > 0 && (
@@ -280,6 +288,7 @@ export default function UpdateTab() {
         lastAt: now,
         rowsCount: result.rows_parsed,
         rowsSkipped: result.rows_skipped,
+        variantsAggregated: result.skipped_variants,
         skippedSkus: result.unknown_skus ?? result.skipped_skus ?? [],
         detail: undefined,
       })

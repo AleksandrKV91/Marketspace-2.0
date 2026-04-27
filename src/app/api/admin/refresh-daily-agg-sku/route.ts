@@ -147,7 +147,7 @@ export async function POST(req: NextRequest) {
         ? revenue / price
         : null
 
-      const costSum = revenue > 0 ? revenue * (1 - marginPct / 100) : null
+      const costSum = revenue > 0 ? revenue * (1 - marginPct) : null
       const costUnit = costSum != null && salesQty != null && salesQty > 0
         ? costSum / salesQty
         : null
