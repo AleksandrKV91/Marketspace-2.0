@@ -6,6 +6,18 @@ import { computeScore } from '@/lib/scoring'
 export const maxDuration = 60
 
 export async function GET(req: NextRequest) {
+  try {
+    return await handler(req)
+  } catch (e) {
+    console.error('[sku-table]', e)
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : String(e) },
+      { status: 500 },
+    )
+  }
+}
+
+async function handler(req: NextRequest) {
   const supabase = createServiceClient()
   const { searchParams } = new URL(req.url)
   const search = (searchParams.get('search') ?? '').trim()
@@ -81,23 +93,22 @@ export async function GET(req: NextRequest) {
 
   const skuMsList = dimRows.map(r => r.sku_ms)
 
-  // Снапшот из fact_sku_daily (последняя snap_date)
-  const { data: maxSnapRow } = await supabase.from('fact_sku_daily')
+  // Снапшот из fact_sku_snapshot (последняя snap_date)
+  const { data: maxSnapRow } = await supabase.from('fact_sku_snapshot')
     .select('snap_date').not('snap_date', 'is', null)
     .order('snap_date', { ascending: false }).limit(1)
   const maxSnapDate = maxSnapRow?.[0]?.snap_date
 
   type SnapRow = {
-    sku_ms: string; margin_pct: number | null; chmd_5d: number | null
-    stock_days: number | null; novelty_status: string | null; manager: string | null
-    price: number | null; fbo_wb: number | null; fbs_pushkino: number | null
-    fbs_smolensk: number | null; kits_stock: number | null
+    sku_ms: string
+    fbo_wb: number | null
+    fbs_pushkino: number | null
   }
   const snapByMs: Record<string, SnapRow> = {}
   if (maxSnapDate) {
     const snapRows = await fetchAll<SnapRow>(
-      (sb) => sb.from('fact_sku_daily')
-        .select('sku_ms, margin_pct, chmd_5d, stock_days, novelty_status, manager, price, fbo_wb, fbs_pushkino, fbs_smolensk, kits_stock')
+      (sb) => sb.from('fact_sku_snapshot')
+        .select('sku_ms, fbo_wb, fbs_pushkino')
         .eq('snap_date', maxSnapDate),
       supabase,
     )
@@ -174,9 +185,7 @@ export async function GET(req: NextRequest) {
 
     const fbo = skuSnap?.fbo_wb ?? 0
     const fbsPush = skuSnap?.fbs_pushkino ?? 0
-    const fbsSmol = skuSnap?.fbs_smolensk ?? 0
-    const kits = skuSnap?.kits_stock ?? 0
-    const totalStock = fbo + fbsPush + fbsSmol + kits
+    const totalStock = fbo + fbsPush
 
     const revenue = daily?.revenue ?? 0
     const adSpend = daily?.ad_spend ?? 0
@@ -186,14 +195,13 @@ export async function GET(req: NextRequest) {
     const cr_order = avg(daily?.cr_order ?? [])
     const cpo = daily && daily.days > 0 && adSpend > 0 ? adSpend / daily.days : null
 
-    const price = skuSnap?.price ?? null
     // Прогноз 30д в рублях = (выручка за период / кол-во дней) × 30
     const forecast30d = daily && daily.days > 0
       ? Math.round((revenue / daily.days) * 30)
       : null
-    const marginPct = skuSnap?.margin_pct ?? 0
-    const chmd = skuSnap?.chmd_5d ?? 0
-    const stockDays = skuSnap?.stock_days ?? 0
+    const marginPct = 0
+    const chmd = 0
+    const stockDays = 0
     const abcClass = abc?.abc_class ?? null
 
     const oos_status: 'critical' | 'warning' | 'ok' =
@@ -216,7 +224,7 @@ export async function GET(req: NextRequest) {
       sku: String(sku.sku_wb || sku.sku_ms),
       sku_ms: sku.sku_ms,
       name: sku.name ?? '',
-      manager: skuSnap?.manager ?? '',
+      manager: '',
       category: sku.category_wb ?? sku.subject_wb ?? '',
       revenue,
       margin_pct: marginPct,
@@ -228,10 +236,10 @@ export async function GET(req: NextRequest) {
       stock_qty: totalStock,
       fbo_wb: fbo,
       fbs_pushkino: fbsPush,
-      fbs_smolensk: fbsSmol,
-      kits_stock: kits,
+      fbs_smolensk: 0,
+      kits_stock: 0,
       stock_days: stockDays,
-      price,
+      price: null,
       cpo,
       forecast_30d: forecast30d,
       delta_revenue_pct: (() => {
@@ -243,14 +251,13 @@ export async function GET(req: NextRequest) {
       abc_class: abcClass,
       oos_status,
       margin_status,
-      novelty: skuSnap?.novelty_status === 'Новинки' || skuSnap?.novelty_status === 'new',
+      novelty: false,
     }
   })
 
-  // Apply global filters (category, manager, novelty)
+  // Apply global filters (category, novelty)
   const filteredRows = rows.filter(r => {
     if (categoryFilter && r.category !== categoryFilter) return false
-    if (managerFilter  && r.manager !== managerFilter)  return false
     if (noveltyFilter === 'Новинки'    && !r.novelty)   return false
     if (noveltyFilter === 'Не новинки' && r.novelty)   return false
     return true
