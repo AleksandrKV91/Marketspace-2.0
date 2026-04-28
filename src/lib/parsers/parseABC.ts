@@ -4,6 +4,7 @@ export interface ABCRow {
   sku_ms: string
   period_month: string
   product_name: string | null
+  niche: string | null
   qty_stock_rub: number | null
   cost: number | null
   revenue: number | null
@@ -119,6 +120,7 @@ type ColKey = keyof ABCRow
 const TEXT_COL_QUERIES: Array<{ key: ColKey; queries: string[] }> = [
   { key: 'sku_ms', queries: ['артикул склада', 'артикул мс', 'артикул mc', 'артикул'] },
   { key: 'product_name', queries: ['номенклатура'] },
+  { key: 'niche', queries: ['ниша', 'предмет', 'subject'] },
   { key: 'qty_stock_rub', queries: ['количество'] },
   { key: 'cost', queries: ['себестоимость без ндс'] },
   { key: 'revenue', queries: ['выручка без ндс', 'выручка'] },
@@ -228,6 +230,7 @@ export function parseABC(buffer: ArrayBuffer, filename = ''): ParseABCResult {
       sku_ms: skuMs,
       period_month: periodMonth,
       product_name: get('product_name') != null ? String(get('product_name')).trim() || null : null,
+      niche: get('niche') != null ? String(get('niche')).trim() || null : null,
       qty_stock_rub: toNum(get('qty_stock_rub')),
       cost: toNum(get('cost')),
       revenue: toNum(get('revenue')),

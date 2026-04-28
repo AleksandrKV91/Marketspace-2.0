@@ -23,8 +23,18 @@ export interface ChinaRow {
   lead_time_days: number | null
 }
 
+export interface NomenRow {
+  sku_ms: string | null
+  sku_wb: number | null
+  brand: string | null
+  name: string | null
+  seasonality: string | null
+  country: string | null
+}
+
 export interface ParseChinaResult {
   rows: ChinaRow[]
+  nomen: NomenRow[]
   rows_parsed: number
   rows_skipped: number
 }
@@ -58,7 +68,6 @@ function parseLeadTimes(wb: import('xlsx').WorkBook): Map<string, number> {
   const rows = sheetToRows(wb, sheetName)
   if (rows.length < 2) return new Map()
 
-  // Найти строку заголовка (первую с 'артикул')
   let headerIdx = 0
   for (let i = 0; i < Math.min(5, rows.length); i++) {
     if (rows[i].some(h => norm(h).includes('артикул'))) { headerIdx = i; break }
@@ -78,11 +87,52 @@ function parseLeadTimes(wb: import('xlsx').WorkBook): Map<string, number> {
   return result
 }
 
+/** Парсит лист «номен» — мастер-справочник SKU */
+function parseNomenSheet(wb: import('xlsx').WorkBook): NomenRow[] {
+  const sheetName = wb.SheetNames.find(n => norm(n) === 'номен')
+  if (!sheetName) return []
+  const rows = sheetToRows(wb, sheetName)
+  if (rows.length < 2) return []
+
+  // Find header row (first row containing 'артикул')
+  let headerIdx = 0
+  for (let i = 0; i < Math.min(5, rows.length); i++) {
+    if (rows[i].some(h => norm(h).includes('артикул'))) { headerIdx = i; break }
+  }
+  const header = rows[headerIdx]
+
+  const fc = (q: string) => header.findIndex(h => norm(String(h ?? '')).includes(q))
+  const skuMsCol    = fc('артикул мс')
+  const skuWbCol    = fc('артикул wb')
+  const brandCol    = fc('бренд')
+  const nameCol     = (() => {
+    // Try specific names first, then fall back to generic 'наименование'
+    const idx = fc('наименование русское')
+    return idx !== -1 ? idx : fc('наименование')
+  })()
+  const seasonCol   = fc('сезонность')
+  const countryCol  = fc('страна происхождения')
+
+  if (skuMsCol === -1) return []
+
+  return rows.slice(headerIdx + 1)
+    .map(row => ({
+      sku_ms:      skuMsCol  !== -1 ? (String(row[skuMsCol]  ?? '').trim() || null) : null,
+      sku_wb:      skuWbCol  !== -1 ? toNum(row[skuWbCol])  : null,
+      brand:       brandCol  !== -1 ? (String(row[brandCol]  ?? '').trim() || null) : null,
+      name:        nameCol   !== -1 ? (String(row[nameCol]   ?? '').trim() || null) : null,
+      seasonality: seasonCol !== -1 ? (String(row[seasonCol] ?? '').trim() || null) : null,
+      country:     countryCol !== -1 ? (String(row[countryCol] ?? '').trim() || null) : null,
+    }))
+    .filter(r => r.sku_ms)
+}
+
 export function parseChina(buffer: ArrayBuffer): ParseChinaResult {
   const wb = readWorkbook(buffer)
   const sheetName = wb.SheetNames.find(n => norm(n) === 'свод') ?? wb.SheetNames[0]
   const rows = sheetToRows(wb, sheetName)
   const leadTimes = parseLeadTimes(wb)
+  const nomen = parseNomenSheet(wb)
 
   // Структура: строка 0 пустая, строка 1 пустая, строка 2 = заголовки, строка 3+ = данные
   const HEADER_ROW = 2
@@ -99,7 +149,6 @@ export function parseChina(buffer: ArrayBuffer): ParseChinaResult {
   })
   const wbBlockEnd = martIndices.length >= 2 ? martIndices[1] : headerRow.length
 
-  // Найти колонки только в пределах WB блока
   const colIdx: Partial<Record<keyof ChinaRow, number>> = {}
   for (const { key, queries } of COL_QUERIES) {
     for (const q of queries) {
@@ -162,5 +211,5 @@ export function parseChina(buffer: ArrayBuffer): ParseChinaResult {
     })
   }
 
-  return { rows: result, rows_parsed: result.length, rows_skipped: skipped }
+  return { rows: result, nomen, rows_parsed: result.length, rows_skipped: skipped }
 }

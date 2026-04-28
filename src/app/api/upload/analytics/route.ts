@@ -36,17 +36,26 @@ export async function POST(req: NextRequest) {
   const unknownRows = deduped.filter(r => !knownSkus.has(r.sku_ms))
   const unknownSkusList = unknownRows.map(r => r.sku_ms)
 
-  // Create dim_sku stubs for unknown SKUs so the FK constraint is satisfied
-  if (unknownRows.length > 0) {
-    const stubs = unknownRows.map(r => ({
-      sku_ms: r.sku_ms,
-      name: (r as unknown as Record<string, unknown>)['name'] as string ?? r.sku_ms,
-    }))
-    for (const batch of chunk(stubs, 500)) {
-      await supabase
-        .from('dim_sku')
-        .upsert(batch, { onConflict: 'sku_ms', ignoreDuplicates: true })
-    }
+  // dim_sku enrichment from analytics: upsert non-null fields for ALL SKUs
+  // (creates stubs for new ones, fills missing fields for existing).
+  // Null fields are stripped so we never overwrite good data from Свод with null.
+  const dimEnrich = deduped
+    .filter(r => r.sku_ms)
+    .map(r => {
+      const row: Record<string, unknown> = { sku_ms: r.sku_ms }
+      if (r.sku_wb     != null) row.sku_wb      = r.sku_wb
+      if (r.name)               row.name        = r.name
+      if (r.brand)              row.brand       = r.brand
+      if (r.category)           row.category_wb = r.category
+      if (r.supplier)           row.supplier    = r.supplier
+      if (r.country)            row.country     = r.country
+      if (r.buyout_pct != null) row.buyout_pct  = r.buyout_pct
+      if (r.rating     != null) row.avg_rating  = r.rating
+      return row
+    })
+    .filter(r => Object.keys(r).length > 1)
+  for (const batch of chunk(dimEnrich, 500)) {
+    await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
   }
 
   // Record the upload

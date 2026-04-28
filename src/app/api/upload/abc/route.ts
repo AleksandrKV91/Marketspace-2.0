@@ -6,15 +6,17 @@ import { chunk } from '@/lib/parsers/utils'
 
 export const maxDuration = 60
 
-// Aggregate rows sharing the same sku_ms: sum financials, take classes from highest-revenue row.
-// The ABC file contains multiple rows per sku_ms (size variants, e.g. S/M/L of same article).
-function aggregateBySkuMs(rows: ABCRow[]): ABCRow[] {
-  const byMs = new Map<string, { dominant: ABCRow; sums: Partial<ABCRow> }>()
+// Aggregate rows sharing the same (sku_ms, product_name) key.
+// Different product_name = different size/kit variant → kept as separate rows.
+// Only exact (sku_ms + product_name) duplicates are collapsed (rare data artifacts).
+function aggregateByVariant(rows: ABCRow[]): ABCRow[] {
+  const byKey = new Map<string, { dominant: ABCRow; sums: Partial<ABCRow> }>()
 
   for (const row of rows) {
-    const entry = byMs.get(row.sku_ms)
+    const key = `${row.sku_ms}|${row.product_name ?? ''}`
+    const entry = byKey.get(key)
     if (!entry) {
-      byMs.set(row.sku_ms, {
+      byKey.set(key, {
         dominant: row,
         sums: {
           qty_stock_rub:  row.qty_stock_rub  ?? 0,
@@ -32,7 +34,7 @@ function aggregateBySkuMs(rows: ABCRow[]): ABCRow[] {
       })
       continue
     }
-    // Accumulate financials
+    // Accumulate financials for exact duplicates
     const s = entry.sums
     s.qty_stock_rub  = (s.qty_stock_rub  ?? 0) + (row.qty_stock_rub  ?? 0)
     s.cost           = (s.cost           ?? 0) + (row.cost           ?? 0)
@@ -45,21 +47,19 @@ function aggregateBySkuMs(rows: ABCRow[]): ABCRow[] {
     s.tz             = (s.tz             ?? 0) + (row.tz             ?? 0)
     s.qty_cur_month  = (s.qty_cur_month  ?? 0) + (row.qty_cur_month  ?? 0)
     s.qty_prev_month = (s.qty_prev_month ?? 0) + (row.qty_prev_month ?? 0)
-    // Keep classes from the row with highest revenue (most representative variant)
     if ((row.revenue ?? 0) > (entry.dominant.revenue ?? 0)) {
       entry.dominant = row
     }
   }
 
-  return [...byMs.values()].map(({ dominant, sums }) => {
+  return [...byKey.values()].map(({ dominant, sums }) => {
     const rev = sums.revenue ?? 0
     return {
       ...dominant,
       ...sums,
-      // Re-derive ratio fields from aggregated sums
-      profitability:   rev > 0 ? (sums.chmd_clean ?? 0) / rev : dominant.profitability,
-      revenue_margin:  rev > 0 ? (sums.chmd ?? 0) / rev : dominant.revenue_margin,
-      chmd_share:      null, // not meaningful after aggregation
+      profitability:  rev > 0 ? (sums.chmd_clean ?? 0) / rev : dominant.profitability,
+      revenue_margin: rev > 0 ? (sums.chmd ?? 0) / rev : dominant.revenue_margin,
+      chmd_share:     null, // not meaningful after aggregation
     }
   })
 }
@@ -86,16 +86,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(e) }, { status: 422 })
   }
 
-  // Aggregate size variants sharing the same sku_ms
-  const aggregated = aggregateBySkuMs(parsed.rows)
+  // Keep size variants separate — group only by exact (sku_ms, product_name)
+  const aggregated = aggregateByVariant(parsed.rows)
   const skippedVariants = parsed.rows.length - aggregated.length
 
-  // Upsert dim_sku: create stubs for new SKUs, update name for all
+  // Update dim_sku name for all SKUs; create stubs for new ones
   const dimUpdates = aggregated
     .filter(r => r.product_name)
     .map(r => ({ sku_ms: r.sku_ms, name: r.product_name! }))
   for (const batch of chunk(dimUpdates, 500)) {
     await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
+  }
+
+  // Write subject_wb from «Ниша/Предмет» column into dim_sku
+  const nicheUpdates = aggregated
+    .filter(r => r.niche)
+    .map(r => ({ sku_ms: r.sku_ms, subject_wb: r.niche! }))
+  for (const batch of chunk(nicheUpdates, 500)) {
+    await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
+  }
+
+  // Cascade niche seasonality/month coefficients to SKUs that share the same subject_wb
+  if (nicheUpdates.length > 0) {
+    await supabase.rpc('refresh_dim_sku_niche_cascade')
   }
 
   const knownSkus = await loadKnownSkus(supabase)
@@ -116,9 +129,13 @@ export async function POST(req: NextRequest) {
   if (uploadErr) return NextResponse.json({ error: uploadErr.message }, { status: 500 })
 
   const uploadId = upload.id
-  const rowsWithUpload = aggregated.map(r => ({ ...r, upload_id: uploadId }))
+  const rowsWithUpload = aggregated.map(r => ({
+    ...r,
+    upload_id: uploadId,
+    variant_name: r.product_name ?? '',
+  }))
   for (const batch of chunk(rowsWithUpload, 500)) {
-    const { error } = await supabase.from('fact_abc').upsert(batch, { onConflict: 'sku_ms,upload_id' })
+    const { error } = await supabase.from('fact_abc').upsert(batch, { onConflict: 'sku_ms,upload_id,variant_name' })
     if (error) {
       await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)
       return NextResponse.json({ error: error.message }, { status: 500 })

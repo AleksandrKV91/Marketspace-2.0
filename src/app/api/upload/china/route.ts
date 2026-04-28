@@ -28,6 +28,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(e) }, { status: 422 })
   }
 
+  // Enrich dim_sku from «номен» sheet — master reference for brand/country/seasonality/name
+  if (parsed.nomen?.length) {
+    const dimEnrich = parsed.nomen
+      .filter(n => n.sku_ms)
+      .map(n => {
+        const row: Record<string, unknown> = { sku_ms: n.sku_ms }
+        if (n.sku_wb      != null) row.sku_wb      = n.sku_wb
+        if (n.brand)               row.brand        = n.brand
+        if (n.name)                row.name         = n.name
+        if (n.seasonality)         row.seasonality  = n.seasonality
+        if (n.country)             row.country      = n.country
+        return row
+      })
+      .filter(r => Object.keys(r).length > 1)
+    for (const batch of chunk(dimEnrich, 500)) {
+      await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
+    }
+  }
+
   const knownSkus = await loadKnownSkus(supabase)
   const deduped = [...new Map(parsed.rows.map(r => [r.sku_ms, r])).values()]
   const filtered = deduped.filter(r => knownSkus.has(r.sku_ms))

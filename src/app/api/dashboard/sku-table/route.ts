@@ -167,7 +167,7 @@ async function handler(req: NextRequest) {
 
     const revenue  = daily?.revenue  ?? 0
     const adSpend  = daily?.ad_spend ?? 0
-    const drr      = revenue > 0 ? adSpend / revenue : avg(daily?.drr ?? [])
+    const drr      = revenue > 0 ? adSpend / revenue : null
     const ctr      = avg(daily?.ctr      ?? [])
     const cr_basket = avg(daily?.cr_cart ?? [])
     const cr_order = avg(daily?.cr_order ?? [])

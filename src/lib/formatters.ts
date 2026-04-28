@@ -28,6 +28,13 @@ export function fmtPct(n: number | null | undefined, decimals = 1): string {
   return Number(n).toFixed(decimals) + '%'
 }
 
+/** Returns 'н/д' for null/undefined/NaN/empty values; otherwise String(v). */
+export function fmtOrNA(v: unknown): string {
+  if (v === null || v === undefined || v === '') return 'н/д'
+  if (typeof v === 'number' && isNaN(v)) return 'н/д'
+  return String(v)
+}
+
 /**
  * Delta formula: (curr - prev) / curr × 100, capped at ±100%.
  * Returns null when either value is null/undefined.
