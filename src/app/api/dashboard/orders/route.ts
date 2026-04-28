@@ -2,14 +2,37 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
 
-export const maxDuration = 30
+export const maxDuration = 60
+
+const MONTH_KEYS = [
+  'month_jan','month_feb','month_mar','month_apr','month_may','month_jun',
+  'month_jul','month_aug','month_sep','month_oct','month_nov','month_dec',
+] as const
+type MonthKey = typeof MONTH_KEYS[number]
+const MONTH_RU = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек']
+
+const DEFAULT_LEAD_TIME = 45  // медианный фоллбэк, когда lead_time_days неизвестен
+
+function stddev(arr: number[]): number {
+  if (arr.length === 0) return 0
+  const mean = arr.reduce((s, v) => s + v, 0) / arr.length
+  const variance = arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length
+  return Math.sqrt(variance)
+}
+
+function addDaysISO(iso: string, days: number): string {
+  const d = new Date(iso)
+  d.setDate(d.getDate() + days)
+  return d.toISOString().split('T')[0]
+}
 
 export async function GET(req: Request) {
   const supabase = createServiceClient()
   const url = new URL(req.url)
   const horizon = parseInt(url.searchParams.get('horizon') ?? '60', 10)
+  const period = parseInt(url.searchParams.get('period') ?? '31', 10)  // 7|14|31
 
-  // Последние uploads по типам
+  // ── 1. Last uploads by type ─────────────────────────────────────────────
   const { data: lastUploads } = await supabase
     .from('uploads')
     .select('id, file_type')
@@ -23,28 +46,22 @@ export async function GET(req: Request) {
       if (!latestByType[u.file_type]) latestByType[u.file_type] = u.id
     }
   }
-
   const chinaId = latestByType['china']
   const abcId = latestByType['abc']
 
-  // dim_sku — все SKU с сезонностью
+  // ── 2. dim_sku — все SKU с сезонностью ──────────────────────────────────
   type DimRow = {
     sku_ms: string; sku_wb: number | null; name: string | null; brand: string | null
     subject_wb: string | null
-    month_jan: number | null; month_feb: number | null; month_mar: number | null
-    month_apr: number | null; month_may: number | null; month_jun: number | null
-    month_jul: number | null; month_aug: number | null; month_sep: number | null
-    month_oct: number | null; month_nov: number | null; month_dec: number | null
-  }
+  } & Record<MonthKey, number | null>
   const dimRows = await fetchAll<DimRow>(
-    (sb) => sb.from('dim_sku').select('sku_ms, sku_wb, name, brand, subject_wb, month_jan, month_feb, month_mar, month_apr, month_may, month_jun, month_jul, month_aug, month_sep, month_oct, month_nov, month_dec'),
+    (sb) => sb.from('dim_sku').select(
+      'sku_ms, sku_wb, name, brand, subject_wb, ' + MONTH_KEYS.join(', ')
+    ),
     supabase,
   )
-  const dimMap: Record<string, DimRow> = {}
-  for (const r of dimRows) dimMap[r.sku_ms] = r
 
-  // fact_sku_daily — последний снапшот (самая свежая snap_date для каждого SKU)
-  // и продажи за последние 31 день (revenue как показатель активности)
+  // ── 3. Snapshot из fact_sku_daily (последний snap_date) ─────────────────
   const { data: maxSnapRow } = await supabase
     .from('fact_sku_daily')
     .select('snap_date')
@@ -53,7 +70,6 @@ export async function GET(req: Request) {
     .limit(1)
   const maxSnapDate = maxSnapRow?.[0]?.snap_date
 
-  // Снапшот: берём строки с самой свежей snap_date (одна строка на SKU достаточна)
   type SnapRow = {
     sku_ms: string; sku_wb: number | null; snap_date: string | null
     fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
@@ -66,236 +82,386 @@ export async function GET(req: Request) {
     const snapRows = await fetchAll<SnapRow>(
       (sb) => sb.from('fact_sku_daily')
         .select('sku_ms, sku_wb, snap_date, fbo_wb, fbs_pushkino, fbs_smolensk, kits_stock, stock_days, price, margin_pct, supply_date, supply_qty, days_to_arrival, manager')
-        .eq('snap_date', maxSnapDate)
-        .not('fbo_wb', 'is', null),
+        .eq('snap_date', maxSnapDate),
       supabase,
     )
-    // Один снапшот на SKU (берём первый)
     for (const r of snapRows) {
       if (!snapMap[r.sku_ms]) snapMap[r.sku_ms] = r
     }
   }
 
-  // fact_sku_daily — продажи за последние 31 день
-  // Используем revenue как прокси продаж (есть для всех SKU из отчёта)
+  // ── 4. Дневные продажи: daily_agg_sku.sales_qty (за 31д) ────────────────
   const { data: maxMetricRow } = await supabase
-    .from('fact_sku_daily')
+    .from('daily_agg_sku')
     .select('metric_date')
     .order('metric_date', { ascending: false })
     .limit(1)
-  const maxDate = maxMetricRow?.[0]?.metric_date
+  const maxDate: string | null = maxMetricRow?.[0]?.metric_date ?? null
 
-  const salesMap31: Record<string, { revenue: number; ad_spend: number; days: number }> = {}
-  const salesMap7: Record<string, number> = {}
-  const salesMap14: Record<string, number> = {}
+  const dailyByMs: Record<string, Array<{ date: string; qty: number }>> = {}
+  let from31: string | null = null
 
   if (maxDate) {
-    const date31 = new Date(maxDate)
-    date31.setDate(date31.getDate() - 30)
-    const from31 = date31.toISOString().split('T')[0]
-
-    const { data: salesRows } = await supabase
-      .from('fact_sku_daily')
-      .select('sku_ms, metric_date, revenue, ad_spend')
-      .gte('metric_date', from31)
-      .lte('metric_date', maxDate)
-
-    if (salesRows) {
-      for (const r of salesRows) {
-        const ms = r.sku_ms
-        if (!salesMap31[ms]) salesMap31[ms] = { revenue: 0, ad_spend: 0, days: 0 }
-        salesMap31[ms].revenue += r.revenue ?? 0
-        salesMap31[ms].ad_spend += r.ad_spend ?? 0
-        if ((r.revenue ?? 0) > 0) salesMap31[ms].days++
-
-        const daysDiff = Math.ceil((new Date(maxDate).getTime() - new Date(r.metric_date).getTime()) / 86400000)
-        if (daysDiff <= 7) salesMap7[ms] = (salesMap7[ms] ?? 0) + (r.revenue ?? 0)
-        if (daysDiff <= 14) salesMap14[ms] = (salesMap14[ms] ?? 0) + (r.revenue ?? 0)
-      }
+    from31 = addDaysISO(maxDate, -30)
+    type DailyAgg = { sku_ms: string; metric_date: string; sales_qty: number | null }
+    const sales31 = await fetchAll<DailyAgg>(
+      (sb) => sb.from('daily_agg_sku')
+        .select('sku_ms, metric_date, sales_qty')
+        .gte('metric_date', from31!)
+        .lte('metric_date', maxDate!),
+      supabase,
+    )
+    for (const r of sales31) {
+      if (!r.sku_ms) continue
+      if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = []
+      dailyByMs[r.sku_ms].push({ date: r.metric_date, qty: r.sales_qty ?? 0 })
+    }
+    for (const arr of Object.values(dailyByMs)) {
+      arr.sort((a, b) => a.date.localeCompare(b.date))
     }
   }
 
-  // fact_china_supply
-  const chinaMap: Record<string, { in_transit: number; in_production: number; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null }> = {}
+  // ── 5. fact_china_supply ────────────────────────────────────────────────
+  type ChinaRec = {
+    in_transit: number; in_production: number
+    nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null
+  }
+  const chinaMap: Record<string, ChinaRec> = {}
   if (chinaId) {
     const { data: chinaRows } = await supabase
       .from('fact_china_supply')
       .select('sku_ms, in_transit, in_production, nearest_date, cost_plan, lead_time_days')
       .eq('upload_id', chinaId)
     if (chinaRows) {
-      for (const r of chinaRows) chinaMap[r.sku_ms] = r
+      for (const r of chinaRows) {
+        chinaMap[r.sku_ms] = {
+          in_transit:    r.in_transit    ?? 0,
+          in_production: r.in_production ?? 0,
+          nearest_date:  r.nearest_date,
+          cost_plan:     r.cost_plan,
+          lead_time_days: r.lead_time_days,
+        }
+      }
     }
   }
 
-  // fact_abc
-  const abcMap: Record<string, { abc_class: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }> = {}
+  // ── 6. fact_abc — последний upload ─────────────────────────────────────
+  type AbcRec = { abc_class: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
+  const abcMap: Record<string, AbcRec> = {}
   if (abcId) {
-    const { data: abcRows } = await supabase
-      .from('fact_abc')
-      .select('sku_ms, abc_class, profitability, chmd_clean, tz')
-      .eq('upload_id', abcId)
-    if (abcRows) {
-      for (const r of abcRows) abcMap[r.sku_ms] = r
+    type AbcRow = { sku_ms: string; final_class_1: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
+    const abcRows = await fetchAll<AbcRow>(
+      (sb) => sb.from('fact_abc')
+        .select('sku_ms, final_class_1, profitability, chmd_clean, tz')
+        .eq('upload_id', abcId),
+      supabase,
+    )
+    for (const r of abcRows) {
+      if (!abcMap[r.sku_ms]) {
+        abcMap[r.sku_ms] = {
+          abc_class:     r.final_class_1,
+          profitability: r.profitability,
+          chmd_clean:    r.chmd_clean,
+          tz:            r.tz,
+        }
+      }
     }
   }
 
-  // Текущий месяц для сезонной коррекции
-  const nowMonth = new Date().getMonth() // 0-based
-  const monthKeys = ['month_jan','month_feb','month_mar','month_apr','month_may','month_jun',
-                     'month_jul','month_aug','month_sep','month_oct','month_nov','month_dec'] as const
+  // ── 7. YoY fallback: для тех, у кого base_31d < 5 и target_coef > 1.3*avg
+  // Запрос делаем ниже после первого прохода — собираем кандидатов
+  const yoyCandidates: string[] = []
+  // (заполнится в первом проходе ниже)
 
-  // Сборка строк
-  const rows = dimRows.map(sku => {
-    const snap = snapMap[sku.sku_ms]
-    const sales31 = salesMap31[sku.sku_ms]
-    const china = chinaMap[sku.sku_ms]
-    const abc = abcMap[sku.sku_ms]
+  // ── 8. Текущий месяц + горизонт-месяцы ─────────────────────────────────
+  const today = maxDate ? new Date(maxDate) : new Date()
+  const nowMonth = today.getMonth()  // 0-based
 
+  // Месяцы горизонта: [today + lt, today + lt + horizon]
+  // lt = china.lead_time_days ?? DEFAULT_LEAD_TIME (per-SKU)
+  function horizonMonths(lt: number, horizonDays: number): number[] {
+    const start = new Date(today); start.setDate(start.getDate() + lt)
+    const end = new Date(today);   end.setDate(end.getDate() + lt + horizonDays)
+    const months: number[] = []
+    const cur = new Date(start.getFullYear(), start.getMonth(), 1)
+    while (cur <= end) {
+      months.push(cur.getMonth())
+      cur.setMonth(cur.getMonth() + 1)
+    }
+    return months.length > 0 ? months : [(nowMonth + 1) % 12]
+  }
+
+  // ── 9. Первый проход: считаем base_31d, cur_coef, target_coef ──────────
+  type Pass1 = {
+    sku: DimRow
+    daily: Array<{ date: string; qty: number }>
+    sales_qty_7d: number; sales_qty_14d: number; sales_qty_31d: number
+    base_31d: number
+    avg_year: number; cur_coef: number; target_coef: number
+    horizon_months: number[]; lt: number
+  }
+  const pass1: Record<string, Pass1> = {}
+
+  for (const sku of dimRows) {
+    const daily = dailyByMs[sku.sku_ms] ?? []
+    const last7  = daily.slice(-7)
+    const last14 = daily.slice(-14)
+    const last31 = daily.slice(-31)
+    const sales_qty_7d  = last7.reduce((s, d) => s + d.qty, 0)
+    const sales_qty_14d = last14.reduce((s, d) => s + d.qty, 0)
+    const sales_qty_31d = last31.reduce((s, d) => s + d.qty, 0)
+    const base_31d = sales_qty_31d / 31
+
+    const coeffs = MONTH_KEYS.map(k => sku[k]).filter((v): v is number => v != null && v > 0)
+    const avg_year = coeffs.length > 0 ? coeffs.reduce((a, b) => a + b, 0) / coeffs.length : 1
+    const curRaw = sku[MONTH_KEYS[nowMonth]]
+    const cur_coef = (curRaw != null && curRaw > 0) ? curRaw : avg_year
+
+    const lt = chinaMap[sku.sku_ms]?.lead_time_days ?? DEFAULT_LEAD_TIME
+    const hm = horizonMonths(lt, horizon)
+    const targetCoeffs = hm.map(m => sku[MONTH_KEYS[m]]).filter((v): v is number => v != null && v > 0)
+    const target_coef_raw = targetCoeffs.length > 0
+      ? targetCoeffs.reduce((a, b) => a + b, 0) / targetCoeffs.length
+      : avg_year
+    const target_coef = target_coef_raw / (avg_year || 1)  // относительный
+
+    pass1[sku.sku_ms] = {
+      sku, daily,
+      sales_qty_7d, sales_qty_14d, sales_qty_31d,
+      base_31d, avg_year, cur_coef, target_coef,
+      horizon_months: hm, lt,
+    }
+
+    // Кандидаты на YoY-fallback
+    if (base_31d < 5 && target_coef > 1.3 && sku.sku_ms) {
+      yoyCandidates.push(sku.sku_ms)
+    }
+  }
+
+  // ── 10. YoY fallback запрос ─────────────────────────────────────────────
+  const yoyMap: Record<string, number> = {}
+  if (maxDate && yoyCandidates.length > 0) {
+    const yoyFrom = addDaysISO(maxDate, -380)
+    const yoyTo   = addDaysISO(maxDate, -350)
+    // Берём батчами по 200 SKU чтобы не упереться в URL-лимит
+    for (let i = 0; i < yoyCandidates.length; i += 200) {
+      const batch = yoyCandidates.slice(i, i + 200)
+      const { data: yoyRows } = await supabase
+        .from('daily_agg_sku')
+        .select('sku_ms, sales_qty')
+        .gte('metric_date', yoyFrom)
+        .lte('metric_date', yoyTo)
+        .in('sku_ms', batch)
+      if (yoyRows) {
+        for (const r of yoyRows) {
+          if (!r.sku_ms) continue
+          yoyMap[r.sku_ms] = (yoyMap[r.sku_ms] ?? 0) + (r.sales_qty ?? 0)
+        }
+      }
+    }
+  }
+
+  // ── 11. Финальная сборка строк ─────────────────────────────────────────
+  type OrderRow = ReturnType<typeof buildRow>
+  function buildRow(skuMs: string, p1: Pass1) {
+    const { sku, daily, sales_qty_7d, sales_qty_14d, sales_qty_31d,
+            base_31d, avg_year, cur_coef, target_coef, horizon_months: hm, lt } = p1
+
+    // ШАГ 2: base_norm + YoY fallback
+    let base_norm = base_31d / (cur_coef || 1)
+    let used_yoy_fallback = false
+    let yoy_base_norm: number | null = null
+    if (base_31d < 5 && target_coef > 1.3 && yoyMap[skuMs] != null) {
+      const yoy_qty = yoyMap[skuMs]
+      const yoy_base = yoy_qty / 31
+      yoy_base_norm = yoy_base / (cur_coef || 1)
+      if (yoy_base > base_31d) {
+        base_norm = yoy_base_norm
+        used_yoy_fallback = true
+      }
+    }
+
+    // ШАГ 3: потребность
+    const demand_qty = base_norm * target_coef * horizon
+
+    // ШАГ 4: страховой запас
+    const sigma_31d = stddev(daily.slice(-31).map(d => d.qty))
+    let cv = base_31d > 0.1 ? sigma_31d / base_31d : 1.0
+    if (sigma_31d === 0) cv = Math.max(cv, 0.3)
+    const non_zero_days = daily.slice(-31).filter(d => d.qty > 0).length
+    const low_data = non_zero_days < 10
+    if (low_data) cv = Math.max(cv, 1.0)
+    const safety_days = Math.sqrt(lt) * cv
+    const safety_qty = base_norm * target_coef * safety_days
+
+    // ШАГ 5: что уже есть
+    const snap = snapMap[skuMs]
     const fbo = snap?.fbo_wb ?? 0
     const fbsPush = snap?.fbs_pushkino ?? 0
     const fbsSmol = snap?.fbs_smolensk ?? 0
     const kits = snap?.kits_stock ?? 0
-    const totalStock = fbo + fbsPush + fbsSmol + kits
+    const total_stock = fbo + fbsPush + fbsSmol + kits
+    const china = chinaMap[skuMs]
+    const in_transit = china?.in_transit ?? 0
+    const in_production = china?.in_production ?? 0
+    const on_hand_total = total_stock + in_transit + in_production
 
-    const inTransit = china?.in_transit ?? 0
-    const inProduction = china?.in_production ?? 0
-    const alreadyHave = totalStock + inTransit + inProduction
+    // ШАГ 6: к заказу
+    const calc_order = Math.max(0, Math.round(demand_qty + safety_qty - on_hand_total))
 
-    // Скорость продаж (выручка/день → конвертируем в шт через цену)
-    const price = snap?.price ?? 1
-    const revenue31 = sales31?.revenue ?? 0
-    const daysActive = Math.max(sales31?.days ?? 1, 1)
-    const revenuePerDay = revenue31 / 31
-    const dpd = price > 0 ? revenuePerDay / price : 0
+    // Производные
+    const dpd = base_31d
+    const days_stock = dpd > 0 ? Math.round(total_stock / dpd) : (total_stock > 0 ? 999 : 0)
+    const oos_days_31 = daily.slice(-31).filter(d => d.qty === 0).length
 
-    // Сезонная коррекция
-    const monthCoeffs = monthKeys.map(k => sku[k] ?? null).filter((v): v is number => v !== null && v > 0)
-    const avgYearCoeff = monthCoeffs.length > 0 ? monthCoeffs.reduce((a, b) => a + b, 0) / monthCoeffs.length : 1
-    const curCoeff = (sku[monthKeys[nowMonth]] ?? avgYearCoeff) || avgYearCoeff
-
-    // Коэфф для горизонта (следующие ceil(horizon/30) месяцев)
-    const horizonMonths = Math.ceil(horizon / 30)
-    let targetCoeffSum = 0
-    let targetCoeffCount = 0
-    for (let i = 0; i < horizonMonths; i++) {
-      const mIdx = (nowMonth + 1 + i) % 12
-      const c = sku[monthKeys[mIdx]] ?? avgYearCoeff
-      if (c > 0) { targetCoeffSum += c; targetCoeffCount++ }
+    // Прогноз 30д = base_norm × seasonal_coef_next_30d
+    const next30Months: number[] = []
+    {
+      const start = new Date(today)
+      const end = new Date(today); end.setDate(end.getDate() + 30)
+      const cur = new Date(start.getFullYear(), start.getMonth(), 1)
+      while (cur <= end) { next30Months.push(cur.getMonth()); cur.setMonth(cur.getMonth() + 1) }
     }
-    const targetCoeff = targetCoeffCount > 0 ? targetCoeffSum / targetCoeffCount : avgYearCoeff
-
-    // Нормированная база продаж (без влияния сезонности текущего месяца)
-    const baseNorm = dpd * 30 / (curCoeff || 1)
-    // Потребность с сезонной коррекцией
-    const demandSeasonal = baseNorm * (targetCoeff / (avgYearCoeff || 1)) * horizon
-
-    // Расчёт заказа
-    const calcOrder = Math.max(0, Math.round(demandSeasonal - alreadyHave))
-
-    // Дней запаса
-    const daysStock = dpd > 0 ? totalStock / dpd : (totalStock > 0 ? 999 : 0)
-    const logPleche = china?.lead_time_days ?? horizon
+    const next30Coeffs = next30Months.map(m => sku[MONTH_KEYS[m]]).filter((v): v is number => v != null && v > 0)
+    const next30TargetRel = next30Coeffs.length > 0
+      ? (next30Coeffs.reduce((a, b) => a + b, 0) / next30Coeffs.length) / (avg_year || 1)
+      : 1
+    const forecast_30d = Math.round(base_norm * next30TargetRel * 30)
 
     // GMROI
+    const abc = abcMap[skuMs]
     const gmroi = (abc?.chmd_clean != null && abc?.tz != null && abc.tz > 0)
       ? Math.round((abc.chmd_clean / abc.tz) * 100) / 100
       : null
 
     // Статус
     let status: 'ok' | 'warning' | 'critical' | 'oos'
-    if (totalStock === 0) status = 'oos'
-    else if (daysStock < logPleche * 0.5) status = 'critical'
-    else if (daysStock < logPleche) status = 'warning'
+    if (total_stock === 0) status = 'oos'
+    else if (days_stock < lt * 0.5) status = 'critical'
+    else if (days_stock < lt) status = 'warning'
     else status = 'ok'
 
+    const is_new = daily.length < 14
+
     return {
-      sku_ms: sku.sku_ms,
+      sku_ms: skuMs,
       sku_wb: snap?.sku_wb ?? sku.sku_wb ?? 0,
-      name: sku.name,
-      brand: sku.brand,
-      subject_wb: sku.subject_wb,
-      total_stock: totalStock,
-      fbo_wb: fbo,
-      fbs_pushkino: fbsPush,
-      fbs_smolensk: fbsSmol,
-      kits_stock: kits,
-      in_transit: inTransit,
-      in_production: inProduction,
-      already_have: alreadyHave,
-      revenue_7d: salesMap7[sku.sku_ms] ?? 0,
-      revenue_14d: salesMap14[sku.sku_ms] ?? 0,
-      revenue_31d: revenue31,
+      name: sku.name ?? '',
+      brand: sku.brand ?? '',
+      subject_wb: sku.subject_wb ?? '',
+      manager: snap?.manager ?? null,
+
+      status: status === 'oos' ? 'critical' : status,
+
+      // ШАГ 1
+      sales_qty_7d:  Math.round(sales_qty_7d  * 10) / 10,
+      sales_qty_14d: Math.round(sales_qty_14d * 10) / 10,
+      sales_qty_31d: Math.round(sales_qty_31d * 10) / 10,
+      base_31d:      Math.round(base_31d * 100) / 100,
+
+      // ШАГ 2
+      cur_coef:      Math.round(cur_coef * 100) / 100,
+      avg_year_coef: Math.round(avg_year * 100) / 100,
+      base_norm:     Math.round(base_norm * 100) / 100,
+      used_yoy_fallback,
+      yoy_base_norm: yoy_base_norm != null ? Math.round(yoy_base_norm * 100) / 100 : null,
+
+      // ШАГ 3
+      horizon_months: hm.map(m => ({
+        month: MONTH_RU[m],
+        coef: sku[MONTH_KEYS[m]] != null ? Math.round((sku[MONTH_KEYS[m]] as number) * 100) / 100 : null,
+      })),
+      target_coef:  Math.round(target_coef * 1000) / 1000,
+      demand_qty:   Math.round(demand_qty),
+
+      // ШАГ 4
+      sigma_31d:    Math.round(sigma_31d * 100) / 100,
+      cv:           Math.round(cv * 1000) / 1000,
+      safety_days:  Math.round(safety_days * 10) / 10,
+      safety_qty:   Math.round(safety_qty),
+
+      // ШАГ 5
+      on_hand_total,
+      total_stock,
+      fbo_wb: fbo, fbs_pushkino: fbsPush, fbs_smolensk: fbsSmol, kits_stock: kits,
+      in_transit, in_production,
+
+      // ШАГ 6
+      calc_order,
+      manager_order: 0,
+      delta_order: 0,
+
+      // Контекст
+      horizon_days: horizon,
+      lead_time_days: lt,
+      is_new,
+      low_data,
+      forecast_30d,
+
+      // Производные (для UI)
       dpd: Math.round(dpd * 10) / 10,
-      days_stock: Math.round(daysStock),
-      log_pleche: logPleche,
-      calc_order: calcOrder,
-      cost_plan: china?.cost_plan ?? null,
-      abc_class: abc?.abc_class ?? null,
+      stock_days: days_stock,
+      oos_days_31,
+
+      // ABC
+      abc_class:     abc?.abc_class ?? null,
       profitability: abc?.profitability ?? null,
       gmroi,
-      nearest_arrival: china?.nearest_date ?? null,
-      supply_date: snap?.supply_date ?? null,
-      supply_qty: snap?.supply_qty ?? null,
-      days_to_arrival: snap?.days_to_arrival ?? null,
-      price: snap?.price ?? null,
-      margin_pct: snap?.margin_pct ?? null,
-      manager: snap?.manager ?? null,
-      status,
-    }
-  })
 
-  const statusOrder = { oos: 0, critical: 1, warning: 2, ok: 3 }
+      // Финансы
+      cost_plan:    china?.cost_plan ?? null,
+      price:        snap?.price ?? null,
+      margin_pct:   snap?.margin_pct ?? null,
+      nearest_arrival: china?.nearest_date ?? null,
+      supply_date:  snap?.supply_date ?? null,
+      supply_qty:   snap?.supply_qty ?? null,
+    }
+  }
+
+  const rows: OrderRow[] = []
+  for (const skuMs of Object.keys(pass1)) {
+    rows.push(buildRow(skuMs, pass1[skuMs]))
+  }
+
+  // Сортировка: сначала проблемные
+  const statusOrder = { critical: 0, warning: 1, ok: 2 } as const
   rows.sort((a, b) => statusOrder[a.status] - statusOrder[b.status])
 
-  const criticalRows = rows.filter(r => r.status === 'critical' || r.status === 'oos')
-  const warningRows = rows.filter(r => r.status === 'warning')
-  const toOrderRows = rows.filter(r => r.calc_order > 0)
-  const avgDaysToOos = rows.reduce((s, r) => s + r.days_stock, 0) / Math.max(rows.length, 1)
+  // ── 12. Summary ─────────────────────────────────────────────────────────
+  const criticalRows = rows.filter(r => r.status === 'critical')
+  const warningRows  = rows.filter(r => r.status === 'warning')
+  const toOrderRows  = rows.filter(r => r.calc_order > 0)
+  const oosWithDemand = rows.filter(r => r.total_stock === 0 && r.sales_qty_31d > 0).length
+
+  const total_stock_qty = rows.reduce((s, r) => s + r.total_stock, 0)
+  const total_stock_rub = rows.reduce((s, r) => s + r.total_stock * (r.price ?? 0), 0)
+  const order_sum_rub = toOrderRows.reduce((s, r) => s + r.calc_order * (r.cost_plan ?? 0), 0)
+  const to_order_count = toOrderRows.reduce((s, r) => s + r.calc_order, 0)
+  const velocity_avg = rows.length > 0 ? rows.reduce((s, r) => s + r.dpd, 0) / rows.length : 0
+  const turnover_days_avg = rows.length > 0
+    ? Math.round(rows.reduce((s, r) => s + Math.min(r.stock_days, 365), 0) / rows.length)
+    : 0
+  const forecast_30d_total = rows.reduce((s, r) => s + r.forecast_30d, 0)
 
   const summary = {
     critical_count: criticalRows.length,
-    warning_count: warningRows.length,
-    oos_with_demand: rows.filter(r => r.status === 'oos' && r.revenue_31d > 0).length,
-    to_order_count: toOrderRows.reduce((s, r) => s + r.calc_order, 0),
-    to_order_sum_rub: toOrderRows.reduce((s, r) => s + r.calc_order * (r.cost_plan ?? 0), 0),
-    avg_days_to_oos: Math.round(avgDaysToOos),
-    total_stock_rub: rows.reduce((s, r) => s + r.total_stock * (r.price ?? 0), 0),
+    warning_count:  warningRows.length,
+    oos_with_demand: oosWithDemand,
+    to_order_count,
+    order_sum_rub: Math.round(order_sum_rub),
+    total_stock_qty,
+    total_stock_rub: Math.round(total_stock_rub),
+    velocity_avg: Math.round(velocity_avg * 10) / 10,
+    turnover_days_avg,
+    forecast_30d_total,
   }
 
-  const mappedRows = rows.map(r => ({
-    sku_ms: r.sku_ms,
-    sku_wb: String(r.sku_wb),
-    name: r.name ?? '',
-    brand: r.brand ?? '',
-    subject_wb: r.subject_wb ?? '',
-    status: r.status === 'oos' ? 'critical' : r.status,
-    abc: r.abc_class ?? '—',
-    revenue_31d: r.revenue_31d,
-    revenue_7d: r.revenue_7d,
-    revenue_14d: r.revenue_14d,
-    dpd: r.dpd,
-    stock_qty: r.total_stock,
-    fbo_wb: r.fbo_wb,
-    fbs_pushkino: r.fbs_pushkino,
-    fbs_smolensk: r.fbs_smolensk,
-    kits_stock: r.kits_stock,
-    in_transit: r.in_transit,
-    in_production: r.in_production,
-    already_have: r.already_have,
-    stock_days: r.days_stock,
-    lead_time: r.log_pleche,
-    calc_order: r.calc_order,
-    cost_plan: r.cost_plan,
-    manager_order: 0,
-    margin_pct: r.margin_pct,
-    gmroi: r.gmroi,
-    nearest_arrival: r.nearest_arrival,
-    supply_date: r.supply_date,
-    supply_qty: r.supply_qty,
-    days_to_arrival: r.days_to_arrival,
-    price: r.price,
-    manager: r.manager,
-  }))
-
-  return NextResponse.json({ summary, rows: mappedRows, latest_date: maxDate, latest_snap: maxSnapDate })
+  return NextResponse.json({
+    summary,
+    rows,
+    latest_date: maxDate,
+    latest_snap: maxSnapDate,
+    period,
+    horizon,
+  })
 }
