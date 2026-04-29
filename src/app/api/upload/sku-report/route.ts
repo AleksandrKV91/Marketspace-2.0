@@ -38,16 +38,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(e) }, { status: 422 })
   }
 
-  const dates = [...new Set(parsed.daily.map(d => d.metric_date))].sort()
-
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')
     .insert({
       file_type: 'sku_report',
       filename,
       rows_count: parsed.rows_parsed,
-      period_start: dates[0] ?? null,
-      period_end: dates[dates.length - 1] ?? null,
+      period_start: parsed.period_start,
+      period_end: parsed.period_end,
       status: 'ok',
     })
     .select('id')
@@ -57,6 +55,7 @@ export async function POST(req: NextRequest) {
 
   const uploadId = upload.id
 
+  // ── 1. fact_sku_daily ─────────────────────────────────────────
   const dedupedDaily = [...new Map(
     parsed.daily.map(r => [`${r.sku_ms}|${r.metric_date}`, r])
   ).values()]
@@ -65,21 +64,38 @@ export async function POST(req: NextRequest) {
     const { error } = await supabase.from('fact_sku_daily').upsert(batch, { onConflict: 'sku_ms,metric_date' })
     if (error) {
       await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: `fact_sku_daily: ${error.message}` }, { status: 500 })
     }
   }
 
-  // Изменения цен
+  // ── 2. fact_sku_period ────────────────────────────────────────
+  const dedupedPeriod = [...new Map(
+    parsed.period.map(r => [`${r.sku_ms}|${r.period_start}|${r.period_end}`, r])
+  ).values()]
+
+  for (const batch of chunk(dedupedPeriod.map(r => ({ ...r, upload_id: uploadId })), 500)) {
+    const { error } = await supabase.from('fact_sku_period').upsert(batch, { onConflict: 'sku_ms,period_start,period_end' })
+    if (error) {
+      await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)
+      return NextResponse.json({ error: `fact_sku_period: ${error.message}` }, { status: 500 })
+    }
+  }
+
+  // ── 3. fact_price_changes ─────────────────────────────────────
   const priceChangeDedup = new Map<string, typeof parsed.priceChanges[0]>()
   for (const r of parsed.priceChanges) {
     priceChangeDedup.set(`${r.sku_wb}|${r.price_date}`, r)
   }
   const dedupedPriceChanges = [...priceChangeDedup.values()].map(r => ({
-    sku_wb: r.sku_wb!,
+    sku_wb: r.sku_wb,
     sku_ms: r.sku_ms,
     price_date: r.price_date,
     price: r.price,
+    price_before: r.price_before,
     delta_pct: r.delta_pct,
+    ctr_change: r.ctr_change,
+    cr_change: r.cr_change,
+    upload_id: uploadId,
   }))
 
   for (const batch of chunk(dedupedPriceChanges, 500)) {
@@ -87,40 +103,33 @@ export async function POST(req: NextRequest) {
     if (error) console.error('fact_price_changes upsert error:', error.message)
   }
 
-  // Update dim_sku.sku_wb for any SKUs where it is missing
-  const wbUpdates = [...new Map(
-    dedupedDaily.filter(r => r.sku_wb != null).map(r => [r.sku_ms, { sku_ms: r.sku_ms, sku_wb: r.sku_wb! }])
+  // ── 4. dim_sku enrichment (sku_wb + опциональные метаданные) ──
+  const dimUpdates = [...new Map(
+    dedupedPeriod.filter(r => r.sku_wb != null).map(r => [r.sku_ms, {
+      sku_ms: r.sku_ms,
+      sku_wb: r.sku_wb!,
+      ...(r.product_name ? { product_name: r.product_name } : {}),
+      ...(r.brand ? { brand: r.brand } : {}),
+      ...(r.category ? { category_wb: r.category } : {}),
+      ...(r.subject_wb ? { subject_wb: r.subject_wb } : {}),
+    }])
   ).values()]
-  for (const batch of chunk(wbUpdates, 500)) {
+  for (const batch of chunk(dimUpdates, 500)) {
     await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
-  }
-
-  // Пересчитываем daily_agg_sku → fact_daily_agg (fire-and-forget)
-  const aggFrom = dates[0] ?? null
-  const aggTo = dates[dates.length - 1] ?? null
-  if (aggFrom && aggTo) {
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
-    fetch(`${baseUrl}/api/admin/refresh-daily-agg-sku`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: aggFrom, to: aggTo }),
-    }).catch(e => console.error('refresh-daily-agg-sku error:', e))
   }
 
   return NextResponse.json({
     ok: true,
     upload_id: uploadId,
+    period_start: parsed.period_start,
+    period_end: parsed.period_end,
     rows_parsed: parsed.rows_parsed,
     rows_skipped: parsed.skipped_skus.length,
     daily_rows: dedupedDaily.length,
+    period_rows: dedupedPeriod.length,
     price_change_rows: dedupedPriceChanges.length,
     skipped_no_map: parsed.skipped_skus.length,
     sku_map_size: skuMap.size,
-    diag_daily: parsed.daily.slice(0, 2),
-    diag_price_changes: parsed.priceChanges.slice(0, 5),
-    diag_skipped_skus: parsed.skipped_skus,
-    diag_service_rows: parsed.diag_service_rows,
-    diag_sku_map_sample: [...skuMap.entries()].slice(0, 3).map(([wb, ms]) => ({ wb, ms })),
-    diag_blocks: parsed.diag_blocks,
+    diag_skipped_skus: parsed.skipped_skus.slice(0, 20),
   })
 }

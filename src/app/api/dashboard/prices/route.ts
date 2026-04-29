@@ -44,20 +44,20 @@ export async function GET(req: NextRequest) {
   type DimNameRow = { sku_ms: string; name: string | null; brand: string | null; subject_wb: string | null; category_wb: string | null }
 
   async function fetchSnapshot(): Promise<SnapRow[]> {
-    // Берём снапшот из fact_sku_daily по последней snap_date
-    const { data: maxSnapRow } = await supabase.from('fact_sku_daily')
-      .select('snap_date').not('snap_date', 'is', null)
-      .order('snap_date', { ascending: false }).limit(1)
-    const maxSnapDate = maxSnapRow?.[0]?.snap_date
+    // Берём снапшот из fact_sku_period по последнему period_end
+    const { data: maxSnapRow } = await supabase.from('fact_sku_period')
+      .select('period_end')
+      .order('period_end', { ascending: false }).limit(1)
+    const maxSnapDate = maxSnapRow?.[0]?.period_end
     if (!maxSnapDate) return []
     const rows: SnapRow[] = []
     let snapOffset = 0
     const snapPageSize = 1000
     while (true) {
       const { data, error } = await supabase
-        .from('fact_sku_daily')
+        .from('fact_sku_period')
         .select('sku_ms, sku_wb, manager, price, novelty_status')
-        .eq('snap_date', maxSnapDate)
+        .eq('period_end', maxSnapDate)
         .range(snapOffset, snapOffset + snapPageSize - 1)
       if (error || !data || data.length === 0) break
       rows.push(...data)

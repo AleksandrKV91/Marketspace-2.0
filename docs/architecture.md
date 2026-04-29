@@ -3,7 +3,22 @@
 > **Назначение этого файла:** карта проекта на русском, для быстрого ориентирования. Здесь — _что где лежит_, _какие данные куда текут_, _какие формулы используются_, и _где известные проблемы_.
 > **Обновлять при каждом изменении логики БД, парсеров, маршрутов или вкладок.**
 >
-> Дата создания: 2026-04-27 · Last sync: 2026-04-27.
+> Дата создания: 2026-04-27 · Last sync: 2026-04-29 (миграция 013).
+
+---
+
+## ⚠️ Миграция 013 — переработка схемы SKU
+
+С версии `013_redesign_sku_facts.sql` загружается **«Отчёт по SKU с расчётами»** — все ключевые показатели приходят уже посчитанными в Excel. Изменения:
+
+- **Удалены**: `daily_agg_sku`, `fact_daily_agg`, `fact_sku_snapshot`, RPC `refresh_daily_agg*`, endpoints `/api/admin/refresh-daily-agg*`.
+- **Создана `fact_sku_period`** — снапшот метаданных и агрегатов на период (PK `(sku_ms, period_start, period_end)`).
+- **`fact_sku_daily`** теперь хранит дневные показатели: `revenue, ad_spend, sales_qty, cost_sum, margin_rub, chmd_rub, marginality, chmd_pct, drr_*, ctr, cr_*, cpm, cpc, ad_order_share, price` (PK `(sku_ms, metric_date)`).
+- **`fact_price_changes`** расширена: `price_before, ctr_change, cr_change, delta_pct`.
+- Парсер `parseSkuReport` использует зашитые column-индексы (формат файла стабилен, 136 колонок).
+- API роуты `/api/dashboard/{overview,orders,prices,analytics,sku-table}` читают `fact_sku_daily` + `fact_sku_period` напрямую — никаких материализованных агрегатов.
+
+Старые разделы 4.1, 6.5 и упоминания `daily_agg_sku/fact_daily_agg/fact_sku_snapshot` в документе ниже — **исторические**.
 
 ---
 

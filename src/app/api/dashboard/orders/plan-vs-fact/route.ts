@@ -50,7 +50,7 @@ export async function GET() {
 
   // Факт: daily_agg_sku.sales_qty за последние 6 месяцев
   const { data: maxRow } = await supabase
-    .from('daily_agg_sku')
+    .from('fact_sku_daily')
     .select('metric_date')
     .order('metric_date', { ascending: false })
     .limit(1)

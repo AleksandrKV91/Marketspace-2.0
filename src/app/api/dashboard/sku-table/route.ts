@@ -38,12 +38,10 @@ async function handler(req: NextRequest) {
   )
   for (const r of dimData) dimByMs[r.sku_ms] = r
 
-  // ── 2. fact_sku_daily — snap data (latest snap_date) ─────────────────────
-  // Same approach as orders/analytics routes — sku_wb comes from here
-  const { data: maxSnapRow } = await supabase.from('fact_sku_daily')
-    .select('snap_date').not('snap_date', 'is', null)
-    .order('snap_date', { ascending: false }).limit(1)
-  const maxSnapDate = maxSnapRow?.[0]?.snap_date
+  // ── 2. fact_sku_period — snapshot (latest period_end) ────────────────────
+  const { data: maxSnapRow } = await supabase.from('fact_sku_period')
+    .select('period_end').order('period_end', { ascending: false }).limit(1)
+  const maxSnapDate = maxSnapRow?.[0]?.period_end
 
   type SnapRow = {
     sku_ms: string; sku_wb: number | null
@@ -53,13 +51,26 @@ async function handler(req: NextRequest) {
   }
   const snapByMs: Record<string, SnapRow> = {}
   if (maxSnapDate) {
-    const snapRows = await fetchAll<SnapRow>(
-      (sb) => sb.from('fact_sku_daily')
-        .select('sku_ms, sku_wb, fbo_wb, fbs_pushkino, fbs_smolensk, kits_stock, stock_days, price, margin_pct, manager, novelty_status')
-        .eq('snap_date', maxSnapDate),
+    type PRow = {
+      sku_ms: string; sku_wb: number | null
+      fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
+      kits_qty: number | null; stock_days: number | null; price: number | null
+      period_marginality_wgt: number | null; manager: string | null; novelty_status: string | null
+    }
+    const periodRows = await fetchAll<PRow>(
+      (sb) => sb.from('fact_sku_period')
+        .select('sku_ms, sku_wb, fbo_wb, fbs_pushkino, fbs_smolensk, kits_qty, stock_days, price, period_marginality_wgt, manager, novelty_status')
+        .eq('period_end', maxSnapDate),
       supabase,
     )
-    for (const r of snapRows) { if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = r }
+    for (const r of periodRows) {
+      if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = {
+        sku_ms: r.sku_ms, sku_wb: r.sku_wb,
+        fbo_wb: r.fbo_wb, fbs_pushkino: r.fbs_pushkino, fbs_smolensk: r.fbs_smolensk,
+        kits_stock: r.kits_qty, stock_days: r.stock_days, price: r.price,
+        margin_pct: r.period_marginality_wgt, manager: r.manager, novelty_status: r.novelty_status,
+      }
+    }
   }
 
   // ── 3. Date range ─────────────────────────────────────────────────────────

@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
         const parsed = parseSkuReport(buf.buffer as ArrayBuffer, skuMap.size > 0 ? skuMap : undefined)
 
         // Дедупликация по (sku_wb, price_date)
-        const dedup = new Map<string, { sku_wb: number; sku_ms: string; price_date: string; price: number; delta_pct: number | null }>()
+        const dedup = new Map<string, { sku_wb: number; sku_ms: string | null; price_date: string; price: number | null; delta_pct: number | null }>()
         for (const r of parsed.priceChanges) {
           if (r.sku_wb) dedup.set(`${r.sku_wb}|${r.price_date}`, { sku_wb: r.sku_wb, sku_ms: r.sku_ms, price_date: r.price_date, price: r.price, delta_pct: r.delta_pct })
         }

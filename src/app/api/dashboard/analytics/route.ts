@@ -52,7 +52,7 @@ export async function GET(req: Request) {
   const dimByMs: Record<string, DimRow> = {}
   for (const r of dimRows) dimByMs[r.sku_ms] = r
 
-  // ── 2. fact_sku_daily — снапшотные поля (последняя snap_date) ────────────────
+  // ── 2. fact_sku_period — снапшотные поля (последний period_end) ──────────
   type SnapRow = {
     sku_ms: string; margin_pct: number | null; price: number | null
     manager: string | null; novelty_status: string | null; stock_days: number | null
@@ -60,18 +60,34 @@ export async function GET(req: Request) {
   }
   const snapByMs: Record<string, SnapRow> = {}
   {
-    const { data: maxSnapRow } = await supabase.from('fact_sku_daily')
-      .select('snap_date').not('snap_date', 'is', null)
-      .order('snap_date', { ascending: false }).limit(1)
-    const maxSnapDate = maxSnapRow?.[0]?.snap_date
+    const { data: maxSnapRow } = await supabase.from('fact_sku_period')
+      .select('period_end').order('period_end', { ascending: false }).limit(1)
+    const maxSnapDate = maxSnapRow?.[0]?.period_end
     if (maxSnapDate) {
-      const rows = await fetchAll<SnapRow>(
-        (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, margin_pct, price, manager, novelty_status, stock_days, fbo_wb, fbs_pushkino, fbs_smolensk')
-          .eq('snap_date', maxSnapDate),
+      type PRow = {
+        sku_ms: string; period_marginality_wgt: number | null; price: number | null
+        manager: string | null; novelty_status: string | null; stock_days: number | null
+        fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
+      }
+      const rows = await fetchAll<PRow>(
+        (sb) => sb.from('fact_sku_period')
+          .select('sku_ms, period_marginality_wgt, price, manager, novelty_status, stock_days, fbo_wb, fbs_pushkino, fbs_smolensk')
+          .eq('period_end', maxSnapDate),
         supabase,
       )
-      for (const r of rows) { if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = r }
+      for (const r of rows) {
+        if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = {
+          sku_ms: r.sku_ms,
+          margin_pct: r.period_marginality_wgt,
+          price: r.price,
+          manager: r.manager,
+          novelty_status: r.novelty_status,
+          stock_days: r.stock_days,
+          fbo_wb: r.fbo_wb,
+          fbs_pushkino: r.fbs_pushkino,
+          fbs_smolensk: r.fbs_smolensk,
+        }
+      }
     }
   }
 

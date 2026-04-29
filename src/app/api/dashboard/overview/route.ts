@@ -102,7 +102,7 @@ export async function GET(req: Request) {
     if (r.sku_wb) dimByWb[r.sku_wb] = r.sku_ms
   }
 
-  // ── 3. fact_sku_daily — снапшотные поля (последняя snap_date) ────────────
+  // ── 3. fact_sku_period — снапшотные поля (последний period_end) ──────────
   type SnapRow = {
     sku_ms: string; margin_pct: number | null
     chmd_5d: number | null; manager: string | null; price: number | null
@@ -112,18 +112,36 @@ export async function GET(req: Request) {
   }
   const snapByMs: Record<string, SnapRow> = {}
   {
-    const { data: maxSnapRow } = await supabase.from('fact_sku_daily')
-      .select('snap_date').not('snap_date', 'is', null)
-      .order('snap_date', { ascending: false }).limit(1)
-    const maxSnapDate = maxSnapRow?.[0]?.snap_date
-    if (maxSnapDate) {
-      const rows = await fetchAll<SnapRow>(
-        (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, margin_pct, chmd_5d, manager, price, stock_days, novelty_status, fbo_wb, fbs_pushkino, fbs_smolensk, snap_date')
-          .eq('snap_date', maxSnapDate),
+    const { data: maxRow } = await supabase.from('fact_sku_period')
+      .select('period_end').order('period_end', { ascending: false }).limit(1)
+    const maxPeriodEnd = maxRow?.[0]?.period_end
+    if (maxPeriodEnd) {
+      type PeriodRow = {
+        sku_ms: string; period_marginality_wgt: number | null; period_chmd_rub: number | null
+        manager: string | null; price: number | null; stock_days: number | null; novelty_status: string | null
+        fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null; period_end: string
+      }
+      const rows = await fetchAll<PeriodRow>(
+        (sb) => sb.from('fact_sku_period')
+          .select('sku_ms, period_marginality_wgt, period_chmd_rub, manager, price, stock_days, novelty_status, fbo_wb, fbs_pushkino, fbs_smolensk, period_end')
+          .eq('period_end', maxPeriodEnd),
         supabase,
       )
-      for (const r of rows) { if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = r }
+      for (const r of rows) {
+        if (!snapByMs[r.sku_ms]) snapByMs[r.sku_ms] = {
+          sku_ms: r.sku_ms,
+          margin_pct: r.period_marginality_wgt,
+          chmd_5d: r.period_chmd_rub,
+          manager: r.manager,
+          price: r.price,
+          stock_days: r.stock_days,
+          novelty_status: r.novelty_status,
+          fbo_wb: r.fbo_wb,
+          fbs_pushkino: r.fbs_pushkino,
+          fbs_smolensk: r.fbs_smolensk,
+          snap_date: r.period_end,
+        }
+      }
     }
   }
 
@@ -166,11 +184,11 @@ export async function GET(req: Request) {
 
   // ── 8. fact_sku_daily — текущий период ──────────────────────────────────
   // margin_pct нужен для per-day ЧМД в трендовом графике
-  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; ctr: number | null; cr_order: number | null; margin_pct: number | null }
+  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; ctr: number | null; cr_order: number | null; marginality: number | null }
   const dailyRows = fromDate && toDate
     ? await fetchAll<DailyRow>(
         (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, margin_pct')
+          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, marginality')
           .gte('metric_date', fromDate!).lte('metric_date', toDate!),
         supabase,
       )
@@ -184,7 +202,7 @@ export async function GET(req: Request) {
   const prevDailyRows = prevFrom && prevTo
     ? await fetchAll<DailyRow>(
         (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, margin_pct')
+          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, marginality')
           .gte('metric_date', prevFrom).lte('metric_date', prevTo),
         supabase,
       )
@@ -207,7 +225,7 @@ export async function GET(req: Request) {
     if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0, chmd: 0 }
     const rev = r.revenue ?? 0
     const spend = r.ad_spend ?? 0
-    const mp = r.margin_pct ?? 0
+    const mp = r.marginality ?? 0
     dateAgg[r.metric_date].revenue += rev
     dateAgg[r.metric_date].ad_spend += spend
     // ЧМД per-SKU per-day = revenue * margin_pct − ad_spend

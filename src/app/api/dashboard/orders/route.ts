@@ -61,14 +61,13 @@ export async function GET(req: Request) {
     supabase,
   )
 
-  // ── 3. Snapshot из fact_sku_daily (последний snap_date) ─────────────────
+  // ── 3. Snapshot из fact_sku_period (последний period_end) ───────────────
   const { data: maxSnapRow } = await supabase
-    .from('fact_sku_daily')
-    .select('snap_date')
-    .not('snap_date', 'is', null)
-    .order('snap_date', { ascending: false })
+    .from('fact_sku_period')
+    .select('period_end')
+    .order('period_end', { ascending: false })
     .limit(1)
-  const maxSnapDate = maxSnapRow?.[0]?.snap_date
+  const maxSnapDate = maxSnapRow?.[0]?.period_end
 
   type SnapRow = {
     sku_ms: string; sku_wb: number | null; snap_date: string | null
@@ -79,20 +78,42 @@ export async function GET(req: Request) {
   }
   const snapMap: Record<string, SnapRow> = {}
   if (maxSnapDate) {
-    const snapRows = await fetchAll<SnapRow>(
-      (sb) => sb.from('fact_sku_daily')
-        .select('sku_ms, sku_wb, snap_date, fbo_wb, fbs_pushkino, fbs_smolensk, kits_stock, stock_days, price, margin_pct, supply_date, supply_qty, days_to_arrival, manager')
-        .eq('snap_date', maxSnapDate),
+    type PeriodRow = {
+      sku_ms: string; sku_wb: number | null; period_end: string
+      fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
+      kits_qty: number | null; stock_days: number | null; price: number | null
+      period_marginality_wgt: number | null; plan_supply_date: string | null; plan_supply_qty: number | null
+      days_until_arrival: number | null; manager: string | null
+    }
+    const periodRows = await fetchAll<PeriodRow>(
+      (sb) => sb.from('fact_sku_period')
+        .select('sku_ms, sku_wb, period_end, fbo_wb, fbs_pushkino, fbs_smolensk, kits_qty, stock_days, price, period_marginality_wgt, plan_supply_date, plan_supply_qty, days_until_arrival, manager')
+        .eq('period_end', maxSnapDate),
       supabase,
     )
-    for (const r of snapRows) {
-      if (!snapMap[r.sku_ms]) snapMap[r.sku_ms] = r
+    for (const r of periodRows) {
+      if (!snapMap[r.sku_ms]) snapMap[r.sku_ms] = {
+        sku_ms: r.sku_ms,
+        sku_wb: r.sku_wb,
+        snap_date: r.period_end,
+        fbo_wb: r.fbo_wb,
+        fbs_pushkino: r.fbs_pushkino,
+        fbs_smolensk: r.fbs_smolensk,
+        kits_stock: r.kits_qty,
+        stock_days: r.stock_days,
+        price: r.price,
+        margin_pct: r.period_marginality_wgt,
+        supply_date: r.plan_supply_date,
+        supply_qty: r.plan_supply_qty,
+        days_to_arrival: r.days_until_arrival,
+        manager: r.manager,
+      }
     }
   }
 
-  // ── 4. Дневные продажи: daily_agg_sku.sales_qty (за 31д) ────────────────
+  // ── 4. Дневные продажи: fact_sku_daily.sales_qty (за 31д) ──────────────
   const { data: maxMetricRow } = await supabase
-    .from('daily_agg_sku')
+    .from('fact_sku_daily')
     .select('metric_date')
     .order('metric_date', { ascending: false })
     .limit(1)
@@ -105,7 +126,7 @@ export async function GET(req: Request) {
     from31 = addDaysISO(maxDate, -30)
     type DailyAgg = { sku_ms: string; metric_date: string; sales_qty: number | null }
     const sales31 = await fetchAll<DailyAgg>(
-      (sb) => sb.from('daily_agg_sku')
+      (sb) => sb.from('fact_sku_daily')
         .select('sku_ms, metric_date, sales_qty')
         .gte('metric_date', from31!)
         .lte('metric_date', maxDate!),
@@ -247,7 +268,7 @@ export async function GET(req: Request) {
     for (let i = 0; i < yoyCandidates.length; i += 200) {
       const batch = yoyCandidates.slice(i, i + 200)
       const { data: yoyRows } = await supabase
-        .from('daily_agg_sku')
+        .from('fact_sku_daily')
         .select('sku_ms, sales_qty')
         .gte('metric_date', yoyFrom)
         .lte('metric_date', yoyTo)
