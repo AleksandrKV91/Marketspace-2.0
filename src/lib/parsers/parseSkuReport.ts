@@ -255,10 +255,11 @@ export function parseSkuReport(buffer: ArrayBuffer, skuMap?: Map<string, string>
     const skuWb = toNum(row[COL.sku_wb])
     if (!skuWb) continue // пустая или служебная строка
 
-    const skuMs = skuMap?.get(String(skuWb))
-    if (!skuMs) {
+    // Если маппинга нет — используем строку sku_wb как идентификатор.
+    // Данные не теряются; для диагностики записываем в skipped_skus.
+    const skuMs = skuMap?.get(String(skuWb)) ?? String(skuWb)
+    if (skuMap && skuMap.size > 0 && !skuMap.has(String(skuWb))) {
       skippedSkus.push(String(skuWb))
-      continue
     }
 
     if (!periodStart || !periodEnd) continue
