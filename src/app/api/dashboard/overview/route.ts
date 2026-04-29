@@ -184,11 +184,11 @@ export async function GET(req: Request) {
 
   // ── 8. fact_sku_daily — текущий период ──────────────────────────────────
   // margin_pct нужен для per-day ЧМД в трендовом графике
-  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; ctr: number | null; cr_order: number | null; marginality: number | null }
+  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; ctr: number | null; cr_order: number | null; chmd_rub: number | null; margin_rub: number | null }
   const dailyRows = fromDate && toDate
     ? await fetchAll<DailyRow>(
         (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, marginality')
+          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, chmd_rub, margin_rub')
           .gte('metric_date', fromDate!).lte('metric_date', toDate!),
         supabase,
       )
@@ -202,42 +202,41 @@ export async function GET(req: Request) {
   const prevDailyRows = prevFrom && prevTo
     ? await fetchAll<DailyRow>(
         (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, marginality')
+          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, chmd_rub, margin_rub')
           .gte('metric_date', prevFrom).lte('metric_date', prevTo),
         supabase,
       )
     : []
 
   // ── 11. Агрегация по SKU — текущий период ────────────────────────────────
-  type SkuAgg = { revenue: number; ad_spend: number; ctr: number[]; cr_order: number[]; days: Set<string> }
+  type SkuAgg = { revenue: number; ad_spend: number; chmd: number; marginRub: number; ctr: number[]; cr_order: number[]; days: Set<string> }
   const skuAgg: Record<string, SkuAgg> = {}
   const dateAgg: Record<string, { revenue: number; ad_spend: number; chmd: number }> = {}
 
   for (const r of dailyRows) {
-    if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0, ctr: [], cr_order: [], days: new Set() }
+    if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0, ctr: [], cr_order: [], days: new Set() }
     const s = skuAgg[r.sku_ms]
-    s.revenue += r.revenue ?? 0
-    s.ad_spend += r.ad_spend ?? 0
+    s.revenue   += r.revenue   ?? 0
+    s.ad_spend  += r.ad_spend  ?? 0
+    s.chmd      += r.chmd_rub  ?? 0
+    s.marginRub += r.margin_rub ?? 0
     if (r.ctr != null) s.ctr.push(r.ctr)
     if (r.cr_order != null) s.cr_order.push(r.cr_order)
     s.days.add(r.metric_date)
 
     if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0, chmd: 0 }
-    const rev = r.revenue ?? 0
-    const spend = r.ad_spend ?? 0
-    const mp = r.marginality ?? 0
-    dateAgg[r.metric_date].revenue += rev
-    dateAgg[r.metric_date].ad_spend += spend
-    // ЧМД per-SKU per-day = revenue * margin_pct − ad_spend
-    dateAgg[r.metric_date].chmd += rev * mp - spend
+    dateAgg[r.metric_date].revenue   += r.revenue   ?? 0
+    dateAgg[r.metric_date].ad_spend  += r.ad_spend  ?? 0
+    dateAgg[r.metric_date].chmd      += r.chmd_rub  ?? 0
   }
 
   // ── 12. Агрегация по SKU — предыдущий период ─────────────────────────────
-  const prevSkuAgg: Record<string, { revenue: number; ad_spend: number }> = {}
+  const prevSkuAgg: Record<string, { revenue: number; ad_spend: number; chmd: number }> = {}
   for (const r of prevDailyRows) {
-    if (!prevSkuAgg[r.sku_ms]) prevSkuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0 }
-    prevSkuAgg[r.sku_ms].revenue += r.revenue ?? 0
+    if (!prevSkuAgg[r.sku_ms]) prevSkuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0, chmd: 0 }
+    prevSkuAgg[r.sku_ms].revenue  += r.revenue  ?? 0
     prevSkuAgg[r.sku_ms].ad_spend += r.ad_spend ?? 0
+    prevSkuAgg[r.sku_ms].chmd     += r.chmd_rub ?? 0
   }
 
   const periodDays = fromDate && toDate
@@ -305,7 +304,7 @@ export async function GET(req: Request) {
   const focusCanScale: Array<{ sku_ms: string; name: string; revenue: number; drr: number; sku_wb: number | null }> = []
 
   for (const ms of filteredSkuMs) {
-    const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, ctr: [], cr_order: [], days: new Set<string>() }
+    const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0, ctr: [], cr_order: [], days: new Set<string>() }
     const snap = snapByMs[ms]
     const dim  = dimByMs[ms]
     const skuWb = dim?.sku_wb ?? null
@@ -324,18 +323,15 @@ export async function GET(req: Request) {
     // KPI totals
     totalRevenue += s.revenue
     totalAdSpend += s.ad_spend
-    // ЧМД per-SKU = revenue × margin_pct − ad_spend
-    const chmdSku = s.revenue * marginPct - s.ad_spend
-    totalChmd += chmdSku
-    // Себестоимость = revenue × (1 − margin_pct)
-    totalCostOfGoods += s.revenue * (1 - marginPct)
+    totalChmd    += s.chmd
+    totalCostOfGoods += s.revenue - s.marginRub
 
     // Предыдущий период
     const prev = prevSkuAgg[ms]
     if (prev) {
       prevRevenue += prev.revenue
       prevAdSpend += prev.ad_spend
-      prevChmd += prev.revenue * marginPct - prev.ad_spend
+      prevChmd    += prev.chmd
     }
 
     // Упущенная выручка OOS
@@ -430,7 +426,7 @@ export async function GET(req: Request) {
   // ── 18. Средневзвешенная маржа (для unitEcon графика) ────────────────────
   let wMarginNum = 0, wMarginDen = 0
   for (const ms of filteredSkuMs) {
-    const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, ctr: [], cr_order: [], days: new Set<string>() }
+    const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0, ctr: [], cr_order: [], days: new Set<string>() }
     const snap = snapByMs[ms]
     const mp   = snap?.margin_pct ?? null
     if (mp != null && s.revenue > 0) {
@@ -494,7 +490,7 @@ export async function GET(req: Request) {
   // ── 21. Top-15 SKU по Score ───────────────────────────────────────────────
   const top15 = [...filteredSkuMs]
     .map(ms => {
-      const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, ctr: [], cr_order: [], days: new Set<string>() }
+      const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0, ctr: [], cr_order: [], days: new Set<string>() }
       const snap = snapByMs[ms]
       const dim  = dimByMs[ms]
       const skuWb = dim?.sku_wb ?? null
@@ -523,9 +519,8 @@ export async function GET(req: Request) {
         is_novelty_low: snap?.novelty_status === 'Новинки' && s.revenue < 10000,
       })
 
-      // ЧМД per-SKU
-      const chmd = s.revenue * marginPct - s.ad_spend
-      const costOfGoods = s.revenue * (1 - marginPct)
+      const chmd = s.chmd
+      const costOfGoods = s.revenue - s.marginRub
 
       return {
         sku_ms: ms,

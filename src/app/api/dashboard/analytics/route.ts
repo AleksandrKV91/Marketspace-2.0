@@ -116,13 +116,13 @@ export async function GET(req: Request) {
   // ── 4. fact_sku_daily — текущий и предыдущий периоды ─────────────────────────
   // Читаем напрямую через fetchAll (пагинированно, без лимита PostgREST).
   // Это единственный источник истины — fact_daily_agg не трогаем совсем.
-  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null }
+  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; chmd_rub: number | null; margin_rub: number | null }
 
   const [currDailyRows, prevDailyRows] = await Promise.all([
     fromDate && toDate
       ? fetchAll<DailyRow>(
           (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, metric_date, revenue, ad_spend')
+            .select('sku_ms, metric_date, revenue, ad_spend, chmd_rub, margin_rub')
             .gte('metric_date', fromDate!).lte('metric_date', toDate!),
           supabase,
         )
@@ -130,7 +130,7 @@ export async function GET(req: Request) {
     prevFrom && prevTo
       ? fetchAll<DailyRow>(
           (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, metric_date, revenue, ad_spend')
+            .select('sku_ms, metric_date, revenue, ad_spend, chmd_rub, margin_rub')
             .gte('metric_date', prevFrom!).lte('metric_date', prevTo!),
           supabase,
         )
@@ -138,13 +138,13 @@ export async function GET(req: Request) {
   ])
 
   // ── 5. Агрегация текущего периода ────────────────────────────────────────────
-  // Все три агрегата (KPI, daily chart, SKU-иерархия) вычисляются из одного прохода.
   let totalRevenue = 0
   let totalAdSpend = 0
-  let totalMarginSum = 0   // Σ (revenue × margin_pct) — для margin_pct и chmd
+  let totalMarginSum = 0   // Σ (revenue × margin_pct) — только для отображения margin_pct%
+  let totalChmdSum = 0     // Σ chmd_rub — готовые значения из файла
 
-  const dateAgg: Record<string, { revenue: number; ad_spend: number; marginSum: number }> = {}
-  const skuAgg: Record<string, { revenue: number; ad_spend: number }> = {}
+  const dateAgg: Record<string, { revenue: number; ad_spend: number; marginSum: number; chmd: number }> = {}
+  const skuAgg: Record<string, { revenue: number; ad_spend: number; chmd: number; marginRub: number }> = {}
 
   for (const r of currDailyRows) {
     const rev   = r.revenue   ?? 0
@@ -154,19 +154,23 @@ export async function GET(req: Request) {
     totalRevenue   += rev
     totalAdSpend   += spend
     totalMarginSum += rev * mPct
+    totalChmdSum   += r.chmd_rub ?? 0
 
-    if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0, marginSum: 0 }
+    if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0, marginSum: 0, chmd: 0 }
     dateAgg[r.metric_date].revenue   += rev
     dateAgg[r.metric_date].ad_spend  += spend
     dateAgg[r.metric_date].marginSum += rev * mPct
+    dateAgg[r.metric_date].chmd      += r.chmd_rub ?? 0
 
-    if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0 }
-    skuAgg[r.sku_ms].revenue  += rev
-    skuAgg[r.sku_ms].ad_spend += spend
+    if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0 }
+    skuAgg[r.sku_ms].revenue   += rev
+    skuAgg[r.sku_ms].ad_spend  += spend
+    skuAgg[r.sku_ms].chmd      += r.chmd_rub  ?? 0
+    skuAgg[r.sku_ms].marginRub += r.margin_rub ?? 0
   }
 
-  const marginPct        = totalRevenue > 0 ? totalMarginSum / totalRevenue : 0
-  const totalChmd        = totalMarginSum - totalAdSpend
+  const marginPct  = totalRevenue > 0 ? totalMarginSum / totalRevenue : 0
+  const totalChmd  = totalChmdSum
   const drr              = totalRevenue > 0 ? totalAdSpend / totalRevenue : 0
   const forecast30dRevenue = periodDays > 0 ? (totalRevenue / periodDays) * 30 : 0
 
@@ -174,6 +178,7 @@ export async function GET(req: Request) {
   let prevRevenue = 0
   let prevAdSpend = 0
   let prevMarginSum = 0
+  let prevChmdSum = 0
   const prevSkuRev: Record<string, number> = {}
   const prevDateAgg: Record<string, number> = {}
 
@@ -185,11 +190,12 @@ export async function GET(req: Request) {
     prevRevenue   += rev
     prevAdSpend   += spend
     prevMarginSum += rev * mPct
+    prevChmdSum   += r.chmd_rub ?? 0
     prevSkuRev[r.sku_ms] = (prevSkuRev[r.sku_ms] ?? 0) + rev
     prevDateAgg[r.metric_date] = (prevDateAgg[r.metric_date] ?? 0) + rev
   }
 
-  const prevChmd      = prevMarginSum - prevAdSpend
+  const prevChmd      = prevChmdSum
   const prevMarginPct = prevRevenue > 0 ? prevMarginSum / prevRevenue : 0
   const prevDrr       = prevRevenue > 0 ? prevAdSpend / prevRevenue : 0
   const prevCpo: number | null = null
@@ -235,7 +241,7 @@ export async function GET(req: Request) {
     const price        = snap?.price ?? 0
     const marginPctSku = snap?.margin_pct ?? 0
     const totalStock   = (snap?.fbo_wb ?? 0) + (snap?.fbs_pushkino ?? 0) + (snap?.fbs_smolensk ?? 0)
-    const chmd         = s.revenue * marginPctSku - s.ad_spend
+    const chmd         = s.chmd
     const drrSku       = s.revenue > 0 ? s.ad_spend / s.revenue : 0
     const prevRev      = prevSkuRev[ms] ?? 0
     const deltaPct     = prevRev > 0 ? (s.revenue - prevRev) / prevRev : null
@@ -302,7 +308,7 @@ export async function GET(req: Request) {
     .map(([date, d]) => ({
       date,
       revenue:    d.revenue,
-      chmd:       d.marginSum - d.ad_spend,
+      chmd:       d.chmd,
       ad_spend:   d.ad_spend,
       drr:        d.revenue > 0 ? d.ad_spend / d.revenue : 0,
       margin_pct: d.revenue > 0 ? d.marginSum / d.revenue : 0,

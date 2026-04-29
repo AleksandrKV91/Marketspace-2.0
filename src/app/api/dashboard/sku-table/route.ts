@@ -107,13 +107,13 @@ async function handler(req: NextRequest) {
   type DailyRow = {
     sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null
     drr_total: number | null; ctr: number | null; cr_cart: number | null
-    cr_order: number | null; cpm: number | null
+    cr_order: number | null; cpm: number | null; chmd_rub: number | null
   }
   const [dailyRows, prevDailyRows] = await Promise.all([
     effectiveFrom && effectiveTo
       ? fetchAll<DailyRow>(
           (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm')
+            .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, chmd_rub')
             .gte('metric_date', effectiveFrom!).lte('metric_date', effectiveTo!),
           supabase,
         )
@@ -130,16 +130,17 @@ async function handler(req: NextRequest) {
 
   // ── 6. Aggregate daily ────────────────────────────────────────────────────
   type DailyAgg = {
-    revenue: number; ad_spend: number
+    revenue: number; ad_spend: number; chmd: number
     drr: number[]; ctr: number[]; cr_cart: number[]; cr_order: number[]; cpm: number[]
     days: number
   }
   const dailyByMs: Record<string, DailyAgg> = {}
   for (const r of dailyRows) {
-    if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = { revenue: 0, ad_spend: 0, drr: [], ctr: [], cr_cart: [], cr_order: [], cpm: [], days: 0 }
+    if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = { revenue: 0, ad_spend: 0, chmd: 0, drr: [], ctr: [], cr_cart: [], cr_order: [], cpm: [], days: 0 }
     const d = dailyByMs[r.sku_ms]
-    d.revenue  += r.revenue  ?? 0
-    d.ad_spend += r.ad_spend ?? 0
+    d.revenue  += r.revenue   ?? 0
+    d.ad_spend += r.ad_spend  ?? 0
+    d.chmd     += r.chmd_rub  ?? 0
     if (r.drr_total != null) d.drr.push(r.drr_total)
     if (r.ctr      != null) d.ctr.push(r.ctr)
     if (r.cr_cart  != null) d.cr_cart.push(r.cr_cart)
@@ -188,7 +189,7 @@ async function handler(req: NextRequest) {
       : null
 
     const marginPct  = snap?.margin_pct ?? 0
-    const chmd       = revenue * marginPct - adSpend
+    const chmd       = daily?.chmd ?? 0
     const stockDays  = snap?.stock_days ?? 0
 
     const oos_status: 'critical' | 'warning' | 'ok' =
