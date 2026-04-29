@@ -55,7 +55,26 @@ export async function POST(req: NextRequest) {
 
   const uploadId = upload.id
 
-  // ── 1. fact_sku_daily ─────────────────────────────────────────
+  // ── 1. dim_sku enrichment — ПЕРВЫМ, чтобы FK на sku_ms был удовлетворён ──
+  const dedupedPeriod = [...new Map(
+    parsed.period.map(r => [`${r.sku_ms}|${r.period_start}|${r.period_end}`, r])
+  ).values()]
+
+  const dimUpdates = [...new Map(
+    dedupedPeriod.map(r => [r.sku_ms, {
+      sku_ms: r.sku_ms,
+      ...(r.sku_wb != null ? { sku_wb: r.sku_wb } : {}),
+      ...(r.product_name ? { name: r.product_name } : {}),
+      ...(r.brand ? { brand: r.brand } : {}),
+      ...(r.category ? { category_wb: r.category } : {}),
+      ...(r.subject_wb ? { subject_wb: r.subject_wb } : {}),
+    }])
+  ).values()]
+  for (const batch of chunk(dimUpdates, 500)) {
+    await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
+  }
+
+  // ── 2. fact_sku_daily ─────────────────────────────────────────
   const dedupedDaily = [...new Map(
     parsed.daily.map(r => [`${r.sku_ms}|${r.metric_date}`, r])
   ).values()]
@@ -68,11 +87,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── 2. fact_sku_period ────────────────────────────────────────
-  const dedupedPeriod = [...new Map(
-    parsed.period.map(r => [`${r.sku_ms}|${r.period_start}|${r.period_end}`, r])
-  ).values()]
-
+  // ── 3. fact_sku_period ────────────────────────────────────────
   for (const batch of chunk(dedupedPeriod.map(r => ({ ...r, upload_id: uploadId })), 500)) {
     const { error } = await supabase.from('fact_sku_period').upsert(batch, { onConflict: 'sku_ms,period_start,period_end' })
     if (error) {
@@ -81,7 +96,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── 3. fact_price_changes ─────────────────────────────────────
+  // ── 4. fact_price_changes ─────────────────────────────────────
   const priceChangeDedup = new Map<string, typeof parsed.priceChanges[0]>()
   for (const r of parsed.priceChanges) {
     priceChangeDedup.set(`${r.sku_wb}|${r.price_date}`, r)
@@ -101,21 +116,6 @@ export async function POST(req: NextRequest) {
   for (const batch of chunk(dedupedPriceChanges, 500)) {
     const { error } = await supabase.from('fact_price_changes').upsert(batch, { onConflict: 'sku_wb,price_date' })
     if (error) console.error('fact_price_changes upsert error:', error.message)
-  }
-
-  // ── 4. dim_sku enrichment (sku_wb + опциональные метаданные) ──
-  const dimUpdates = [...new Map(
-    dedupedPeriod.filter(r => r.sku_wb != null).map(r => [r.sku_ms, {
-      sku_ms: r.sku_ms,
-      sku_wb: r.sku_wb!,
-      ...(r.product_name ? { product_name: r.product_name } : {}),
-      ...(r.brand ? { brand: r.brand } : {}),
-      ...(r.category ? { category_wb: r.category } : {}),
-      ...(r.subject_wb ? { subject_wb: r.subject_wb } : {}),
-    }])
-  ).values()]
-  for (const batch of chunk(dimUpdates, 500)) {
-    await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
   }
 
   return NextResponse.json({
