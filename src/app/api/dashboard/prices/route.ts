@@ -156,7 +156,8 @@ export async function GET(req: NextRequest) {
     ? await fetchAll<DailyRow>(
         (sb) => sb.from('fact_sku_daily')
           .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share, price')
-          .gte('metric_date', extFrom!).lte('metric_date', extTo!),
+          .gte('metric_date', extFrom!).lte('metric_date', extTo!)
+          .order('sku_ms').order('metric_date'),
         supabase,
       )
     : []
@@ -166,7 +167,8 @@ export async function GET(req: NextRequest) {
     ? await fetchAll<DailyRow>(
         (sb) => sb.from('fact_sku_daily')
           .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share, price')
-          .gte('metric_date', prevFrom!).lte('metric_date', prevTo!),
+          .gte('metric_date', prevFrom!).lte('metric_date', prevTo!)
+          .order('sku_ms').order('metric_date'),
         supabase,
       )
     : []

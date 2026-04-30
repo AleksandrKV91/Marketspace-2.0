@@ -32,13 +32,29 @@ export async function GET(req: Request) {
   const horizon = parseInt(url.searchParams.get('horizon') ?? '60', 10)
   const period = parseInt(url.searchParams.get('period') ?? '31', 10)  // 7|14|31
 
-  // ── 1. Last uploads by type ─────────────────────────────────────────────
-  const { data: lastUploads } = await supabase
-    .from('uploads')
-    .select('id, file_type')
-    .eq('status', 'ok')
-    .order('uploaded_at', { ascending: false })
-    .limit(20)
+  // ── 1-2. Параллельно: uploads + dim_sku + max dates ─────────────────────
+  type DimRow = {
+    sku_ms: string; sku_wb: number | null; name: string | null; brand: string | null
+    subject_wb: string | null
+  } & Record<MonthKey, number | null>
+
+  const [
+    { data: lastUploads },
+    dimRows,
+    { data: maxSnapRow },
+    { data: maxMetricRow },
+  ] = await Promise.all([
+    supabase.from('uploads').select('id, file_type').eq('status', 'ok')
+      .order('uploaded_at', { ascending: false }).limit(20),
+    fetchAll<DimRow>(
+      (sb) => sb.from('dim_sku').select('sku_ms, sku_wb, name, brand, subject_wb, ' + MONTH_KEYS.join(', ')),
+      supabase,
+    ),
+    supabase.from('fact_sku_period').select('period_end')
+      .order('period_end', { ascending: false }).limit(1),
+    supabase.from('fact_sku_daily').select('metric_date')
+      .order('metric_date', { ascending: false }).limit(1),
+  ])
 
   const latestByType: Record<string, string> = {}
   if (lastUploads) {
@@ -47,28 +63,59 @@ export async function GET(req: Request) {
     }
   }
   const chinaId = latestByType['china']
-  const abcId = latestByType['abc']
+  const abcId   = latestByType['abc']
+  const maxSnapDate: string | null = maxSnapRow?.[0]?.period_end ?? null
+  const maxDate:     string | null = maxMetricRow?.[0]?.metric_date ?? null
 
-  // ── 2. dim_sku — все SKU с сезонностью ──────────────────────────────────
-  type DimRow = {
-    sku_ms: string; sku_wb: number | null; name: string | null; brand: string | null
-    subject_wb: string | null
-  } & Record<MonthKey, number | null>
-  const dimRows = await fetchAll<DimRow>(
-    (sb) => sb.from('dim_sku').select(
-      'sku_ms, sku_wb, name, brand, subject_wb, ' + MONTH_KEYS.join(', ')
-    ),
-    supabase,
-  )
+  // ── 3-4. Параллельно: snapshot + daily sales + china + abc ──────────────
+  type PeriodRow = {
+    sku_ms: string; sku_wb: number | null; period_end: string
+    fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
+    kits_qty: number | null; stock_days: number | null; price: number | null
+    period_marginality_wgt: number | null; plan_supply_date: string | null; plan_supply_qty: number | null
+    days_until_arrival: number | null; manager: string | null
+  }
+  type DailyAgg  = { sku_ms: string; metric_date: string; sales_qty: number | null }
+  type AbcRow    = { sku_ms: string; final_class_1: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
+  type ChinaDbRow = { sku_ms: string; in_transit: number | null; in_production: number | null; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null }
 
-  // ── 3. Snapshot из fact_sku_period (последний period_end) ───────────────
-  const { data: maxSnapRow } = await supabase
-    .from('fact_sku_period')
-    .select('period_end')
-    .order('period_end', { ascending: false })
-    .limit(1)
-  const maxSnapDate = maxSnapRow?.[0]?.period_end
+  const from31 = maxDate ? addDaysISO(maxDate, -30) : null
 
+  const [periodRows, sales31, chinaDbRows, abcRows] = await Promise.all([
+    maxSnapDate
+      ? fetchAll<PeriodRow>(
+          (sb) => sb.from('fact_sku_period')
+            .select('sku_ms, sku_wb, period_end, fbo_wb, fbs_pushkino, fbs_smolensk, kits_qty, stock_days, price, period_marginality_wgt, plan_supply_date, plan_supply_qty, days_until_arrival, manager')
+            .eq('period_end', maxSnapDate)
+            .order('sku_ms'),
+          supabase,
+        )
+      : Promise.resolve([] as PeriodRow[]),
+    from31 && maxDate
+      ? fetchAll<DailyAgg>(
+          (sb) => sb.from('fact_sku_daily')
+            .select('sku_ms, metric_date, sales_qty')
+            .gte('metric_date', from31!).lte('metric_date', maxDate!)
+            .order('sku_ms').order('metric_date'),
+          supabase,
+        )
+      : Promise.resolve([] as DailyAgg[]),
+    chinaId
+      ? supabase.from('fact_china_supply')
+          .select('sku_ms, in_transit, in_production, nearest_date, cost_plan, lead_time_days')
+          .eq('upload_id', chinaId)
+      : Promise.resolve({ data: null as ChinaDbRow[] | null, error: null }),
+    abcId
+      ? fetchAll<AbcRow>(
+          (sb) => sb.from('fact_abc')
+            .select('sku_ms, final_class_1, profitability, chmd_clean, tz')
+            .eq('upload_id', abcId),
+          supabase,
+        )
+      : Promise.resolve([] as AbcRow[]),
+  ])
+
+  // ── Build maps ──────────────────────────────────────────────────────────
   type SnapRow = {
     sku_ms: string; sku_wb: number | null; snap_date: string | null
     fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
@@ -77,115 +124,41 @@ export async function GET(req: Request) {
     days_to_arrival: number | null; manager: string | null
   }
   const snapMap: Record<string, SnapRow> = {}
-  if (maxSnapDate) {
-    type PeriodRow = {
-      sku_ms: string; sku_wb: number | null; period_end: string
-      fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
-      kits_qty: number | null; stock_days: number | null; price: number | null
-      period_marginality_wgt: number | null; plan_supply_date: string | null; plan_supply_qty: number | null
-      days_until_arrival: number | null; manager: string | null
-    }
-    const periodRows = await fetchAll<PeriodRow>(
-      (sb) => sb.from('fact_sku_period')
-        .select('sku_ms, sku_wb, period_end, fbo_wb, fbs_pushkino, fbs_smolensk, kits_qty, stock_days, price, period_marginality_wgt, plan_supply_date, plan_supply_qty, days_until_arrival, manager')
-        .eq('period_end', maxSnapDate),
-      supabase,
-    )
-    for (const r of periodRows) {
-      if (!snapMap[r.sku_ms]) snapMap[r.sku_ms] = {
-        sku_ms: r.sku_ms,
-        sku_wb: r.sku_wb,
-        snap_date: r.period_end,
-        fbo_wb: r.fbo_wb,
-        fbs_pushkino: r.fbs_pushkino,
-        fbs_smolensk: r.fbs_smolensk,
-        kits_stock: r.kits_qty,
-        stock_days: r.stock_days,
-        price: r.price,
-        margin_pct: r.period_marginality_wgt,
-        supply_date: r.plan_supply_date,
-        supply_qty: r.plan_supply_qty,
-        days_to_arrival: r.days_until_arrival,
-        manager: r.manager,
-      }
+  for (const r of periodRows) {
+    if (!snapMap[r.sku_ms]) snapMap[r.sku_ms] = {
+      sku_ms: r.sku_ms, sku_wb: r.sku_wb, snap_date: r.period_end,
+      fbo_wb: r.fbo_wb, fbs_pushkino: r.fbs_pushkino, fbs_smolensk: r.fbs_smolensk,
+      kits_stock: r.kits_qty, stock_days: r.stock_days, price: r.price,
+      margin_pct: r.period_marginality_wgt, supply_date: r.plan_supply_date,
+      supply_qty: r.plan_supply_qty, days_to_arrival: r.days_until_arrival,
+      manager: r.manager,
     }
   }
-
-  // ── 4. Дневные продажи: fact_sku_daily.sales_qty (за 31д) ──────────────
-  const { data: maxMetricRow } = await supabase
-    .from('fact_sku_daily')
-    .select('metric_date')
-    .order('metric_date', { ascending: false })
-    .limit(1)
-  const maxDate: string | null = maxMetricRow?.[0]?.metric_date ?? null
 
   const dailyByMs: Record<string, Array<{ date: string; qty: number }>> = {}
-  let from31: string | null = null
-
-  if (maxDate) {
-    from31 = addDaysISO(maxDate, -30)
-    type DailyAgg = { sku_ms: string; metric_date: string; sales_qty: number | null }
-    const sales31 = await fetchAll<DailyAgg>(
-      (sb) => sb.from('fact_sku_daily')
-        .select('sku_ms, metric_date, sales_qty')
-        .gte('metric_date', from31!)
-        .lte('metric_date', maxDate!),
-      supabase,
-    )
-    for (const r of sales31) {
-      if (!r.sku_ms) continue
-      if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = []
-      dailyByMs[r.sku_ms].push({ date: r.metric_date, qty: r.sales_qty ?? 0 })
-    }
-    for (const arr of Object.values(dailyByMs)) {
-      arr.sort((a, b) => a.date.localeCompare(b.date))
-    }
+  for (const r of sales31) {
+    if (!r.sku_ms) continue
+    if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = []
+    dailyByMs[r.sku_ms].push({ date: r.metric_date, qty: r.sales_qty ?? 0 })
   }
+  for (const arr of Object.values(dailyByMs)) arr.sort((a, b) => a.date.localeCompare(b.date))
 
-  // ── 5. fact_china_supply ────────────────────────────────────────────────
-  type ChinaRec = {
-    in_transit: number; in_production: number
-    nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null
-  }
+  type ChinaRec = { in_transit: number; in_production: number; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null }
   const chinaMap: Record<string, ChinaRec> = {}
-  if (chinaId) {
-    const { data: chinaRows } = await supabase
-      .from('fact_china_supply')
-      .select('sku_ms, in_transit, in_production, nearest_date, cost_plan, lead_time_days')
-      .eq('upload_id', chinaId)
-    if (chinaRows) {
-      for (const r of chinaRows) {
-        chinaMap[r.sku_ms] = {
-          in_transit:    r.in_transit    ?? 0,
-          in_production: r.in_production ?? 0,
-          nearest_date:  r.nearest_date,
-          cost_plan:     r.cost_plan,
-          lead_time_days: r.lead_time_days,
-        }
+  if (chinaDbRows.data) {
+    for (const r of chinaDbRows.data) {
+      chinaMap[r.sku_ms] = {
+        in_transit: r.in_transit ?? 0, in_production: r.in_production ?? 0,
+        nearest_date: r.nearest_date, cost_plan: r.cost_plan, lead_time_days: r.lead_time_days,
       }
     }
   }
 
-  // ── 6. fact_abc — последний upload ─────────────────────────────────────
   type AbcRec = { abc_class: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
   const abcMap: Record<string, AbcRec> = {}
-  if (abcId) {
-    type AbcRow = { sku_ms: string; final_class_1: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
-    const abcRows = await fetchAll<AbcRow>(
-      (sb) => sb.from('fact_abc')
-        .select('sku_ms, final_class_1, profitability, chmd_clean, tz')
-        .eq('upload_id', abcId),
-      supabase,
-    )
-    for (const r of abcRows) {
-      if (!abcMap[r.sku_ms]) {
-        abcMap[r.sku_ms] = {
-          abc_class:     r.final_class_1,
-          profitability: r.profitability,
-          chmd_clean:    r.chmd_clean,
-          tz:            r.tz,
-        }
-      }
+  for (const r of abcRows) {
+    if (!abcMap[r.sku_ms]) {
+      abcMap[r.sku_ms] = { abc_class: r.final_class_1, profitability: r.profitability, chmd_clean: r.chmd_clean, tz: r.tz }
     }
   }
 

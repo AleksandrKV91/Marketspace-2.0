@@ -57,11 +57,6 @@ function ChartTip({ active, payload, label }: { active?: boolean; payload?: Arra
   )
 }
 
-const CAT_COLORS = [
-  '#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7',
-  '#06b6d4', '#f97316', '#84cc16', '#ec4899', '#14b8a6',
-]
-
 // ── Column filter dropdown ────────────────────────────────────────────────────
 
 function ColFilter({ label, value, onChange, options }: {
@@ -205,6 +200,9 @@ export default function AnalyticsTab() {
   const [sortKey, setSortKey] = useState<SortKey>('revenue')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
+  // Category filter (from list widgets)
+  const [categoryFilter, setCategoryFilter] = useState('')
+
   // Table filter
   const [search, setSearch] = useState('')
   const [deltaFilter, setDeltaFilter] = useState<'all' | 'growth' | 'decline'>('all')
@@ -331,6 +329,7 @@ export default function AnalyticsTab() {
   // Collect visible SKU set for chart filtering
   const visibleSkuMs = new Set<string>()
   for (const cat of hierarchy) {
+    if (categoryFilter && cat.category !== categoryFilter) continue
     for (const subj of cat.subjects) {
       for (const sku of filterSkus(subj.skus)) visibleSkuMs.add(sku.sku_ms)
     }
@@ -340,29 +339,22 @@ export default function AnalyticsTab() {
   // Filtered KPI — пересчитываем из видимых SKU когда фильтр активен
   const activeKpi = (() => {
     if (!isFiltered) return kpi
-    let revenue = 0, chmd = 0, ad_spend = 0, margin_num = 0
+    let revenue = 0, chmd = 0, ad_spend = 0, margin_num = 0, priceRevSum = 0
     for (const cat of hierarchy) {
+      if (categoryFilter && cat.category !== categoryFilter) continue
       for (const subj of cat.subjects) {
         for (const sku of filterSkus(subj.skus)) {
           revenue += sku.revenue
           chmd += sku.chmd
           ad_spend += sku.drr * sku.revenue
           margin_num += sku.margin_pct * sku.revenue
+          if (sku.price > 0) priceRevSum += sku.price * sku.revenue
         }
       }
     }
     const drr = revenue > 0 ? ad_spend / revenue : 0
     const margin_pct = revenue > 0 ? margin_num / revenue : 0
     const forecast_30d_revenue = kpi.period_days > 0 ? (revenue / kpi.period_days) * 30 : 0
-    // CPO = ad_spend / (revenue / avg_price), where avg_price is weighted by revenue
-    let priceRevSum = 0
-    for (const cat of hierarchy) {
-      for (const subj of cat.subjects) {
-        for (const sku of filterSkus(subj.skus)) {
-          if (sku.price > 0) priceRevSum += sku.price * sku.revenue
-        }
-      }
-    }
     const avgPrice = revenue > 0 ? priceRevSum / revenue : 0
     const cpo = avgPrice > 0 && ad_spend > 0 ? ad_spend / (revenue / avgPrice) : kpi.cpo
     return {
@@ -397,37 +389,43 @@ export default function AnalyticsTab() {
       .map(([date, d]) => ({ date, revenue: d.revenue, ad_spend: d.ad_spend, drr: d.revenue > 0 ? d.ad_spend / d.revenue : 0 }))
   })()
 
-  // Category dynamics chart data — revenue per category per day
-  const catChartData = (() => {
-    if (!daily_by_sku?.length) return { rows: [], categories: [] as string[] }
-    // Build sku_ms → category map from hierarchy
-    const skuCat = new Map<string, string>()
-    for (const cat of hierarchy) {
-      for (const subj of cat.subjects) {
-        for (const sku of subj.skus) skuCat.set(sku.sku_ms, cat.category)
+  // Category list widgets — revenue ranking + delta dynamics
+  const categoryChartData = (() => {
+    if (!hierarchy.length) return []
+    const total = hierarchy.reduce((s, c) => s + c.subjects.reduce((ss, subj) => ss + subj.skus.reduce((sss, sk) => sss + sk.revenue, 0), 0), 0)
+    return hierarchy.map(cat => {
+      const revenue = cat.subjects.reduce((s, subj) => s + subj.skus.reduce((ss, sk) => ss + sk.revenue, 0), 0)
+      const count = cat.subjects.reduce((s, subj) => s + subj.skus.length, 0)
+      const name = cat.category
+      return {
+        name: name.length > 22 ? name.slice(0, 21) + '…' : name,
+        fullName: name,
+        revenue,
+        count,
+        sharePct: total > 0 ? revenue / total * 100 : 0,
       }
-    }
-    const dateMap: Record<string, Record<string, number>> = {}
-    for (const r of daily_by_sku) {
-      const cat = skuCat.get(r.sku_ms)
-      if (!cat) continue
-      if (!dateMap[r.date]) dateMap[r.date] = {}
-      dateMap[r.date][cat] = (dateMap[r.date][cat] ?? 0) + r.revenue
-    }
-    const sortedDates = Object.keys(dateMap).sort()
-    const catSet = new Set<string>()
-    for (const vals of Object.values(dateMap)) Object.keys(vals).forEach(c => catSet.add(c))
-    const categories = [...catSet].sort((a, b) => {
-      const totalA = sortedDates.reduce((s, d) => s + (dateMap[d][a] ?? 0), 0)
-      const totalB = sortedDates.reduce((s, d) => s + (dateMap[d][b] ?? 0), 0)
-      return totalB - totalA
-    })
-    const rows = sortedDates.map(d => {
-      const row: Record<string, string | number> = { date: fmtDate(d) }
-      for (const c of categories) row[c] = dateMap[d][c] ?? 0
-      return row
-    })
-    return { rows, categories }
+    }).sort((a, b) => b.revenue - a.revenue)
+  })()
+
+  const categoryDeltaData = (() => {
+    if (!hierarchy.length) return []
+    return hierarchy.map(cat => {
+      let revenue = 0, deltaSum = 0, deltaN = 0
+      for (const subj of cat.subjects) {
+        for (const sk of subj.skus) {
+          revenue += sk.revenue
+          if (sk.delta_pct != null) { deltaSum += sk.delta_pct * 100; deltaN++ }
+        }
+      }
+      const name = cat.category
+      return {
+        name: name.length > 16 ? name.slice(0, 15) + '…' : name,
+        fullName: name,
+        delta: deltaN > 0 ? deltaSum / deltaN : 0,
+        revenue,
+        hasDelta: deltaN > 0,
+      }
+    }).filter(d => d.hasDelta).sort((a, b) => b.delta - a.delta)
   })()
 
   // Chart data
@@ -561,10 +559,12 @@ export default function AnalyticsTab() {
       return sortDir === 'asc' ? (av < bv ? -1 : 1) : (av > bv ? -1 : 1)
     })
   }
-  const sortedHierarchy = sortNodes(hierarchy).map(cat => ({
-    ...cat,
-    subjects: sortNodes(cat.subjects),
-  }))
+  const sortedHierarchy = sortNodes(hierarchy)
+    .filter(cat => !categoryFilter || cat.category === categoryFilter)
+    .map(cat => ({
+      ...cat,
+      subjects: sortNodes(cat.subjects),
+    }))
 
   // Flat SKU list (for flatMode)
   const flatSkus = (() => {
@@ -755,54 +755,102 @@ export default function AnalyticsTab() {
         </GlassCard>
       )}
 
-      {/* Category dynamics chart */}
-      {catChartData.rows.length > 0 && (
-        <GlassCard padding="lg">
-          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Динамика категорий (по выручке)</p>
-          <ResponsiveContainer width="100%" minWidth={0} height={220}>
-            <ComposedChart data={catChartData.rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval={catChartData.rows.length > 14 ? 1 : 0} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} />
-              <Tooltip
-                content={p => {
-                  if (!p.active || !p.payload?.length) return null
-                  const total = (p.payload as unknown as Array<{ value: number }>).reduce((s, x) => s + (x.value ?? 0), 0)
-                  return (
-                    <div className="glass p-3 text-xs min-w-[160px]" style={{ color: 'var(--text)' }}>
-                      <p className="font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>{p.label}</p>
-                      {(p.payload as unknown as Array<{ name: string; value: number; color: string }>)
-                        .filter(x => x.value > 0)
-                        .sort((a, b) => b.value - a.value)
-                        .map(x => (
-                          <div key={x.name} className="flex items-center gap-2 mb-1">
-                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: x.color }} />
-                            <span className="truncate max-w-[120px]" style={{ color: 'var(--text-muted)' }}>{x.name}:</span>
-                            <span className="font-bold ml-auto">{fmt(x.value)}</span>
+      {/* Category list widgets — revenue ranking + delta dynamics */}
+      {(categoryChartData.length > 0 || categoryDeltaData.length > 0) && (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+
+          {/* Left — Категории по выручке */}
+          {categoryChartData.length > 0 && (
+            <GlassCard padding="none">
+              <div className="px-4 pt-3 pb-3">
+                <p className="text-xs font-semibold uppercase tracking-wider mb-3 flex items-center gap-2" style={{ color: 'var(--text-subtle)' }}>
+                  Категории по выручке
+                  {categoryFilter && (
+                    <button onClick={() => setCategoryFilter('')} className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--accent-glow)', color: 'var(--accent)' }}>
+                      × сброс
+                    </button>
+                  )}
+                </p>
+                <div style={{ maxHeight: 320, overflowY: 'auto' }} className="space-y-2 pr-1">
+                  {(() => {
+                    const maxRev = categoryChartData[0]?.revenue ?? 1
+                    return categoryChartData.map((item, i) => {
+                      const isActive = categoryFilter === item.fullName
+                      const pct = Math.max(2, (item.revenue / maxRev) * 100)
+                      return (
+                        <div
+                          key={i}
+                          className="group cursor-pointer"
+                          onClick={() => setCategoryFilter(prev => prev === item.fullName ? '' : item.fullName)}
+                        >
+                          <div className="flex items-center justify-between mb-0.5 gap-2">
+                            <span className="text-xs truncate flex-1 font-medium" style={{ color: isActive ? 'var(--accent)' : 'var(--text)' }}>
+                              <span className="mr-1.5 text-[10px]" style={{ color: 'var(--text-subtle)' }}>{i + 1}</span>
+                              {item.name}
+                            </span>
+                            <span className="text-xs whitespace-nowrap font-semibold shrink-0" style={{ color: 'var(--text)' }}>
+                              {fmt(item.revenue)} ₽
+                            </span>
                           </div>
-                        ))}
-                      <div className="mt-1 pt-1 border-t flex justify-between" style={{ borderColor: 'var(--border)' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>Итого:</span>
-                        <span className="font-bold">{fmt(total)}</span>
-                      </div>
-                    </div>
-                  )
-                }}
-                cursor={{ fill: 'rgba(255,255,255,0.04)' }}
-              />
-              <Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} />
-              {catChartData.categories.map((cat, i) => (
-                <Bar
-                  key={cat}
-                  dataKey={cat}
-                  stackId="cats"
-                  fill={CAT_COLORS[i % CAT_COLORS.length]}
-                  radius={i === catChartData.categories.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]}
-                />
-              ))}
-            </ComposedChart>
-          </ResponsiveContainer>
-        </GlassCard>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+                              <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: 'var(--accent)', opacity: categoryFilter && !isActive ? 0.25 : 0.75 }} />
+                            </div>
+                            <span className="text-[10px] shrink-0" style={{ color: 'var(--text-subtle)' }}>
+                              {item.count} SKU · {item.sharePct.toFixed(1)}%
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    })
+                  })()}
+                </div>
+                <p className="text-[10px] mt-2" style={{ color: 'var(--text-subtle)' }}>Нажмите на категорию для фильтрации таблицы</p>
+              </div>
+            </GlassCard>
+          )}
+
+          {/* Right — Динамика категорий (дельта %) */}
+          {categoryDeltaData.length > 0 && (
+            <GlassCard padding="none">
+              <div className="px-4 pt-3 pb-3">
+                <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-subtle)' }}>
+                  Динамика категорий (по выручке)
+                </p>
+                <div style={{ maxHeight: 320, overflowY: 'auto' }} className="space-y-2 pr-1">
+                  {(() => {
+                    const maxAbs = Math.max(...categoryDeltaData.map(d => Math.abs(d.delta)), 1)
+                    return categoryDeltaData.map((item, i) => {
+                      const isPos = item.delta >= 0
+                      const barPct = Math.max(2, (Math.abs(item.delta) / maxAbs) * 100)
+                      return (
+                        <div key={i}>
+                          <div className="flex items-center justify-between mb-0.5 gap-2">
+                            <span className="flex items-center gap-1 text-xs truncate flex-1 font-medium" style={{ color: 'var(--text)' }}>
+                              <span style={{ color: isPos ? '#22c55e' : '#ef4444' }}>{isPos ? '▲' : '▼'}</span>
+                              {item.name}
+                            </span>
+                            <div className="text-right shrink-0">
+                              <span className="text-xs font-semibold" style={{ color: isPos ? '#22c55e' : '#ef4444' }}>
+                                {isPos ? '+' : ''}{item.delta.toFixed(1)}%
+                              </span>
+                              <span className="text-[10px] ml-1.5" style={{ color: 'var(--text-subtle)' }}>
+                                {fmt(item.revenue)} ₽
+                              </span>
+                            </div>
+                          </div>
+                          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+                            <div className="h-full rounded-full" style={{ width: `${barPct}%`, background: isPos ? '#22c55e' : '#ef4444', opacity: 0.75 }} />
+                          </div>
+                        </div>
+                      )
+                    })
+                  })()}
+                </div>
+              </div>
+            </GlassCard>
+          )}
+        </div>
       )}
 
       {/* Charts 2+3 — side by side */}
