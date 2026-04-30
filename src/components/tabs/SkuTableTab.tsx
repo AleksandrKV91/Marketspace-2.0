@@ -272,27 +272,40 @@ export default function SkuTableTab() {
 
   const categoryDeltaData = useMemo(() => {
     if (!data?.rows.length) return []
-    const catMap: Record<string, { revenue: number; count: number; deltaSum: number; deltaN: number }> = {}
+    const catMap: Record<string, { revenue: number; prevRevenue: number; count: number; deltaSum: number; deltaN: number }> = {}
     for (const r of data.rows) {
       const cat = r.category || 'Без категории'
-      if (!catMap[cat]) catMap[cat] = { revenue: 0, count: 0, deltaSum: 0, deltaN: 0 }
+      if (!catMap[cat]) catMap[cat] = { revenue: 0, prevRevenue: 0, count: 0, deltaSum: 0, deltaN: 0 }
       catMap[cat].revenue += r.revenue
       catMap[cat].count++
       if (r.delta_revenue_pct != null) {
         catMap[cat].deltaSum += r.delta_revenue_pct * 100
         catMap[cat].deltaN++
+        // prev = curr / (1 + delta) when delta = (curr-prev)/prev
+        const prev = r.revenue / (1 + r.delta_revenue_pct)
+        catMap[cat].prevRevenue += isFinite(prev) ? prev : r.revenue
+      } else {
+        catMap[cat].prevRevenue += r.revenue
       }
     }
     return Object.entries(catMap)
-      .filter(([, v]) => v.deltaN > 0)
-      .map(([name, v]) => ({
-        name: name.length > 16 ? name.slice(0, 15) + '…' : name,
-        fullName: name,
-        delta: v.deltaN > 0 ? v.deltaSum / v.deltaN : 0,
-        revenue: v.revenue,
-        count: v.count,
-      }))
-      .sort((a, b) => b.delta - a.delta)
+      .map(([name, v]) => {
+        const delta = v.deltaN > 0 ? v.deltaSum / v.deltaN : null
+        const deltaRub = v.prevRevenue > 0 ? v.revenue - v.prevRevenue : null
+        return {
+          name: name.length > 22 ? name.slice(0, 21) + '…' : name,
+          fullName: name,
+          delta,
+          deltaRub,
+          revenue: v.revenue,
+          count: v.count,
+          hasDelta: v.deltaN > 0,
+        }
+      })
+      .sort((a, b) => {
+        if (a.deltaRub != null && b.deltaRub != null) return b.deltaRub - a.deltaRub
+        return b.revenue - a.revenue
+      })
   }, [data?.rows])
 
   const hasFilters = !!(search || filterNovelty !== 'all' || filterOos !== 'all' || filterDrr !== 'all' || filterMargin !== 'all' || filterOosOnly || filterDrrOnly || filterLowMarginOnly || filterWithAds || filterNoSales || categoryFilter)
@@ -437,35 +450,38 @@ export default function SkuTableTab() {
             <GlassCard padding="none">
               <div className="px-4 pt-3 pb-3">
                 <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-subtle)' }}>
-                  Динамика категорий vs пред. период
+                  Динамика категорий (по выручке)
                 </p>
                 <div style={{ maxHeight: 320, overflowY: 'auto' }} className="space-y-2 pr-1">
                   {(() => {
-                    const maxAbs = Math.max(...categoryDeltaData.map(d => Math.abs(d.delta)), 1)
+                    const maxAbs = Math.max(...categoryDeltaData.map(d => Math.abs(d.deltaRub ?? 0)), 1)
                     return categoryDeltaData.map((item, i) => {
-                      const isPos = item.delta >= 0
-                      const barPct = Math.max(2, (Math.abs(item.delta) / maxAbs) * 100)
+                      const isPos = (item.deltaRub ?? 0) >= 0
+                      const barPct = Math.max(2, (Math.abs(item.deltaRub ?? 0) / maxAbs) * 100)
+                      const color = item.hasDelta ? (isPos ? '#22c55e' : '#ef4444') : 'var(--text-muted)'
                       return (
                         <div key={i}>
-                          <div className="flex items-center justify-between mb-0.5 gap-2">
+                          <div className="flex items-start justify-between gap-2">
                             <span className="flex items-center gap-1 text-xs truncate flex-1 font-medium" style={{ color: 'var(--text)' }}>
-                              <span style={{ color: isPos ? '#22c55e' : '#ef4444' }}>{isPos ? '▲' : '▼'}</span>
-                              {item.fullName}
+                              <span className="text-[11px] leading-none mt-0.5 shrink-0" style={{ color }}>{item.hasDelta ? (isPos ? '▲' : '▼') : '—'}</span>
+                              {item.name}
                             </span>
                             <div className="text-right shrink-0">
-                              <span className="text-xs font-semibold" style={{ color: isPos ? '#22c55e' : '#ef4444' }}>
-                                {isPos ? '+' : ''}{item.delta.toFixed(1)}%
-                              </span>
-                              <span className="text-[10px] ml-1.5" style={{ color: 'var(--text-subtle)' }}>
+                              {item.hasDelta && item.deltaRub != null && (
+                                <div className="text-xs font-semibold" style={{ color }}>
+                                  {isPos ? '+' : ''}{fmtAxis(item.deltaRub)} ₽
+                                </div>
+                              )}
+                              <div className="text-[10px]" style={{ color: 'var(--text-subtle)' }}>
+                                {item.hasDelta && item.delta != null
+                                  ? `${item.delta >= 0 ? '+' : ''}${item.delta.toFixed(1)}% · `
+                                  : ''}
                                 {fmtAxis(item.revenue)} ₽
-                              </span>
+                              </div>
                             </div>
                           </div>
-                          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
-                            <div
-                              className="h-full rounded-full"
-                              style={{ width: `${barPct}%`, background: isPos ? '#22c55e' : '#ef4444', opacity: 0.75 }}
-                            />
+                          <div className="h-1.5 rounded-full overflow-hidden mt-1" style={{ background: 'var(--border)' }}>
+                            <div className="h-full rounded-full" style={{ width: `${barPct}%`, background: color, opacity: 0.75 }} />
                           </div>
                         </div>
                       )
