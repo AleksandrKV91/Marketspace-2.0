@@ -6,7 +6,7 @@ import {
   Globe, ShoppingCart, Upload, Moon, Sun, Monitor, X
 } from 'lucide-react'
 import { useTheme } from '@/components/ui/ThemeProvider'
-import { analyticsTabCache, priceTabCache, overviewTabCache, skuTableCache } from '@/lib/tabCache'
+import { analyticsTabCache, priceTabCache, overviewTabCache, skuTableCache, orderTabCache } from '@/lib/tabCache'
 import { DateRangeProvider, DateRangePicker, useDateRange } from '@/components/ui/DateRangePicker'
 import SvodTab      from '@/components/tabs/OverviewTab'
 import SkuTab       from '@/components/tabs/SkuTableTab'
@@ -296,6 +296,14 @@ function BackgroundPrefetcher() {
         fetch(`/api/dashboard/sku-table?${params}`)
           .then(r => r.ok ? r.json() : null)
           .then(d => { if (d?.rows) skuTableCache.set(key, d) })
+          .catch(() => {})
+      }
+      // Prefetch orders tab (no date range — uses horizon/period params)
+      const ordersKey = 'horizon=60&period=31'
+      if (!orderTabCache.has(ordersKey)) {
+        fetch(`/api/dashboard/orders?${ordersKey}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(d => { if (d?.rows) orderTabCache.set(ordersKey, d) })
           .catch(() => {})
       }
     }

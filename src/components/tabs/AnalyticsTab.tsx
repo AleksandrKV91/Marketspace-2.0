@@ -57,6 +57,11 @@ function ChartTip({ active, payload, label }: { active?: boolean; payload?: Arra
   )
 }
 
+const CAT_COLORS = [
+  '#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7',
+  '#06b6d4', '#f97316', '#84cc16', '#ec4899', '#14b8a6',
+]
+
 // ── Column filter dropdown ────────────────────────────────────────────────────
 
 function ColFilter({ label, value, onChange, options }: {
@@ -392,6 +397,39 @@ export default function AnalyticsTab() {
       .map(([date, d]) => ({ date, revenue: d.revenue, ad_spend: d.ad_spend, drr: d.revenue > 0 ? d.ad_spend / d.revenue : 0 }))
   })()
 
+  // Category dynamics chart data — revenue per category per day
+  const catChartData = (() => {
+    if (!daily_by_sku?.length) return { rows: [], categories: [] as string[] }
+    // Build sku_ms → category map from hierarchy
+    const skuCat = new Map<string, string>()
+    for (const cat of hierarchy) {
+      for (const subj of cat.subjects) {
+        for (const sku of subj.skus) skuCat.set(sku.sku_ms, cat.category)
+      }
+    }
+    const dateMap: Record<string, Record<string, number>> = {}
+    for (const r of daily_by_sku) {
+      const cat = skuCat.get(r.sku_ms)
+      if (!cat) continue
+      if (!dateMap[r.date]) dateMap[r.date] = {}
+      dateMap[r.date][cat] = (dateMap[r.date][cat] ?? 0) + r.revenue
+    }
+    const sortedDates = Object.keys(dateMap).sort()
+    const catSet = new Set<string>()
+    for (const vals of Object.values(dateMap)) Object.keys(vals).forEach(c => catSet.add(c))
+    const categories = [...catSet].sort((a, b) => {
+      const totalA = sortedDates.reduce((s, d) => s + (dateMap[d][a] ?? 0), 0)
+      const totalB = sortedDates.reduce((s, d) => s + (dateMap[d][b] ?? 0), 0)
+      return totalB - totalA
+    })
+    const rows = sortedDates.map(d => {
+      const row: Record<string, string | number> = { date: fmtDate(d) }
+      for (const c of categories) row[c] = dateMap[d][c] ?? 0
+      return row
+    })
+    return { rows, categories }
+  })()
+
   // Chart data
   const chartData = activeChart.map(d => ({
     date:    fmtDate(d.date),
@@ -712,6 +750,56 @@ export default function AnalyticsTab() {
               <Area type="monotone" dataKey="Текущий период" stroke="#3b82f6" strokeWidth={2} fill="url(#aCurrG)" dot={false} connectNulls={false} />
               <Area type="monotone" dataKey="Пред. период"   stroke="#94a3b8" strokeWidth={1.5} fill="url(#aPrevG)" dot={false} strokeDasharray="4 3" connectNulls={false} />
               <Line type="monotone" dataKey="Прогноз" stroke="#3b82f6" strokeWidth={1.5} dot={false} strokeDasharray="3 3" strokeOpacity={0.5} connectNulls={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </GlassCard>
+      )}
+
+      {/* Category dynamics chart */}
+      {catChartData.rows.length > 0 && (
+        <GlassCard padding="lg">
+          <p className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>Динамика категорий (по выручке)</p>
+          <ResponsiveContainer width="100%" minWidth={0} height={220}>
+            <ComposedChart data={catChartData.rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval={catChartData.rows.length > 14 ? 1 : 0} />
+              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} width={44} tickFormatter={v => fmt(v as number)} />
+              <Tooltip
+                content={p => {
+                  if (!p.active || !p.payload?.length) return null
+                  const total = (p.payload as unknown as Array<{ value: number }>).reduce((s, x) => s + (x.value ?? 0), 0)
+                  return (
+                    <div className="glass p-3 text-xs min-w-[160px]" style={{ color: 'var(--text)' }}>
+                      <p className="font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>{p.label}</p>
+                      {(p.payload as unknown as Array<{ name: string; value: number; color: string }>)
+                        .filter(x => x.value > 0)
+                        .sort((a, b) => b.value - a.value)
+                        .map(x => (
+                          <div key={x.name} className="flex items-center gap-2 mb-1">
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: x.color }} />
+                            <span className="truncate max-w-[120px]" style={{ color: 'var(--text-muted)' }}>{x.name}:</span>
+                            <span className="font-bold ml-auto">{fmt(x.value)}</span>
+                          </div>
+                        ))}
+                      <div className="mt-1 pt-1 border-t flex justify-between" style={{ borderColor: 'var(--border)' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Итого:</span>
+                        <span className="font-bold">{fmt(total)}</span>
+                      </div>
+                    </div>
+                  )
+                }}
+                cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+              />
+              <Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} />
+              {catChartData.categories.map((cat, i) => (
+                <Bar
+                  key={cat}
+                  dataKey={cat}
+                  stackId="cats"
+                  fill={CAT_COLORS[i % CAT_COLORS.length]}
+                  radius={i === catChartData.categories.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]}
+                />
+              ))}
             </ComposedChart>
           </ResponsiveContainer>
         </GlassCard>

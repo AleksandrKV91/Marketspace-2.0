@@ -148,13 +148,14 @@ export async function GET(req: NextRequest) {
     revenue: number | null; ad_spend: number | null
     ctr: number | null; cr_cart: number | null; cr_order: number | null
     cpm: number | null; cpc: number | null; ad_order_share: number | null
+    price: number | null
   }
 
   // Основной запрос — расширенный диапазон
   const dailyRows = extFrom && extTo
     ? await fetchAll<DailyRow>(
         (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
+          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share, price')
           .gte('metric_date', extFrom!).lte('metric_date', extTo!),
         supabase,
       )
@@ -164,7 +165,7 @@ export async function GET(req: NextRequest) {
   const prevDailyRows = prevFrom && prevTo
     ? await fetchAll<DailyRow>(
         (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
+          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share, price')
           .gte('metric_date', prevFrom!).lte('metric_date', prevTo!),
         supabase,
       )
@@ -223,57 +224,67 @@ export async function GET(req: NextRequest) {
   // Агрегация KPI текущего периода
   let totalRevenue = 0
   let totalAdSpend = 0
-  const ctrArr: number[] = []
-  const crCartArr: number[] = []
-  const crOrderArr: number[] = []
-  const cpmArr: number[] = []
-  const cpcArr: number[] = []
-  const adOrderArr: number[] = []
 
   type DayAgg = {
     ctrSum: number; ctrN: number
     crCartSum: number; crCartN: number
     crOrderSum: number; crOrderN: number
+    cpmSum: number; cpmN: number
+    cpcSum: number; cpcN: number
     adShareSum: number; adShareN: number
     revenue: number
+    priceWeightedSum: number; priceWeightTotal: number
   }
   const dateMap: Record<string, DayAgg> = {}
 
   for (const r of currDailyRows) {
     totalRevenue += r.revenue ?? 0
     totalAdSpend += r.ad_spend ?? 0
-    if (r.ctr != null) ctrArr.push(r.ctr)
-    if (r.cr_cart != null) crCartArr.push(r.cr_cart)
-    if (r.cr_order != null) crOrderArr.push(r.cr_order)
-    if (r.cpm != null) cpmArr.push(r.cpm)
-    if (r.cpc != null) cpcArr.push(r.cpc)
-    if (r.ad_order_share != null) adOrderArr.push(r.ad_order_share)
 
     const d = r.metric_date
-    if (!dateMap[d]) dateMap[d] = { ctrSum: 0, ctrN: 0, crCartSum: 0, crCartN: 0, crOrderSum: 0, crOrderN: 0, adShareSum: 0, adShareN: 0, revenue: 0 }
+    if (!dateMap[d]) dateMap[d] = {
+      ctrSum: 0, ctrN: 0, crCartSum: 0, crCartN: 0, crOrderSum: 0, crOrderN: 0,
+      cpmSum: 0, cpmN: 0, cpcSum: 0, cpcN: 0,
+      adShareSum: 0, adShareN: 0, revenue: 0,
+      priceWeightedSum: 0, priceWeightTotal: 0,
+    }
     const day = dateMap[d]
-    day.revenue += r.revenue ?? 0
+    const rev = r.revenue ?? 0
+    day.revenue += rev
     if (r.ctr != null) { day.ctrSum += r.ctr; day.ctrN++ }
     if (r.cr_cart != null) { day.crCartSum += r.cr_cart; day.crCartN++ }
     if (r.cr_order != null) { day.crOrderSum += r.cr_order; day.crOrderN++ }
+    if (r.cpm != null) { day.cpmSum += r.cpm; day.cpmN++ }
+    if (r.cpc != null) { day.cpcSum += r.cpc; day.cpcN++ }
     if (r.ad_order_share != null) { day.adShareSum += r.ad_order_share; day.adShareN++ }
+    // Средневзвешенная цена по выручке
+    if (r.price != null && rev > 0) { day.priceWeightedSum += r.price * rev; day.priceWeightTotal += rev }
   }
 
   const avg = (arr: number[]) => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0
 
   const drr = totalRevenue > 0 ? totalAdSpend / totalRevenue : 0
-  // CPO ≈ avg_cpc / avg_cr_order (цена клика / вероятность заказа)
-  const avgCpc = avg(cpcArr)
-  const avgCrOrder = avg(crOrderArr)
+
+  // CTR/CR/CPM/CPC — среднее по дням (совпадает с логикой Excel-строки Total)
+  const dayValues = Object.values(dateMap)
+  const avgDayCtr     = avg(dayValues.filter(d => d.ctrN > 0).map(d => d.ctrSum / d.ctrN))
+  const avgDayCrCart  = avg(dayValues.filter(d => d.crCartN > 0).map(d => d.crCartSum / d.crCartN))
+  const avgDayCrOrder = avg(dayValues.filter(d => d.crOrderN > 0).map(d => d.crOrderSum / d.crOrderN))
+  const avgDayCpm     = avg(dayValues.filter(d => d.cpmN > 0).map(d => d.cpmSum / d.cpmN))
+  const avgDayCpc     = avg(dayValues.filter(d => d.cpcN > 0).map(d => d.cpcSum / d.cpcN))
+  const avgDayAdShare = avg(dayValues.filter(d => d.adShareN > 0).map(d => d.adShareSum / d.adShareN))
+
+  const avgCpc = avgDayCpc
+  const avgCrOrder = avgDayCrOrder
   const cpo = avgCrOrder > 0 ? avgCpc / avgCrOrder : 0
 
   const funnel = {
-    ctr: avg(ctrArr),
-    cr_basket: avg(crCartArr),
-    cr_order: avgCrOrder,
-    cpc: avgCpc,
-    cpm: avg(cpmArr),
-    ad_order_share: avg(adOrderArr),
+    ctr: avgDayCtr,
+    cr_basket: avgDayCrCart,
+    cr_order: avgDayCrOrder,
+    cpc: avgDayCpc,
+    cpm: avgDayCpm,
+    ad_order_share: avgDayAdShare,
     drr,
     cpo,
   }
@@ -305,48 +316,12 @@ export async function GET(req: NextRequest) {
     cpo: prevCpo,
   }
 
-  // Средневзвешенная цена по дням — для каждого дня берём последнюю известную цену
-  // каждого SKU на эту дату, взвешиваем по выручке
-  // Сначала строим "последнюю цену SKU на дату" из priceRows
-  const skuWbPriceHistory: Record<number, Array<{ date: string; price: number }>> = {}
-  for (const r of priceRows) {
-    if (!r.sku_wb || r.price == null) continue
-    if (!skuWbPriceHistory[r.sku_wb]) skuWbPriceHistory[r.sku_wb] = []
-    skuWbPriceHistory[r.sku_wb].push({ date: r.price_date, price: r.price })
-  }
-  for (const arr of Object.values(skuWbPriceHistory)) arr.sort((a, b) => a.date.localeCompare(b.date))
-
-  function getPriceOnDate(skuWb: number, date: string): number | null {
-    const hist = skuWbPriceHistory[skuWb]
-    if (!hist || hist.length === 0) return null
-    // последняя запись <= date
-    let last: number | null = null
-    for (const h of hist) {
-      if (h.date <= date) last = h.price
-      else break
-    }
-    return last
-  }
-
-  // daily chart — CTR/CR по дням + ad_revenue/organic split + средневзв. цена
+  // daily chart — CTR/CR по дням + ad_revenue/organic split + средневзв. цена из fact_sku_daily
   const daily = Object.entries(dateMap)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, d]) => {
       const adShare = d.adShareN > 0 ? d.adShareSum / d.adShareN : 0
-      // Средневзвешенная цена: Σ(price_i × revenue_i) / Σrevenue_i
-      let priceWeightedSum = 0
-      let priceWeightTotal = 0
-      for (const r of currDailyRows) {
-        if (r.metric_date !== date) continue
-        const skuWb = snapSkuWbMap[r.sku_ms]
-        if (!skuWb) continue
-        const price = getPriceOnDate(skuWb, date)
-        if (price != null && r.revenue) {
-          priceWeightedSum += price * r.revenue
-          priceWeightTotal += r.revenue
-        }
-      }
-      const avg_price = priceWeightTotal > 0 ? Math.round(priceWeightedSum / priceWeightTotal) : null
+      const avg_price = d.priceWeightTotal > 0 ? Math.round(d.priceWeightedSum / d.priceWeightTotal) : null
       return {
         date,
         ctr: d.ctrN > 0 ? d.ctrSum / d.ctrN : 0,

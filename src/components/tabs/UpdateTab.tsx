@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef } from 'react'
+import { clearAllTabCaches } from '@/lib/tabCache'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
 
@@ -278,6 +279,7 @@ export default function UpdateTab() {
     })
 
     if (result.ok) {
+      clearAllTabCaches()
       const now = new Date().toLocaleString('ru-RU', {
         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
       })

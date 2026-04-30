@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { parseSkuReport } from '@/lib/parsers/parseSkuReport'
 import { createServiceClient } from '@/lib/supabase/server'
 import { chunk } from '@/lib/parsers/utils'
+import { invalidatePrefix, invalidate } from '@/lib/cache'
 
 export const maxDuration = 60
 
@@ -117,6 +118,12 @@ export async function POST(req: NextRequest) {
     const { error } = await supabase.from('fact_price_changes').upsert(batch, { onConflict: 'sku_wb,price_date' })
     if (error) console.error('fact_price_changes upsert error:', error.message)
   }
+
+  // Инвалидировать серверный кэш — следующие запросы к дашборду получат свежие данные
+  invalidatePrefix('overview|')
+  invalidate('dim_sku_all')
+  invalidate('dim_sku_names')
+  invalidate('latest_uploads')
 
   return NextResponse.json({
     ok: true,

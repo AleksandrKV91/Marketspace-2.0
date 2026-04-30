@@ -1,6 +1,7 @@
 'use client'
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
+import { orderTabCache } from '@/lib/tabCache'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { KPIBar } from '@/components/ui/KPIBar'
 import { FilterBar } from '@/components/ui/FilterBar'
@@ -106,12 +107,22 @@ export default function OrderTab() {
     else { setSortKey(key); setSortDir('desc') }
   }
 
+  const cacheKey = `horizon=${orderFilter.horizon}&period=${orderFilter.period}`
+
   useEffect(() => {
-    setLoading(true)
-    fetch(`/api/dashboard/orders?horizon=${orderFilter.horizon}&period=${orderFilter.period}`)
+    // Отдаём кэшированные данные немедленно чтобы не было мигания при переключении вкладок
+    const cached = orderTabCache.get(cacheKey) as OrderData | undefined
+    if (cached) { setData(cached); setLoading(false) }
+
+    fetch(`/api/dashboard/orders?${cacheKey}`)
       .then(r => r.json())
-      .then((d: OrderData) => { setData(d); setLoading(false) })
+      .then((d: OrderData) => {
+        orderTabCache.set(cacheKey, d)
+        setData(d)
+        setLoading(false)
+      })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderFilter.horizon, orderFilter.period])
 
   const heatmapRows: HeatmapRow[] = useMemo(() => {
@@ -308,9 +319,9 @@ export default function OrderTab() {
           />
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm sticky-thead">
-            <thead style={{ background: 'var(--surface)' }}>
+        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 320px)' }}>
+          <table className="w-full text-sm">
+            <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--surface-solid)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}>
               <tr>
                 <SortTh label="SKU WB" sk="sku_wb" align="left" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />
                 <SortTh label="Название" sk="name" align="left" sortKey={sortKey as string} sortDir={sortDir} onSort={k => toggleSort(k as keyof OrderRow)} />

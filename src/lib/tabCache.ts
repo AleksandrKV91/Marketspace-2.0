@@ -10,3 +10,13 @@ export const priceTabCache = new Map<string, unknown>()
 export const overviewTabCache = new Map<string, unknown>()
 export const skuTableCache = new Map<string, unknown>()
 export const nicheTabCache = new Map<string, unknown>()
+export const orderTabCache = new Map<string, unknown>()
+
+export function clearAllTabCaches() {
+  analyticsTabCache.clear()
+  priceTabCache.clear()
+  overviewTabCache.clear()
+  skuTableCache.clear()
+  nicheTabCache.clear()
+  orderTabCache.clear()
+}
