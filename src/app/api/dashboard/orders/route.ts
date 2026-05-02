@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
+import { cached } from '@/lib/cache'
 
 export const maxDuration = 60
 
@@ -31,78 +32,111 @@ export async function GET(req: Request) {
   const url = new URL(req.url)
   const horizon = parseInt(url.searchParams.get('horizon') ?? '60', 10)
   const period = parseInt(url.searchParams.get('period') ?? '31', 10)  // 7|14|31
+  const fromParam = url.searchParams.get('from')
+  const toParam = url.searchParams.get('to')
+  const categoryFilter = url.searchParams.get('category') ?? ''
+  const managerFilter  = url.searchParams.get('manager') ?? ''
+  const noveltyFilter  = url.searchParams.get('novelty') ?? ''
 
   // ── 1-2. Параллельно: uploads + dim_sku + max dates ─────────────────────
   type DimRow = {
     sku_ms: string; sku_wb: number | null; name: string | null; brand: string | null
-    subject_wb: string | null
+    subject_wb: string | null; category_wb: string | null
   } & Record<MonthKey, number | null>
 
   const [
-    { data: lastUploads },
+    latestByType,
     dimRows,
     { data: maxSnapRow },
     { data: maxMetricRow },
   ] = await Promise.all([
-    supabase.from('uploads').select('id, file_type').eq('status', 'ok')
-      .order('uploaded_at', { ascending: false }).limit(20),
-    fetchAll<DimRow>(
-      (sb) => sb.from('dim_sku').select('sku_ms, sku_wb, name, brand, subject_wb, ' + MONTH_KEYS.join(', ')),
-      supabase,
+    cached('orders_latest_uploads', 60_000, async () => {
+      const { data } = await supabase.from('uploads').select('id, file_type')
+        .eq('status', 'ok').order('uploaded_at', { ascending: false }).limit(20)
+      const result: Record<string, string> = {}
+      if (data) for (const u of data) {
+        if (!result[u.file_type]) result[u.file_type] = u.id
+      }
+      return result
+    }),
+    cached<DimRow[]>('orders_dim_sku', 10 * 60_000, () =>
+      fetchAll<DimRow>(
+        (sb) => sb.from('dim_sku').select('sku_ms, sku_wb, name, brand, subject_wb, category_wb, ' + MONTH_KEYS.join(', ')),
+        supabase,
+      )
     ),
     supabase.from('fact_sku_period').select('period_end')
       .order('period_end', { ascending: false }).limit(1),
     supabase.from('fact_sku_daily').select('metric_date')
       .order('metric_date', { ascending: false }).limit(1),
   ])
-
-  const latestByType: Record<string, string> = {}
-  if (lastUploads) {
-    for (const u of lastUploads) {
-      if (!latestByType[u.file_type]) latestByType[u.file_type] = u.id
-    }
-  }
   const chinaId = latestByType['china']
   const abcId   = latestByType['abc']
   const maxSnapDate: string | null = maxSnapRow?.[0]?.period_end ?? null
   const maxDate:     string | null = maxMetricRow?.[0]?.metric_date ?? null
 
-  // ── 3-4. Параллельно: snapshot + daily sales + china + abc ──────────────
+  // ── Период из глобального DateRangePicker ───────────────────────────────
+  // Если from/to не передан — берём последние 7 дней (как fallback)
+  let fromDaily: string | null = fromParam
+  let toDaily:   string | null = toParam
+  if ((!fromDaily || !toDaily) && maxDate) {
+    toDaily = maxDate
+    fromDaily = addDaysISO(maxDate, -6)
+  }
+  // Предыдущий равный период для дельты выручки
+  let prevFrom: string | null = null
+  let prevTo:   string | null = null
+  if (fromDaily && toDaily) {
+    const ms = new Date(toDaily).getTime() - new Date(fromDaily).getTime()
+    const days = Math.round(ms / 86400000) + 1
+    prevTo   = addDaysISO(fromDaily, -1)
+    prevFrom = addDaysISO(prevTo, -(days - 1))
+  }
+
+  // ── 3-4. Параллельно: snapshot + daily sales + china + abc + period rev ─
   type PeriodRow = {
     sku_ms: string; sku_wb: number | null; period_end: string
+    product_name: string | null; brand: string | null; subject_wb: string | null; category: string | null
     fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
     kits_qty: number | null; stock_days: number | null; price: number | null
     period_marginality_wgt: number | null; plan_supply_date: string | null; plan_supply_qty: number | null
-    days_until_arrival: number | null; manager: string | null
+    days_until_arrival: number | null; manager: string | null; novelty_status: string | null
   }
-  type DailyAgg  = { sku_ms: string; metric_date: string; sales_qty: number | null }
+  type DailyAgg  = { sku_ms: string; metric_date: string; sales_qty: number | null; revenue: number | null }
   type AbcRow    = { sku_ms: string; final_class_1: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
-  type ChinaDbRow = { sku_ms: string; in_transit: number | null; in_production: number | null; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null }
+  type ChinaDbRow = { sku_ms: string; in_transit: number | null; in_production: number | null; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null; order_qty: number | null }
 
   const from31 = maxDate ? addDaysISO(maxDate, -30) : null
 
-  const [periodRows, sales31, chinaDbRows, abcRows] = await Promise.all([
+  // Единый расширенный диапазон для всех временных нужд: velocity (31д), curr period, prev period.
+  // Запрашиваем один раз — фильтруем в памяти.
+  const isoMin = (a: string | null, b: string | null) => a && b ? (a < b ? a : b) : (a ?? b ?? null)
+  const isoMax = (a: string | null, b: string | null) => a && b ? (a > b ? a : b) : (a ?? b ?? null)
+  const dailyFrom = isoMin(from31, prevFrom)
+  const dailyTo   = isoMax(maxDate, toDaily)
+
+  const [periodRows, allDaily, chinaDbRows, abcRows] = await Promise.all([
     maxSnapDate
       ? fetchAll<PeriodRow>(
           (sb) => sb.from('fact_sku_period')
-            .select('sku_ms, sku_wb, period_end, fbo_wb, fbs_pushkino, fbs_smolensk, kits_qty, stock_days, price, period_marginality_wgt, plan_supply_date, plan_supply_qty, days_until_arrival, manager')
+            .select('sku_ms, sku_wb, period_end, product_name, brand, subject_wb, category, fbo_wb, fbs_pushkino, fbs_smolensk, kits_qty, stock_days, price, period_marginality_wgt, plan_supply_date, plan_supply_qty, days_until_arrival, manager, novelty_status')
             .eq('period_end', maxSnapDate)
             .order('sku_ms'),
           supabase,
         )
       : Promise.resolve([] as PeriodRow[]),
-    from31 && maxDate
+    dailyFrom && dailyTo
       ? fetchAll<DailyAgg>(
           (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, metric_date, sales_qty')
-            .gte('metric_date', from31!).lte('metric_date', maxDate!)
+            .select('sku_ms, metric_date, sales_qty, revenue')
+            .gte('metric_date', dailyFrom!).lte('metric_date', dailyTo!)
             .order('sku_ms').order('metric_date'),
           supabase,
         )
       : Promise.resolve([] as DailyAgg[]),
     chinaId
       ? supabase.from('fact_china_supply')
-          .select('sku_ms, in_transit, in_production, nearest_date, cost_plan, lead_time_days')
+          .select('sku_ms, in_transit, in_production, nearest_date, cost_plan, lead_time_days, order_qty')
           .eq('upload_id', chinaId)
       : Promise.resolve({ data: null as ChinaDbRow[] | null, error: null }),
     abcId
@@ -115,23 +149,42 @@ export async function GET(req: Request) {
       : Promise.resolve([] as AbcRow[]),
   ])
 
+  // sales31 = последние 31 день для velocity / OOS
+  const sales31: DailyAgg[] = from31 && maxDate
+    ? allDaily.filter(r => r.metric_date >= from31 && r.metric_date <= maxDate)
+    : []
+
+  // Per-SKU revenue map (current и previous период) — фильтруем в памяти из allDaily
+  const periodRevenueMap: Record<string, number> = {}
+  const prevPeriodRevenueMap: Record<string, number> = {}
+  for (const r of allDaily) {
+    if (fromDaily && toDaily && r.metric_date >= fromDaily && r.metric_date <= toDaily) {
+      periodRevenueMap[r.sku_ms] = (periodRevenueMap[r.sku_ms] ?? 0) + (r.revenue ?? 0)
+    }
+    if (prevFrom && prevTo && r.metric_date >= prevFrom && r.metric_date <= prevTo) {
+      prevPeriodRevenueMap[r.sku_ms] = (prevPeriodRevenueMap[r.sku_ms] ?? 0) + (r.revenue ?? 0)
+    }
+  }
+
   // ── Build maps ──────────────────────────────────────────────────────────
   type SnapRow = {
     sku_ms: string; sku_wb: number | null; snap_date: string | null
+    name: string | null; brand: string | null; subject_wb: string | null; category: string | null
     fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null
     kits_stock: number | null; stock_days: number | null; price: number | null
     margin_pct: number | null; supply_date: string | null; supply_qty: number | null
-    days_to_arrival: number | null; manager: string | null
+    days_to_arrival: number | null; manager: string | null; novelty_status: string | null
   }
   const snapMap: Record<string, SnapRow> = {}
   for (const r of periodRows) {
     if (!snapMap[r.sku_ms]) snapMap[r.sku_ms] = {
       sku_ms: r.sku_ms, sku_wb: r.sku_wb, snap_date: r.period_end,
+      name: r.product_name, brand: r.brand, subject_wb: r.subject_wb, category: r.category,
       fbo_wb: r.fbo_wb, fbs_pushkino: r.fbs_pushkino, fbs_smolensk: r.fbs_smolensk,
       kits_stock: r.kits_qty, stock_days: r.stock_days, price: r.price,
       margin_pct: r.period_marginality_wgt, supply_date: r.plan_supply_date,
       supply_qty: r.plan_supply_qty, days_to_arrival: r.days_until_arrival,
-      manager: r.manager,
+      manager: r.manager, novelty_status: r.novelty_status,
     }
   }
 
@@ -143,13 +196,14 @@ export async function GET(req: Request) {
   }
   for (const arr of Object.values(dailyByMs)) arr.sort((a, b) => a.date.localeCompare(b.date))
 
-  type ChinaRec = { in_transit: number; in_production: number; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null }
+  type ChinaRec = { in_transit: number; in_production: number; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null; order_qty: number | null }
   const chinaMap: Record<string, ChinaRec> = {}
   if (chinaDbRows.data) {
     for (const r of chinaDbRows.data) {
       chinaMap[r.sku_ms] = {
         in_transit: r.in_transit ?? 0, in_production: r.in_production ?? 0,
         nearest_date: r.nearest_date, cost_plan: r.cost_plan, lead_time_days: r.lead_time_days,
+        order_qty: r.order_qty,
       }
     }
   }
@@ -160,6 +214,24 @@ export async function GET(req: Request) {
     if (!abcMap[r.sku_ms]) {
       abcMap[r.sku_ms] = { abc_class: r.final_class_1, profitability: r.profitability, chmd_clean: r.chmd_clean, tz: r.tz }
     }
+  }
+
+  // ── dim_sku map (только для коэффициентов сезонности month_*) ────────
+  const dimByMs: Record<string, DimRow> = {}
+  for (const r of dimRows) dimByMs[r.sku_ms] = r
+
+  // ── Универсум SKU: только те, что в последнем fact_sku_period снапшоте.
+  // Применяем глобальные фильтры (category/manager/novelty) — все из snapMap.
+  const universe: string[] = []
+  for (const skuMs of Object.keys(snapMap)) {
+    const snap = snapMap[skuMs]
+    const cat = snap.category ?? snap.subject_wb ?? ''
+    if (categoryFilter && cat !== categoryFilter) continue
+    if (managerFilter  && (snap.manager ?? '') !== managerFilter) continue
+    const ns = snap.novelty_status ?? ''
+    if (noveltyFilter === 'Новинки'    && ns !== 'Новинки') continue
+    if (noveltyFilter === 'Не новинки' && ns === 'Новинки') continue
+    universe.push(skuMs)
   }
 
   // ── 7. YoY fallback: для тех, у кого base_31d < 5 и target_coef > 1.3*avg
@@ -196,8 +268,14 @@ export async function GET(req: Request) {
   }
   const pass1: Record<string, Pass1> = {}
 
-  for (const sku of dimRows) {
-    const daily = dailyByMs[sku.sku_ms] ?? []
+  for (const skuMs of universe) {
+    // dim может отсутствовать (тогда fallback значения)
+    const sku: DimRow = dimByMs[skuMs] ?? {
+      sku_ms: skuMs, sku_wb: snapMap[skuMs]?.sku_wb ?? null,
+      name: null, brand: null, subject_wb: null, category_wb: null,
+      ...Object.fromEntries(MONTH_KEYS.map(k => [k, null])) as Record<MonthKey, number | null>,
+    }
+    const daily = dailyByMs[skuMs] ?? []
     const last7  = daily.slice(-7)
     const last14 = daily.slice(-14)
     const last31 = daily.slice(-31)
@@ -211,7 +289,7 @@ export async function GET(req: Request) {
     const curRaw = sku[MONTH_KEYS[nowMonth]]
     const cur_coef = (curRaw != null && curRaw > 0) ? curRaw : avg_year
 
-    const lt = chinaMap[sku.sku_ms]?.lead_time_days ?? DEFAULT_LEAD_TIME
+    const lt = chinaMap[skuMs]?.lead_time_days ?? DEFAULT_LEAD_TIME
     const hm = horizonMonths(lt, horizon)
     const targetCoeffs = hm.map(m => sku[MONTH_KEYS[m]]).filter((v): v is number => v != null && v > 0)
     const target_coef_raw = targetCoeffs.length > 0
@@ -219,7 +297,7 @@ export async function GET(req: Request) {
       : avg_year
     const target_coef = target_coef_raw / (avg_year || 1)  // относительный
 
-    pass1[sku.sku_ms] = {
+    pass1[skuMs] = {
       sku, daily,
       sales_qty_7d, sales_qty_14d, sales_qty_31d,
       base_31d, avg_year, cur_coef, target_coef,
@@ -227,8 +305,8 @@ export async function GET(req: Request) {
     }
 
     // Кандидаты на YoY-fallback
-    if (base_31d < 5 && target_coef > 1.3 && sku.sku_ms) {
-      yoyCandidates.push(sku.sku_ms)
+    if (base_31d < 5 && target_coef > 1.3 && skuMs) {
+      yoyCandidates.push(skuMs)
     }
   }
 
@@ -308,6 +386,16 @@ export async function GET(req: Request) {
     const days_stock = dpd > 0 ? Math.round(total_stock / dpd) : (total_stock > 0 ? 999 : 0)
     const oos_days_31 = daily.slice(-31).filter(d => d.qty === 0).length
 
+    // Выручка за выбранный период + дельта vs предыдущий равный период
+    const period_revenue = periodRevenueMap[skuMs] ?? 0
+    const prev_period_revenue = prevPeriodRevenueMap[skuMs] ?? 0
+    const delta_revenue_pct = prev_period_revenue > 0
+      ? (period_revenue - prev_period_revenue) / prev_period_revenue
+      : null
+
+    // Заказ менеджера из «Потребность Китай» (СВОД) — отдельно от расчёта
+    const svod_order_qty = china?.order_qty ?? 0
+
     // Прогноз 30д = base_norm × seasonal_coef_next_30d
     const next30Months: number[] = []
     {
@@ -340,9 +428,10 @@ export async function GET(req: Request) {
     return {
       sku_ms: skuMs,
       sku_wb: snap?.sku_wb ?? sku.sku_wb ?? 0,
-      name: sku.name ?? '',
-      brand: sku.brand ?? '',
-      subject_wb: sku.subject_wb ?? '',
+      name: snap?.name ?? sku.name ?? '',
+      brand: snap?.brand ?? sku.brand ?? '',
+      subject_wb: snap?.subject_wb ?? sku.subject_wb ?? '',
+      category: snap?.category ?? '',
       manager: snap?.manager ?? null,
 
       status: status === 'oos' ? 'critical' : status,
@@ -382,8 +471,14 @@ export async function GET(req: Request) {
 
       // ШАГ 6
       calc_order,
-      manager_order: 0,
-      delta_order: 0,
+      manager_order: svod_order_qty,                       // SVOD «Кол-во к заказу»
+      delta_order: calc_order - svod_order_qty,            // Δ = расчёт − SVOD
+      svod_order_qty,                                      // алиас для ясности UI
+
+      // Выручка за выбранный период (для таблицы)
+      period_revenue: Math.round(period_revenue),
+      prev_period_revenue: Math.round(prev_period_revenue),
+      delta_revenue_pct,
 
       // Контекст
       horizon_days: horizon,
@@ -424,38 +519,91 @@ export async function GET(req: Request) {
   // ── 12. Summary ─────────────────────────────────────────────────────────
   const criticalRows = rows.filter(r => r.status === 'critical')
   const warningRows  = rows.filter(r => r.status === 'warning')
-  const toOrderRows  = rows.filter(r => r.calc_order > 0)
+  const toOrderRows  = rows.filter(r => r.calc_order > 0 || r.svod_order_qty > 0)
   const oosWithDemand = rows.filter(r => r.total_stock === 0 && r.sales_qty_31d > 0).length
 
   const total_stock_qty = rows.reduce((s, r) => s + r.total_stock, 0)
   const total_stock_rub = rows.reduce((s, r) => s + r.total_stock * (r.price ?? 0), 0)
-  const order_sum_rub = toOrderRows.reduce((s, r) => s + r.calc_order * (r.cost_plan ?? 0), 0)
-  const to_order_count = toOrderRows.reduce((s, r) => s + r.calc_order, 0)
+
+  // Расчётный заказ
+  const order_sum_rub_calc   = rows.reduce((s, r) => s + r.calc_order * (r.cost_plan ?? 0), 0)
+  const order_qty_calc       = rows.reduce((s, r) => s + r.calc_order, 0)
+
+  // Заказ из СВОД (Потребность Китай)
+  const order_sum_rub_svod   = rows.reduce((s, r) => s + r.svod_order_qty * (r.cost_plan ?? 0), 0)
+  const order_qty_svod       = rows.reduce((s, r) => s + r.svod_order_qty, 0)
+
   const velocity_avg = rows.length > 0 ? rows.reduce((s, r) => s + r.dpd, 0) / rows.length : 0
-  const turnover_days_avg = rows.length > 0
-    ? Math.round(rows.reduce((s, r) => s + Math.min(r.stock_days, 365), 0) / rows.length)
+  const turnover_days_avg = velocity_avg > 0
+    ? Math.round(total_stock_qty / (velocity_avg * rows.length))
     : 0
   const forecast_30d_total = rows.reduce((s, r) => s + r.forecast_30d, 0)
+  const period_revenue_total = rows.reduce((s, r) => s + r.period_revenue, 0)
+  const prev_period_revenue_total = rows.reduce((s, r) => s + r.prev_period_revenue, 0)
 
   const summary = {
     critical_count: criticalRows.length,
     warning_count:  warningRows.length,
     oos_with_demand: oosWithDemand,
-    to_order_count,
-    order_sum_rub: Math.round(order_sum_rub),
+    to_order_count: toOrderRows.length,                       // SKU-счётчик (не qty)
+    // Расчётный заказ (наша модель)
+    order_sum_rub_calc: Math.round(order_sum_rub_calc),
+    order_qty_calc,
+    // Заказ из СВОД (менеджер)
+    order_sum_rub_svod: Math.round(order_sum_rub_svod),
+    order_qty_svod,
+    // Совместимость со старым UI
+    order_sum_rub: Math.round(order_sum_rub_calc),
     total_stock_qty,
     total_stock_rub: Math.round(total_stock_rub),
     velocity_avg: Math.round(velocity_avg * 10) / 10,
     turnover_days_avg,
     forecast_30d_total,
+    period_revenue_total: Math.round(period_revenue_total),
+    prev_period_revenue_total: Math.round(prev_period_revenue_total),
   }
+
+  // ── 13. Heatmap: топ-15 ниш (subject_wb) по выручке × 12 коэффициентов ─
+  type NicheAgg = { revenue: number; coeffs: number[][]; sample_sku: string }
+  const niches: Record<string, NicheAgg> = {}
+  for (const r of rows) {
+    const key = r.subject_wb || r.brand || '(прочее)'
+    if (!niches[key]) niches[key] = { revenue: 0, coeffs: [], sample_sku: r.sku_ms }
+    niches[key].revenue += r.period_revenue
+    const sku = dimByMs[r.sku_ms]
+    if (sku) {
+      const monthVals = MONTH_KEYS.map(k => sku[k])
+      if (monthVals.some(v => v != null && v > 0)) {
+        niches[key].coeffs.push(monthVals.map(v => v ?? 0))
+      }
+    }
+  }
+  const heatmap_rows = Object.entries(niches)
+    .sort((a, b) => b[1].revenue - a[1].revenue)
+    .slice(0, 15)
+    .map(([name, { coeffs, sample_sku }]) => {
+      const avgCoeffs: Array<number | null> = []
+      for (let i = 0; i < 12; i++) {
+        const vals = coeffs.map(c => c[i]).filter(v => v > 0)
+        avgCoeffs.push(vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null)
+      }
+      return {
+        sku_ms: sample_sku,
+        name: name.length > 40 ? name.slice(0, 39) + '…' : name,
+        subject_wb: name,
+        coeffs: avgCoeffs,
+      }
+    })
 
   return NextResponse.json({
     summary,
     rows,
+    heatmap_rows,
     latest_date: maxDate,
     latest_snap: maxSnapDate,
     period,
     horizon,
+    period_from: fromDaily,
+    period_to:   toDaily,
   })
 }
