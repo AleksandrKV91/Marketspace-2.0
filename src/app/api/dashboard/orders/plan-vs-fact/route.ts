@@ -6,8 +6,10 @@ export const maxDuration = 30
 
 const MONTH_RU = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек']
 
-// План vs Факт по месяцам: план — sum(plan_X из последнего fact_china_supply),
-// факт — sum(daily_agg_sku.sales_qty) за тот же месяц.
+// План vs Факт по месяцам:
+//   план — sum(plan_X из последнего fact_china_supply) — все 12 месяцев,
+//   факт — sum(fact_sku_daily.sales_qty) за тот же месяц.
+// Показываем только месяцы, где есть план или факт > 0.
 export async function GET() {
   const supabase = createServiceClient()
 
@@ -22,33 +24,35 @@ export async function GET() {
   const chinaId = lastUploads?.[0]?.id
 
   type Plan = {
-    plan_mar: number | null; plan_apr: number | null; plan_may: number | null
-    plan_jun: number | null; plan_jul: number | null; plan_aug: number | null
+    plan_jan: number | null; plan_feb: number | null; plan_mar: number | null
+    plan_apr: number | null; plan_may: number | null; plan_jun: number | null
+    plan_jul: number | null; plan_aug: number | null; plan_sep: number | null
+    plan_oct: number | null; plan_nov: number | null; plan_dec: number | null
   }
-  const planByMonth: Record<string, number> = {  // ISO YYYY-MM → qty
-  }
+  const planByMonth: Record<string, number> = {}  // ISO YYYY-MM → qty
 
   if (chinaId) {
     const planRows = await fetchAll<Plan>(
       (sb) => sb.from('fact_china_supply')
-        .select('plan_mar, plan_apr, plan_may, plan_jun, plan_jul, plan_aug')
+        .select('plan_jan, plan_feb, plan_mar, plan_apr, plan_may, plan_jun, plan_jul, plan_aug, plan_sep, plan_oct, plan_nov, plan_dec')
         .eq('upload_id', chinaId),
       supabase,
     )
-    // Год берём текущий (план обычно на текущий сезон)
     const year = new Date().getFullYear()
     const planFields: Array<[keyof Plan, string]> = [
-      ['plan_mar', `${year}-03`], ['plan_apr', `${year}-04`], ['plan_may', `${year}-05`],
-      ['plan_jun', `${year}-06`], ['plan_jul', `${year}-07`], ['plan_aug', `${year}-08`],
+      ['plan_jan', `${year}-01`], ['plan_feb', `${year}-02`], ['plan_mar', `${year}-03`],
+      ['plan_apr', `${year}-04`], ['plan_may', `${year}-05`], ['plan_jun', `${year}-06`],
+      ['plan_jul', `${year}-07`], ['plan_aug', `${year}-08`], ['plan_sep', `${year}-09`],
+      ['plan_oct', `${year}-10`], ['plan_nov', `${year}-11`], ['plan_dec', `${year}-12`],
     ]
     for (const [k, m] of planFields) {
       let total = 0
       for (const r of planRows) total += (r[k] ?? 0) as number
-      planByMonth[m] = Math.round(total)
+      if (total > 0) planByMonth[m] = Math.round(total)
     }
   }
 
-  // Факт: daily_agg_sku.sales_qty за последние 6 месяцев
+  // Факт: fact_sku_daily.sales_qty за последние ~9 месяцев (закрываем все плановые месяцы)
   const { data: maxRow } = await supabase
     .from('fact_sku_daily')
     .select('metric_date')
@@ -58,15 +62,23 @@ export async function GET() {
 
   const factByMonth: Record<string, number> = {}
   if (maxDate) {
-    const fromDate = new Date(maxDate); fromDate.setMonth(fromDate.getMonth() - 5); fromDate.setDate(1)
-    const fromIso = fromDate.toISOString().split('T')[0]
+    // Считаем диапазон от первого месяца с планом или 9 месяцев назад
+    const planMonths = Object.keys(planByMonth).sort()
+    let fromIso: string
+    if (planMonths.length > 0) {
+      fromIso = `${planMonths[0]}-01`
+    } else {
+      const fromDate = new Date(maxDate); fromDate.setMonth(fromDate.getMonth() - 8); fromDate.setDate(1)
+      fromIso = fromDate.toISOString().split('T')[0]
+    }
 
     type Row = { metric_date: string; sales_qty: number | null }
     const rows = await fetchAll<Row>(
-      (sb) => sb.from('daily_agg_sku')
+      (sb) => sb.from('fact_sku_daily')
         .select('metric_date, sales_qty')
         .gte('metric_date', fromIso)
-        .lte('metric_date', maxDate!),
+        .lte('metric_date', maxDate!)
+        .order('metric_date'),
       supabase,
     )
     for (const r of rows) {
@@ -75,7 +87,7 @@ export async function GET() {
     }
   }
 
-  // Объединяем месяцы
+  // Объединяем месяцы — только те, где есть либо план либо факт > 0
   const allMonths = Array.from(new Set([...Object.keys(planByMonth), ...Object.keys(factByMonth)])).sort()
   const result = allMonths.map(m => {
     const monthNum = parseInt(m.split('-')[1], 10) - 1

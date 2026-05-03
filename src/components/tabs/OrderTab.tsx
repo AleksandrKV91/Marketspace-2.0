@@ -57,6 +57,7 @@ interface OrderData {
     velocity_avg: number
     turnover_days_avg: number
     forecast_30d_total: number
+    forecast_30d_rub_total: number
     period_revenue_total: number
     prev_period_revenue_total: number
   }
@@ -154,10 +155,11 @@ export default function OrderTab() {
       const filterH = filterBarRef.current ? filterBarRef.current.getBoundingClientRect().height : 56
       setStickyTop({ filterBar: headerH, thead: headerH + filterH })
     }
-    const t = setTimeout(() => requestAnimationFrame(measure), 100)
+    // double-RAF — даём DOM времени закончить layout после рендера KPI/charts/data
+    const t = setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(measure)), 100)
     window.addEventListener('resize', measure)
     return () => { clearTimeout(t); window.removeEventListener('resize', measure) }
-  }, [])
+  }, [loading, data])
 
   function toggleSort(key: string) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -298,8 +300,8 @@ export default function OrderTab() {
         },
         {
           label: 'Прогноз 30д',
-          value: fmt(s.forecast_30d_total) + ' шт',
-          hint: 'сезонность × velocity',
+          value: fmtRub(s.forecast_30d_rub_total ?? 0),
+          hint: fmt(s.forecast_30d_total) + ' шт · сезонность × velocity',
         },
       ]} />
 
@@ -386,7 +388,7 @@ export default function OrderTab() {
         <StockTrendChart />
         <PlanVsFactChart />
         <SeasonalityHeatmap rows={heatmapRows} currentMonth={new Date().getMonth()} />
-        <ForecastChart velocity={s.velocity_avg} totalStock={s.total_stock_qty} />
+        <ForecastChart />
       </div>
 
       {/* ─── Таблица в стиле SkuTableTab ─────────────────────────────── */}
@@ -462,7 +464,7 @@ export default function OrderTab() {
           />
         </div>
 
-        <div style={{ overflowX: 'auto', padding: '0 1rem' }}>
+        <div style={{ overflowX: 'clip', padding: '0 1rem' }}>
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs" style={{ position: 'sticky', top: stickyTop.thead, zIndex: 10, background: 'var(--surface-solid)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', color: 'var(--text)', fontWeight: 600 }}>

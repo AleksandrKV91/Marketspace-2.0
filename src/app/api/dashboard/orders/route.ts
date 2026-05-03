@@ -538,6 +538,7 @@ export async function GET(req: Request) {
     ? Math.round(total_stock_qty / (velocity_avg * rows.length))
     : 0
   const forecast_30d_total = rows.reduce((s, r) => s + r.forecast_30d, 0)
+  const forecast_30d_rub_total = rows.reduce((s, r) => s + r.forecast_30d * (r.price ?? 0), 0)
   const period_revenue_total = rows.reduce((s, r) => s + r.period_revenue, 0)
   const prev_period_revenue_total = rows.reduce((s, r) => s + r.prev_period_revenue, 0)
 
@@ -559,6 +560,7 @@ export async function GET(req: Request) {
     velocity_avg: Math.round(velocity_avg * 10) / 10,
     turnover_days_avg,
     forecast_30d_total,
+    forecast_30d_rub_total: Math.round(forecast_30d_rub_total),
     period_revenue_total: Math.round(period_revenue_total),
     prev_period_revenue_total: Math.round(prev_period_revenue_total),
   }

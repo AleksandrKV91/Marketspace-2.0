@@ -23,22 +23,27 @@ function colorFor(v: number | null, min: number, max: number): string {
 }
 
 export function SeasonalityHeatmap({ rows, currentMonth }: { rows: HeatmapRow[]; currentMonth: number }) {
-  // Топ-15 строк
-  const top = rows.slice(0, 15)
+  // Все ниши — с вертикальной прокруткой
+  const top = rows
 
   return (
     <GlassCard padding="md">
-      <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>Сезонность ниш</h3>
+      <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>
+        Сезонность ниш
+        <span className="ml-2 text-[10px] font-normal" style={{ color: 'var(--text-subtle)' }}>
+          ({rows.length} ниш)
+        </span>
+      </h3>
       {top.length === 0 ? (
         <div className="h-56 flex items-center justify-center text-xs" style={{ color: 'var(--text-subtle)' }}>Нет данных по сезонности</div>
       ) : (
-        <div className="overflow-x-auto">
+        <div style={{ maxHeight: 480, overflowY: 'auto', overflowX: 'auto' }}>
           <table className="w-full text-[10px]">
-            <thead>
+            <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>
               <tr>
-                <th className="text-left py-1 px-1 sticky left-0" style={{ background: 'var(--surface)', color: 'var(--text-subtle)' }}>Ниша/SKU</th>
+                <th className="text-left py-1 px-1 sticky left-0" style={{ background: 'var(--surface)', color: 'var(--text-subtle)', zIndex: 3 }}>Ниша/SKU</th>
                 {MONTH_RU.map((m, i) => (
-                  <th key={m} className="px-1 py-1 text-center" style={{ color: i === currentMonth ? 'var(--accent)' : 'var(--text-subtle)', fontWeight: i === currentMonth ? 700 : 500 }}>
+                  <th key={m} className="px-1 py-1 text-center" style={{ background: 'var(--surface)', color: i === currentMonth ? 'var(--accent)' : 'var(--text-subtle)', fontWeight: i === currentMonth ? 700 : 500 }}>
                     {m}
                   </th>
                 ))}

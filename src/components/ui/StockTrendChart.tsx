@@ -20,7 +20,12 @@ export function StockTrendChart() {
 
   return (
     <GlassCard padding="md">
-      <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>Тренд запасов и OOS</h3>
+      <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>
+        Объём оборота и доля SKU без продаж
+        <span className="ml-2 text-[10px] font-normal" style={{ color: 'var(--text-subtle)' }}>
+          (выручка ₽ / % SKU без продаж в день)
+        </span>
+      </h3>
       {loading ? (
         <div className="h-56 flex items-center justify-center text-xs" style={{ color: 'var(--text-subtle)' }}>Загрузка…</div>
       ) : data.length === 0 ? (
@@ -34,10 +39,10 @@ export function StockTrendChart() {
             <YAxis yAxisId="right" orientation="right" tickFormatter={(v: number) => v + '%'} tick={{ fontSize: 10, fill: 'var(--text-subtle)' }} />
             <Tooltip
               contentStyle={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
-              formatter={(v, name) => name === 'oos_pct' ? `${Number(v)}%` : fmtAxis(Number(v))}
+              formatter={(v, name) => name === '% SKU в OOS' ? `${Number(v)}%` : fmtAxis(Number(v)) + ' ₽'}
             />
             <Legend wrapperStyle={{ fontSize: 11 }} />
-            <Area yAxisId="left" type="monotone" dataKey="total_stock_qty" name="Запас (шт)" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.15} />
+            <Area yAxisId="left" type="monotone" dataKey="total_stock_qty" name="Выручка ₽" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.15} />
             <Line yAxisId="right" type="monotone" dataKey="oos_pct" name="% SKU в OOS" stroke="var(--danger)" strokeWidth={2} dot={false} />
           </ComposedChart>
         </ResponsiveContainer>
