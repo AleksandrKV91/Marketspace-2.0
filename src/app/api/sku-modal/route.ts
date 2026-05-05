@@ -63,9 +63,25 @@ export async function GET(req: NextRequest) {
   const avgCpm = avg((daily ?? []).map(d => d.cpm).filter(v => v != null) as number[])
   const avgCpc = avg((daily ?? []).map(d => d.cpc).filter(v => v != null) as number[])
 
+  // Строим stock_snap из snap (fact_sku_daily) — именно это поле ожидает SkuModal
+  const stock_snap = snap ? {
+    fbo_wb:       snap.fbo_wb       ?? 0,
+    fbs_pushkino: snap.fbs_pushkino ?? 0,
+    fbs_smolensk: snap.fbs_smolensk ?? 0,
+    total_stock:  (snap.fbo_wb ?? 0) + (snap.fbs_pushkino ?? 0) + (snap.fbs_smolensk ?? 0) + (snap.kits_stock ?? 0),
+    supply_date:  snap.supply_date  ?? '',
+    supply_qty:   snap.supply_qty   ?? null,
+    price:        snap.price        ?? null,
+    margin_pct:   snap.margin_pct   ?? null,
+  } : null
+
+  // manager берётся из снапшота (fact_sku_daily), не из dim_sku
+  const manager = snap?.manager ?? null
+
   return NextResponse.json({
-    dim,
+    dim: dim ? { ...dim, manager } : null,
     snap,
+    stock_snap,
     abc,
     daily: (daily ?? []).slice(0, 30).reverse(),
     price_changes: priceChanges ?? [],

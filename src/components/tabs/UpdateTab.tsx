@@ -52,11 +52,47 @@ async function uploadViaStorage(
   file: File,
   onProgress: (pct: number) => void
 ): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_variants?: number; skipped_skus?: string[]; unknown_skus?: string[]; error?: string }> {
-  onProgress(20)
+  // 1. Получить presigned URL (запрос к Supabase Storage, минуя Vercel лимит 4.5 МБ)
+  onProgress(10)
+  const storageKey = `${type}/${Date.now()}-${file.name}`
+  let signedUrl: string
+  try {
+    const presignRes = await fetch('/api/upload/presign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storageKey }),
+    })
+    if (!presignRes.ok) {
+      const err = await presignRes.json().catch(() => ({}))
+      return { ok: false, error: (err as { error?: string }).error ?? 'Ошибка получения URL загрузки' }
+    }
+    const presignData = await presignRes.json() as { signedUrl: string }
+    signedUrl = presignData.signedUrl
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+
+  // 2. Загрузить файл напрямую в Supabase Storage (не через Vercel — нет ограничения размера)
+  onProgress(30)
+  try {
+    const uploadRes = await fetch(signedUrl, {
+      method: 'PUT',
+      body: file,
+      headers: { 'Content-Type': 'application/octet-stream' },
+    })
+    if (!uploadRes.ok) {
+      return { ok: false, error: `Ошибка загрузки в хранилище (${uploadRes.status})` }
+    }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+
+  // 3. Запросить парсинг файла из хранилища
+  onProgress(70)
   try {
     const res = await fetch(
-      `/api/upload/${type}?filename=${encodeURIComponent(file.name)}`,
-      { method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream' } }
+      `/api/upload/${type}?storageKey=${encodeURIComponent(storageKey)}&filename=${encodeURIComponent(file.name)}`,
+      { method: 'POST' }
     )
     onProgress(90)
     let json: { ok?: boolean; rows_parsed?: number; rows_skipped?: number; skipped_variants?: number; diag_skipped_skus?: string[]; unknown_skus?: string[]; error?: string }

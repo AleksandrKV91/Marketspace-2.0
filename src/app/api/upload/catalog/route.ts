@@ -10,16 +10,23 @@ export async function POST(req: NextRequest) {
 
   let buffer: ArrayBuffer
   let filename = req.nextUrl.searchParams.get('filename') ?? 'catalog.xlsb'
+  const storageKey = req.nextUrl.searchParams.get('storageKey')
   try {
-    const ct = req.headers.get('content-type') ?? ''
-    if (ct.includes('application/octet-stream') || ct.includes('application/vnd')) {
-      buffer = await req.arrayBuffer()
+    if (storageKey) {
+      const { data, error } = await supabase.storage.from('uploads').download(storageKey)
+      if (error) return NextResponse.json({ error: `Хранилище: ${error.message}` }, { status: 500 })
+      buffer = await data.arrayBuffer()
     } else {
-      const form = await req.formData()
-      const file = form.get('file') as File | null
-      if (!file) return NextResponse.json({ error: 'Файл не передан (поле file)' }, { status: 400 })
-      filename = file.name
-      buffer = await file.arrayBuffer()
+      const ct = req.headers.get('content-type') ?? ''
+      if (ct.includes('application/octet-stream') || ct.includes('application/vnd')) {
+        buffer = await req.arrayBuffer()
+      } else {
+        const form = await req.formData()
+        const file = form.get('file') as File | null
+        if (!file) return NextResponse.json({ error: 'Файл не передан (поле file)' }, { status: 400 })
+        filename = file.name
+        buffer = await file.arrayBuffer()
+      }
     }
   } catch (e) {
     return NextResponse.json({ error: `Ошибка чтения файла: ${String(e)}` }, { status: 400 })
