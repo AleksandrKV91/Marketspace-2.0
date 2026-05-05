@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import {
   ComposedChart, Area, Line,
@@ -864,7 +865,7 @@ export default function OverviewTab() {
       />
 
       {/* ── Потери Modal ─────────────────────────────────────────────────── */}
-      {showLostModal && (
+      {showLostModal && typeof document !== 'undefined' && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
           style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' }}
@@ -957,7 +958,8 @@ export default function OverviewTab() {
               )}
             </div>
           </motion.div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, TrendingUp, TrendingDown, Download, Save, Package, BarChart2 } from 'lucide-react'
 import {
@@ -83,7 +84,7 @@ export function SkuModal({ skuMs, onClose }: Props) {
   const oos = data?.snap ? (data.snap as Record<string, unknown>).stock_days === 0 || (data.stock_snap?.total_stock ?? 0) === 0 : false
   const drrBad = data?.aggregates?.drr != null && data?.abc?.profitability != null && data.aggregates.drr > data.abc.profitability
 
-  return (
+  const modalContent = (
     <AnimatePresence>
       {skuMs && (
         <>
@@ -303,4 +304,7 @@ export function SkuModal({ skuMs, onClose }: Props) {
       )}
     </AnimatePresence>
   )
+
+  if (typeof document === 'undefined') return null
+  return createPortal(modalContent, document.body)
 }

@@ -8,15 +8,19 @@ export const maxDuration = 60
 export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
 
-  // Принимаем файл как multipart/form-data — браузер не обращается к Supabase напрямую
   let buffer: ArrayBuffer
-  let filename = 'catalog.xlsb'
+  let filename = req.nextUrl.searchParams.get('filename') ?? 'catalog.xlsb'
   try {
-    const form = await req.formData()
-    const file = form.get('file') as File | null
-    if (!file) return NextResponse.json({ error: 'Файл не передан (поле file)' }, { status: 400 })
-    filename = file.name
-    buffer = await file.arrayBuffer()
+    const ct = req.headers.get('content-type') ?? ''
+    if (ct.includes('application/octet-stream') || ct.includes('application/vnd')) {
+      buffer = await req.arrayBuffer()
+    } else {
+      const form = await req.formData()
+      const file = form.get('file') as File | null
+      if (!file) return NextResponse.json({ error: 'Файл не передан (поле file)' }, { status: 400 })
+      filename = file.name
+      buffer = await file.arrayBuffer()
+    }
   } catch (e) {
     return NextResponse.json({ error: `Ошибка чтения файла: ${String(e)}` }, { status: 400 })
   }

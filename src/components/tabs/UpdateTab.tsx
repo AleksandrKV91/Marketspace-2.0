@@ -53,16 +53,17 @@ async function uploadViaStorage(
   onProgress: (pct: number) => void
 ): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_variants?: number; skipped_skus?: string[]; unknown_skus?: string[]; error?: string }> {
   onProgress(20)
-  const form = new FormData()
-  form.append('file', file, file.name)
   try {
-    const res = await fetch(`/api/upload/${type}`, { method: 'POST', body: form })
+    const res = await fetch(
+      `/api/upload/${type}?filename=${encodeURIComponent(file.name)}`,
+      { method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream' } }
+    )
     onProgress(90)
     let json: { ok?: boolean; rows_parsed?: number; rows_skipped?: number; skipped_variants?: number; diag_skipped_skus?: string[]; unknown_skus?: string[]; error?: string }
     try {
       json = await res.json()
     } catch {
-      return { ok: false, error: res.status === 413 ? 'Файл слишком большой для загрузки' : `Сервер вернул ошибку ${res.status}` }
+      return { ok: false, error: `Сервер вернул ошибку ${res.status}` }
     }
     if (res.ok && json.ok) {
       return {
