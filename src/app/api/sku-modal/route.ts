@@ -7,6 +7,9 @@ export async function GET(req: NextRequest) {
   const skuMs = req.nextUrl.searchParams.get('sku_ms')
   if (!skuMs) return NextResponse.json({ error: 'sku_ms required' }, { status: 400 })
 
+  const from = req.nextUrl.searchParams.get('from')
+  const to = req.nextUrl.searchParams.get('to')
+
   const supabase = createServiceClient()
 
   const getLatestUploadId = async (fileType: string) => {
@@ -23,7 +26,7 @@ export async function GET(req: NextRequest) {
     .select('sku_ms, sku_wb, name, brand, category_wb, subject_wb, supplier')
     .eq('sku_ms', skuMs).single()
 
-  // Снапшот из fact_sku_daily (последняя snap_date для этого SKU)
+  // Снапшот из fact_sku_daily (последняя snap_date для этого SKU — всегда самый свежий, без фильтра периода)
   const { data: snapRows } = await supabase.from('fact_sku_daily')
     .select('snap_date, fbo_wb, fbs_pushkino, fbs_smolensk, kits_stock, stock_days, margin_pct, chmd_5d, price, supply_date, supply_qty, days_to_arrival, manager, novelty_status, ots_reserve_days')
     .eq('sku_ms', skuMs)
@@ -32,36 +35,54 @@ export async function GET(req: NextRequest) {
     .limit(1)
   const snap = snapRows?.[0] ?? null
 
-  // ABC данные
+  // ABC данные — всегда последний файл, без фильтра периода
   const { data: abc } = abcUploadId ? await supabase.from('fact_abc')
-    .select('*').eq('sku_ms', skuMs).eq('upload_id', abcUploadId).single() : { data: null }
+    .select('final_class_1, final_class_2, chmd_class, revenue_class, chmd_clean, chmd, revenue, profitability, tz, turnover_days')
+    .eq('sku_ms', skuMs).eq('upload_id', abcUploadId).single() : { data: null }
 
-  // Дневные метрики — последние 30 дней
-  const { data: daily } = await supabase.from('fact_sku_daily')
+  // Дневные метрики — за выбранный период (или последние 30 дней если период не задан)
+  let dailyQuery = supabase.from('fact_sku_daily')
     .select('metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share')
     .eq('sku_ms', skuMs)
-    .order('metric_date', { ascending: false })
-    .limit(30)
 
-  // Изменения цен — последние 10
-  const { data: priceChanges } = dim?.sku_wb ? await supabase.from('fact_price_changes')
-    .select('price_date, price, delta_pct').eq('sku_wb', dim.sku_wb)
-    .order('price_date', { ascending: false }).limit(10) : { data: null }
+  if (from && to) {
+    dailyQuery = dailyQuery.gte('metric_date', from).lte('metric_date', to)
+  } else {
+    dailyQuery = dailyQuery.order('metric_date', { ascending: false }).limit(30)
+  }
+
+  const { data: dailyRaw } = await dailyQuery.order('metric_date', { ascending: true })
+
+  const daily = dailyRaw ?? []
+
+  // Изменения цен — за выбранный период
+  let priceChangesQuery = supabase.from('fact_price_changes')
+    .select('price_date, price, delta_pct')
+    .eq('sku_wb', dim?.sku_wb ?? 0)
+    .order('price_date', { ascending: false })
+
+  if (from && to) {
+    priceChangesQuery = priceChangesQuery.gte('price_date', from).lte('price_date', to)
+  } else {
+    priceChangesQuery = priceChangesQuery.limit(10)
+  }
+
+  const { data: priceChanges } = dim?.sku_wb ? await priceChangesQuery : { data: null }
 
   // Заметка
   const { data: note } = await supabase.from('sku_notes')
     .select('note').eq('sku_ms', skuMs).single()
 
   // Агрегаты за период
-  const revenues = (daily ?? []).map(d => d.revenue ?? 0)
-  const adSpends = (daily ?? []).map(d => d.ad_spend ?? 0)
+  const revenues = daily.map(d => d.revenue ?? 0)
+  const adSpends = daily.map(d => d.ad_spend ?? 0)
   const totalRevenue = revenues.reduce((s, v) => s + v, 0)
   const totalAdSpend = adSpends.reduce((s, v) => s + v, 0)
-  const avgCtr = avg((daily ?? []).map(d => d.ctr).filter(v => v != null) as number[])
-  const avgCrCart = avg((daily ?? []).map(d => d.cr_cart).filter(v => v != null) as number[])
-  const avgCrOrder = avg((daily ?? []).map(d => d.cr_order).filter(v => v != null) as number[])
-  const avgCpm = avg((daily ?? []).map(d => d.cpm).filter(v => v != null) as number[])
-  const avgCpc = avg((daily ?? []).map(d => d.cpc).filter(v => v != null) as number[])
+  const avgCtr = avg(daily.map(d => d.ctr).filter(v => v != null) as number[])
+  const avgCrCart = avg(daily.map(d => d.cr_cart).filter(v => v != null) as number[])
+  const avgCrOrder = avg(daily.map(d => d.cr_order).filter(v => v != null) as number[])
+  const avgCpm = avg(daily.map(d => d.cpm).filter(v => v != null) as number[])
+  const avgCpc = avg(daily.map(d => d.cpc).filter(v => v != null) as number[])
 
   // Строим stock_snap из snap (fact_sku_daily) — именно это поле ожидает SkuModal
   const stock_snap = snap ? {
@@ -83,7 +104,7 @@ export async function GET(req: NextRequest) {
     snap,
     stock_snap,
     abc,
-    daily: (daily ?? []).slice(0, 30).reverse(),
+    daily,
     price_changes: priceChanges ?? [],
     note: note?.note ?? '',
     aggregates: {

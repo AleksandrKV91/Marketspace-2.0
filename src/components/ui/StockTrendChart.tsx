@@ -38,12 +38,12 @@ export function StockTrendChart() {
             <YAxis yAxisId="left" tickFormatter={fmtAxis} tick={{ fontSize: 10, fill: 'var(--text-subtle)' }} />
             <YAxis yAxisId="right" orientation="right" tickFormatter={(v: number) => v + '%'} tick={{ fontSize: 10, fill: 'var(--text-subtle)' }} />
             <Tooltip
-              contentStyle={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
+              contentStyle={{ background: '#fff', border: '1px solid #ccc', borderRadius: 8, fontSize: 12, color: '#000' }}
               formatter={(v, name) => name === '% SKU в OOS' ? `${Number(v)}%` : fmtAxis(Number(v)) + ' ₽'}
             />
             <Legend wrapperStyle={{ fontSize: 11 }} />
-            <Area yAxisId="left" type="monotone" dataKey="total_stock_qty" name="Выручка ₽" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.15} />
-            <Line yAxisId="right" type="monotone" dataKey="oos_pct" name="% SKU в OOS" stroke="var(--danger)" strokeWidth={2} dot={false} />
+            <Area yAxisId="left" type="monotone" dataKey="total_stock_qty" name="Выручка ₽" stroke="#3B82F6" fill="#3B82F6" fillOpacity={0.15} />
+            <Line yAxisId="right" type="monotone" dataKey="oos_pct" name="% SKU в OOS" stroke="#F59E0B" strokeWidth={2} dot={false} />
           </ComposedChart>
         </ResponsiveContainer>
       )}

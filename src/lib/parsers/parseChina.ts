@@ -68,7 +68,7 @@ const COL_QUERIES: Array<{ key: keyof ChinaRow; queries: string[] }> = [
   { key: 'in_transit', queries: ['в пути'] },
   { key: 'in_production', queries: ['в произв', 'в производстве'] },
   { key: 'nearest_date', queries: ['ближайшая дата'] },
-  { key: 'order_qty', queries: ['кол-во к заказу', 'количество к заказу'] },
+  { key: 'order_qty', queries: ['кол-во к заказу', 'количество к заказу', 'к заказу', 'заказ шт'] },
   { key: 'order_sum_cost', queries: ['сумма в себах', 'сумма заказа'] },
   { key: 'rating', queries: ['рейтинг'] },
 ]

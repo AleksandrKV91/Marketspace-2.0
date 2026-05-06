@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, TrendingUp, TrendingDown, Download, Save, Package, BarChart2 } from 'lucide-react'
+import { X, Download, Save } from 'lucide-react'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
+import { useDateRange } from '@/components/ui/DateRangePicker'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -14,9 +15,9 @@ interface SkuModalData {
   dim: { sku_ms: string; sku_wb: number; name: string; brand: string; category_wb: string; manager: string } | null
   snap: Record<string, unknown> | null
   stock_snap: { fbo_wb: number; fbs_pushkino: number; fbs_smolensk: number; total_stock: number; supply_date: string; supply_qty: number; price: number; margin_pct: number } | null
-  abc: { abc_class: string; abc_class2: string; chmd: number; chmd_clean: number; revenue: number; profitability: number; tz: number; turnover_days: number } | null
-  daily: Array<{ metric_date: string; revenue: number; ad_spend: number; drr_total: number; ctr: number; cr_cart: number; cr_order: number; cpm: number; cpc: number }>
-  price_changes: Array<{ price_date: string; price: number }>
+  abc: { final_class_1: string; final_class_2: string; chmd: number; chmd_clean: number; revenue: number; profitability: number; tz: number; turnover_days: number } | null
+  daily: Array<{ metric_date: string; revenue: number | null; ad_spend: number | null; drr_total: number | null; ctr: number | null; cr_cart: number | null; cr_order: number | null; cpm: number | null; cpc: number | null }>
+  price_changes: Array<{ price_date: string; price: number; delta_pct?: number | null }>
   note: string
   aggregates: { revenue: number; ad_spend: number; drr: number | null; avg_ctr: number | null; avg_cr_cart: number | null; avg_cr_order: number | null; avg_cpm: number | null; avg_cpc: number | null }
 }
@@ -64,6 +65,9 @@ export function SkuModal({ skuMs, onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [note, setNote] = useState('')
   const [noteSaving, setNoteSaving] = useState(false)
+  const { range } = useDateRange()
+  const from = range.from
+  const to = range.to
 
   useEffect(() => { setMounted(true) }, [])
 
@@ -71,11 +75,14 @@ export function SkuModal({ skuMs, onClose }: Props) {
     if (!skuMs) return
     setLoading(true)
     setData(null)
-    fetch(`/api/sku-modal?sku_ms=${encodeURIComponent(skuMs)}`)
+    const params = new URLSearchParams({ sku_ms: skuMs })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    fetch(`/api/sku-modal?${params}`)
       .then(r => r.json())
       .then(d => { setData(d); setNote(d.note ?? '') })
       .finally(() => setLoading(false))
-  }, [skuMs])
+  }, [skuMs, range.from, range.to])
 
   const saveNote = async () => {
     if (!skuMs) return
@@ -87,11 +94,21 @@ export function SkuModal({ skuMs, onClose }: Props) {
   const oos = data?.snap ? (data.snap as Record<string, unknown>).stock_days === 0 || (data.stock_snap?.total_stock ?? 0) === 0 : false
   const drrBad = data?.aggregates?.drr != null && data?.abc?.profitability != null && data.aggregates.drr > data.abc.profitability
 
+  // Заполняем null → 0 для плавных графиков
+  const dailyChart = (data?.daily ?? []).map(d => ({
+    ...d,
+    revenue:    d.revenue    ?? 0,
+    ad_spend:   d.ad_spend   ?? 0,
+    ctr:        d.ctr        ?? 0,
+    cr_cart:    d.cr_cart    ?? 0,
+    cr_order:   d.cr_order   ?? 0,
+  }))
+
   const modalContent = (
     <AnimatePresence>
       {skuMs && (
         <>
-          {/* Overlay — fixed-элемент без backdrop-filter (внутренний div делает blur) */}
+          {/* Overlay */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -102,7 +119,7 @@ export function SkuModal({ skuMs, onClose }: Props) {
             <div className="absolute inset-0 bg-black/40" style={{ backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }} />
           </motion.div>
 
-          {/* Modal — fixed-обёртка чистая, glass-стили на внутреннем div */}
+          {/* Modal */}
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -158,12 +175,16 @@ export function SkuModal({ skuMs, onClose }: Props) {
                     </div>
                   </section>
 
-                  {/* ── Ряд 2: Выручка | ДРР факт | ДРР рекл ── */}
+                  {/* ── Ряд 2: Выручка | ДРР факт | ABC ── */}
                   <section>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                       <MetricCard label="Выручка (период)" value={fmt(data.aggregates.revenue, 0, ' ₽')} />
                       <MetricCard label="ДРР факт" value={pct(data.aggregates.drr)} />
-                      <MetricCard label="ABC класс" value={data.abc?.abc_class ?? '—'} sub={data.abc?.abc_class2 ? 'выр/об: ' + data.abc.abc_class2 : undefined} />
+                      <MetricCard
+                        label="ABC класс"
+                        value={data.abc?.final_class_1 ?? '—'}
+                        sub={data.abc?.final_class_2 ? 'рент/об: ' + data.abc.final_class_2 : undefined}
+                      />
                     </div>
                   </section>
 
@@ -196,38 +217,48 @@ export function SkuModal({ skuMs, onClose }: Props) {
                   </section>
 
                   {/* ── График выручки + расходов ── */}
-                  {data.daily.length > 0 && (
+                  {dailyChart.length > 0 && (
                     <section>
-                      <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>Выручка и расходы (30 дней)</h3>
+                      <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>Выручка и расходы</h3>
                       <div style={{ height: 180 }}>
                         <ResponsiveContainer width="100%" height="100%">
-                          <ComposedChart data={data.daily} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                          <ComposedChart data={dailyChart} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                             <XAxis dataKey="metric_date" tick={{ fontSize: 10 }} tickFormatter={v => v.slice(5)} />
                             <YAxis tick={{ fontSize: 10 }} tickFormatter={v => fmt(v, 0)} width={48} />
-                            <Tooltip formatter={(v) => fmt(v as number, 0, ' ₽')} />
+                            <Tooltip
+                              contentStyle={{ background: '#fff', border: '1px solid #ccc', color: '#000', fontSize: 12 }}
+                              formatter={(v) => fmt(v as number, 0, ' ₽')}
+                            />
                             <Bar dataKey="revenue" name="Выручка" fill="#3B82F6" opacity={0.7} radius={[2, 2, 0, 0]} />
-                            <Line dataKey="ad_spend" name="Расходы" stroke="#EF4444" strokeWidth={2} dot={false} />
+                            <Line type="monotone" dataKey="ad_spend" name="Расходы" stroke="#EF4444" strokeWidth={2} dot={false} connectNulls />
                           </ComposedChart>
                         </ResponsiveContainer>
                       </div>
                     </section>
                   )}
 
-                  {/* ── График CTR/CR ── */}
-                  {data.daily.some(d => d.ctr != null) && (
+                  {/* ── График CTR/CR — две оси ── */}
+                  {dailyChart.some(d => d.ctr !== 0 || d.cr_cart !== 0 || d.cr_order !== 0) && (
                     <section>
-                      <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>CTR и CR (30 дней)</h3>
-                      <div style={{ height: 160 }}>
+                      <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>CTR и CR</h3>
+                      <div style={{ height: 180 }}>
                         <ResponsiveContainer width="100%" height="100%">
-                          <ComposedChart data={data.daily} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                          <ComposedChart data={dailyChart} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                             <XAxis dataKey="metric_date" tick={{ fontSize: 10 }} tickFormatter={v => v.slice(5)} />
-                            <YAxis tick={{ fontSize: 10 }} tickFormatter={v => (v * 100).toFixed(1) + '%'} width={48} />
-                            <Tooltip formatter={(v) => ((v as number) * 100).toFixed(2) + '%'} />
-                            <Line dataKey="ctr" name="CTR" stroke="#8B5CF6" strokeWidth={2} dot={false} />
-                            <Line dataKey="cr_cart" name="CR корзина" stroke="#10B981" strokeWidth={2} dot={false} />
-                            <Line dataKey="cr_order" name="CR заказ" stroke="#F59E0B" strokeWidth={2} dot={false} />
+                            {/* Левая ось — CR (0–50%) */}
+                            <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={v => (v * 100).toFixed(0) + '%'} width={44} />
+                            {/* Правая ось — CTR (обычно 0–10%) */}
+                            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} tickFormatter={v => (v * 100).toFixed(1) + '%'} width={44} />
+                            <Tooltip
+                              contentStyle={{ background: '#fff', border: '1px solid #ccc', color: '#000', fontSize: 12 }}
+                              formatter={(v) => ((v as number) * 100).toFixed(2) + '%'}
+                            />
+                            <Legend wrapperStyle={{ fontSize: 11 }} />
+                            <Line yAxisId="left" type="monotone" dataKey="cr_cart" name="CR корзина" stroke="#10B981" strokeWidth={2} dot={false} connectNulls />
+                            <Line yAxisId="left" type="monotone" dataKey="cr_order" name="CR заказ" stroke="#F59E0B" strokeWidth={2} dot={false} connectNulls />
+                            <Line yAxisId="right" type="monotone" dataKey="ctr" name="CTR" stroke="#8B5CF6" strokeWidth={2} dot={false} connectNulls />
                           </ComposedChart>
                         </ResponsiveContainer>
                       </div>

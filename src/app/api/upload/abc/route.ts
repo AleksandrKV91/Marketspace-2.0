@@ -4,7 +4,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { loadKnownSkus } from '@/lib/supabase/loadKnownSkus'
 import { chunk } from '@/lib/parsers/utils'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 // Aggregate rows sharing the same (sku_ms, product_name) key.
 // Different product_name = different size/kit variant → kept as separate rows.

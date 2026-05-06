@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { GlassCard } from './GlassCard'
 
 const MONTH_RU = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек']
@@ -15,7 +16,6 @@ function colorFor(v: number | null, min: number, max: number): string {
   if (v == null) return 'var(--surface-2)'
   if (max === min) return 'var(--surface-2)'
   const t = (v - min) / (max - min)
-  // от серого (низ) к зелёному (пик)
   const r = Math.round(120 - t * 80)
   const g = Math.round(120 + t * 80)
   const b = Math.round(120 - t * 80)
@@ -23,17 +23,35 @@ function colorFor(v: number | null, min: number, max: number): string {
 }
 
 export function SeasonalityHeatmap({ rows, currentMonth }: { rows: HeatmapRow[]; currentMonth: number }) {
-  // Все ниши — с вертикальной прокруткой
-  const top = rows
+  const [selectedMonth, setSelectedMonth] = useState<number>(currentMonth)
+
+  // Сортируем по выбранному месяцу (убывание)
+  const top = [...rows].sort((a, b) => {
+    const av = a.coeffs[selectedMonth] ?? -Infinity
+    const bv = b.coeffs[selectedMonth] ?? -Infinity
+    return bv - av
+  })
 
   return (
     <GlassCard padding="md">
-      <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>
-        Сезонность ниш
-        <span className="ml-2 text-[10px] font-normal" style={{ color: 'var(--text-subtle)' }}>
-          ({rows.length} ниш)
-        </span>
-      </h3>
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+          Сезонность ниш
+          <span className="ml-2 text-[10px] font-normal" style={{ color: 'var(--text-subtle)' }}>
+            ({rows.length} ниш)
+          </span>
+        </h3>
+        <select
+          value={selectedMonth}
+          onChange={e => setSelectedMonth(Number(e.target.value))}
+          className="text-[11px] rounded-lg px-2 py-1"
+          style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)' }}
+        >
+          {MONTH_RU.map((m, i) => (
+            <option key={m} value={i}>{m}{i === currentMonth ? ' ●' : ''}</option>
+          ))}
+        </select>
+      </div>
       {top.length === 0 ? (
         <div className="h-56 flex items-center justify-center text-xs" style={{ color: 'var(--text-subtle)' }}>Нет данных по сезонности</div>
       ) : (
@@ -43,7 +61,16 @@ export function SeasonalityHeatmap({ rows, currentMonth }: { rows: HeatmapRow[];
               <tr>
                 <th className="text-left py-1 px-1 sticky left-0" style={{ background: 'var(--surface)', color: 'var(--text-subtle)', zIndex: 3 }}>Ниша/SKU</th>
                 {MONTH_RU.map((m, i) => (
-                  <th key={m} className="px-1 py-1 text-center" style={{ background: 'var(--surface)', color: i === currentMonth ? 'var(--accent)' : 'var(--text-subtle)', fontWeight: i === currentMonth ? 700 : 500 }}>
+                  <th
+                    key={m}
+                    className="px-1 py-1 text-center cursor-pointer"
+                    style={{
+                      background: 'var(--surface)',
+                      color: i === selectedMonth ? 'var(--accent)' : i === currentMonth ? 'var(--text)' : 'var(--text-subtle)',
+                      fontWeight: i === selectedMonth || i === currentMonth ? 700 : 500,
+                    }}
+                    onClick={() => setSelectedMonth(i)}
+                  >
                     {m}
                   </th>
                 ))}
@@ -68,7 +95,7 @@ export function SeasonalityHeatmap({ rows, currentMonth }: { rows: HeatmapRow[];
                             color: '#fff',
                             padding: '4px 0',
                             fontSize: 9,
-                            border: i === currentMonth ? '2px solid var(--accent)' : '1px solid var(--border-subtle)',
+                            border: i === selectedMonth ? '2px solid var(--accent)' : '1px solid var(--border-subtle)',
                           }}
                         >
                           {v != null ? v.toFixed(1) : '—'}

@@ -20,7 +20,10 @@ export function PlanVsFactChart() {
 
   return (
     <GlassCard padding="md">
-      <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text)' }}>План vs Факт</h3>
+      <h3 className="text-sm font-semibold mb-1" style={{ color: 'var(--text)' }}>
+        План vs Факт продаж по месяцам
+        <span className="ml-2 text-[10px] font-normal" style={{ color: 'var(--text-subtle)' }}>(шт)</span>
+      </h3>
       {loading ? (
         <div className="h-56 flex items-center justify-center text-xs" style={{ color: 'var(--text-subtle)' }}>Загрузка…</div>
       ) : data.length === 0 ? (
@@ -32,8 +35,8 @@ export function PlanVsFactChart() {
             <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-subtle)' }} />
             <YAxis tickFormatter={fmtAxis} tick={{ fontSize: 10, fill: 'var(--text-subtle)' }} />
             <Tooltip
-              contentStyle={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
-              formatter={(v) => fmtAxis(Number(v))}
+              contentStyle={{ background: '#fff', border: '1px solid #ccc', borderRadius: 8, fontSize: 12, color: '#000' }}
+              formatter={(v) => [fmtAxis(Number(v)) + ' шт']}
             />
             <Legend wrapperStyle={{ fontSize: 11 }} />
             <Bar dataKey="plan_qty" name="План (шт)" fill="var(--info)" radius={[4, 4, 0, 0]} />

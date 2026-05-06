@@ -4,7 +4,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { chunk } from '@/lib/parsers/utils'
 import { invalidatePrefix, invalidate } from '@/lib/cache'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 export async function POST(req: NextRequest) {
   const supabase = createServiceClient()

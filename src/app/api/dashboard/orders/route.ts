@@ -32,6 +32,7 @@ export async function GET(req: Request) {
   const url = new URL(req.url)
   const horizon = parseInt(url.searchParams.get('horizon') ?? '60', 10)
   const period = parseInt(url.searchParams.get('period') ?? '31', 10)  // 7|14|31
+  const velocityBase = parseInt(url.searchParams.get('velocity_base') ?? '31', 10) // 31|90
   const fromParam = url.searchParams.get('from')
   const toParam = url.searchParams.get('to')
   const categoryFilter = url.searchParams.get('category') ?? ''
@@ -106,13 +107,13 @@ export async function GET(req: Request) {
   type AbcRow    = { sku_ms: string; final_class_1: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
   type ChinaDbRow = { sku_ms: string; in_transit: number | null; in_production: number | null; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null; order_qty: number | null }
 
-  const from31 = maxDate ? addDaysISO(maxDate, -30) : null
+  const from90 = maxDate ? addDaysISO(maxDate, -89) : null
 
-  // Единый расширенный диапазон для всех временных нужд: velocity (31д), curr period, prev period.
+  // Единый расширенный диапазон для всех временных нужд: velocity (90д), curr period, prev period.
   // Запрашиваем один раз — фильтруем в памяти.
   const isoMin = (a: string | null, b: string | null) => a && b ? (a < b ? a : b) : (a ?? b ?? null)
   const isoMax = (a: string | null, b: string | null) => a && b ? (a > b ? a : b) : (a ?? b ?? null)
-  const dailyFrom = isoMin(from31, prevFrom)
+  const dailyFrom = isoMin(from90, prevFrom)
   const dailyTo   = isoMax(maxDate, toDaily)
 
   const [periodRows, allDaily, chinaDbRows, abcRows] = await Promise.all([
@@ -149,9 +150,9 @@ export async function GET(req: Request) {
       : Promise.resolve([] as AbcRow[]),
   ])
 
-  // sales31 = последние 31 день для velocity / OOS
-  const sales31: DailyAgg[] = from31 && maxDate
-    ? allDaily.filter(r => r.metric_date >= from31 && r.metric_date <= maxDate)
+  // sales90 = последние 90 дней для velocity / OOS (включает 31д как подмножество)
+  const sales90: DailyAgg[] = from90 && maxDate
+    ? allDaily.filter(r => r.metric_date >= from90 && r.metric_date <= maxDate)
     : []
 
   // Per-SKU revenue map (current и previous период) — фильтруем в памяти из allDaily
@@ -189,7 +190,7 @@ export async function GET(req: Request) {
   }
 
   const dailyByMs: Record<string, Array<{ date: string; qty: number }>> = {}
-  for (const r of sales31) {
+  for (const r of sales90) {
     if (!r.sku_ms) continue
     if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = []
     dailyByMs[r.sku_ms].push({ date: r.metric_date, qty: r.sales_qty ?? 0 })
@@ -261,8 +262,8 @@ export async function GET(req: Request) {
   type Pass1 = {
     sku: DimRow
     daily: Array<{ date: string; qty: number }>
-    sales_qty_7d: number; sales_qty_14d: number; sales_qty_31d: number
-    base_31d: number
+    sales_qty_7d: number; sales_qty_14d: number; sales_qty_31d: number; sales_qty_90d: number
+    base_31d: number; base_90d: number
     avg_year: number; cur_coef: number; target_coef: number
     horizon_months: number[]; lt: number
   }
@@ -279,10 +280,13 @@ export async function GET(req: Request) {
     const last7  = daily.slice(-7)
     const last14 = daily.slice(-14)
     const last31 = daily.slice(-31)
+    const last90 = daily.slice(-90)
     const sales_qty_7d  = last7.reduce((s, d) => s + d.qty, 0)
     const sales_qty_14d = last14.reduce((s, d) => s + d.qty, 0)
     const sales_qty_31d = last31.reduce((s, d) => s + d.qty, 0)
+    const sales_qty_90d = last90.reduce((s, d) => s + d.qty, 0)
     const base_31d = sales_qty_31d / 31
+    const base_90d = sales_qty_90d / 90
 
     const coeffs = MONTH_KEYS.map(k => sku[k]).filter((v): v is number => v != null && v > 0)
     const avg_year = coeffs.length > 0 ? coeffs.reduce((a, b) => a + b, 0) / coeffs.length : 1
@@ -299,8 +303,8 @@ export async function GET(req: Request) {
 
     pass1[skuMs] = {
       sku, daily,
-      sales_qty_7d, sales_qty_14d, sales_qty_31d,
-      base_31d, avg_year, cur_coef, target_coef,
+      sales_qty_7d, sales_qty_14d, sales_qty_31d, sales_qty_90d,
+      base_31d, base_90d, avg_year, cur_coef, target_coef,
       horizon_months: hm, lt,
     }
 
@@ -336,11 +340,12 @@ export async function GET(req: Request) {
   // ── 11. Финальная сборка строк ─────────────────────────────────────────
   type OrderRow = ReturnType<typeof buildRow>
   function buildRow(skuMs: string, p1: Pass1) {
-    const { sku, daily, sales_qty_7d, sales_qty_14d, sales_qty_31d,
-            base_31d, avg_year, cur_coef, target_coef, horizon_months: hm, lt } = p1
+    const { sku, daily, sales_qty_7d, sales_qty_14d, sales_qty_31d, sales_qty_90d,
+            base_31d, base_90d, avg_year, cur_coef, target_coef, horizon_months: hm, lt } = p1
 
-    // ШАГ 2: base_norm + YoY fallback
-    let base_norm = base_31d / (cur_coef || 1)
+    // ШАГ 2: base_norm — берём 31д или 90д в зависимости от velocityBase
+    const base_active = velocityBase === 90 ? base_90d : base_31d
+    let base_norm = base_active / (cur_coef || 1)
     let used_yoy_fallback = false
     let yoy_base_norm: number | null = null
     if (base_31d < 5 && target_coef > 1.3 && yoyMap[skuMs] != null) {
@@ -440,7 +445,9 @@ export async function GET(req: Request) {
       sales_qty_7d:  Math.round(sales_qty_7d  * 10) / 10,
       sales_qty_14d: Math.round(sales_qty_14d * 10) / 10,
       sales_qty_31d: Math.round(sales_qty_31d * 10) / 10,
+      sales_qty_90d: Math.round(sales_qty_90d * 10) / 10,
       base_31d:      Math.round(base_31d * 100) / 100,
+      base_90d:      Math.round(base_90d * 100) / 100,
 
       // ШАГ 2
       cur_coef:      Math.round(cur_coef * 100) / 100,

@@ -47,11 +47,12 @@ export function ForecastChart() {
             <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10, fill: 'var(--text-subtle)' }} interval="preserveStartEnd" />
             <YAxis tickFormatter={fmtAxis} tick={{ fontSize: 10, fill: 'var(--text-subtle)' }} />
             <Tooltip
-              contentStyle={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
+              contentStyle={{ background: '#fff', border: '1px solid #ccc', borderRadius: 8, fontSize: 12, color: '#000' }}
               formatter={(v) => v != null ? fmtAxis(Number(v)) + ' шт' : '—'}
             />
             <Legend wrapperStyle={{ fontSize: 11 }} />
             {latestDate && <ReferenceLine x={latestDate} stroke="var(--text-subtle)" strokeDasharray="2 4" label={{ value: 'today', fontSize: 9, fill: 'var(--text-subtle)' }} />}
+            <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" label={{ value: 'Стоков нет', fontSize: 9, fill: '#ef4444', position: 'insideLeft' }} />
             <Line type="monotone" dataKey="fact" name="Факт" stroke="#3b82f6" strokeWidth={2} dot={false} connectNulls={false} />
             <Line type="monotone" dataKey="forecast" name="Прогноз" stroke="#22c55e" strokeWidth={2} dot={false} connectNulls={false} />
             <Line type="monotone" dataKey="stock" name="Остаток" stroke="#ef4444" strokeWidth={2} strokeDasharray="5 4" dot={false} connectNulls={true} />

@@ -4,7 +4,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { loadKnownSkus } from '@/lib/supabase/loadKnownSkus'
 import { chunk } from '@/lib/parsers/utils'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 export async function POST(req: NextRequest) {
   const supabase = createServiceClient()

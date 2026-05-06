@@ -116,11 +116,12 @@ export default function OrderTab() {
   const { range } = useDateRange()
   const { filters } = useGlobalFilters()
 
-  function makeCacheKey(p?: { period?: string; horizon?: string }) {
+  function makeCacheKey(p?: { period?: string; horizon?: string; velocity_base?: string }) {
     const params = new URLSearchParams({
       from: range.from, to: range.to,
-      horizon: p?.horizon ?? '60',
-      period:  p?.period  ?? '31',
+      horizon: p?.horizon ?? orderFilter.horizon ?? '60',
+      period:  p?.period  ?? orderFilter.period  ?? '31',
+      velocity_base: p?.velocity_base ?? orderFilter.velocity_base ?? '31',
     })
     if (filters.category) params.set('category', filters.category)
     if (filters.manager)  params.set('manager',  filters.manager)
@@ -129,7 +130,7 @@ export default function OrderTab() {
   }
 
   const [orderFilter, setOrderFilter] = useState<Record<string, string>>({
-    status: 'all', abc: 'all', horizon: '60', period: '31',
+    status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '31',
     only_to_order: 'all', only_oos_demand: 'all',
   })
   const [activeKpi, setActiveKpi] = useState<'critical' | 'warning' | 'oos_demand' | 'to_order' | null>(null)
@@ -186,7 +187,7 @@ export default function OrderTab() {
       })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.from, range.to, filters.category, filters.manager, filters.novelty, orderFilter.period, orderFilter.horizon])
+  }, [range.from, range.to, filters.category, filters.manager, filters.novelty, orderFilter.period, orderFilter.horizon, orderFilter.velocity_base])
 
   const heatmapRows: HeatmapRow[] = useMemo(() => data?.heatmap_rows ?? [], [data?.heatmap_rows])
 
@@ -268,13 +269,14 @@ export default function OrderTab() {
     if (activeKpi === kpi) {
       setActiveKpi(null)
       setOrderFilter(f => ({ ...f, status: 'all', only_to_order: 'all', only_oos_demand: 'all' }))
-      return
+    } else {
+      setActiveKpi(kpi)
+      if (kpi === 'critical') setOrderFilter(f => ({ ...f, status: 'critical', only_to_order: 'all', only_oos_demand: 'all' }))
+      else if (kpi === 'warning') setOrderFilter(f => ({ ...f, status: 'warning', only_to_order: 'all', only_oos_demand: 'all' }))
+      else if (kpi === 'oos_demand') setOrderFilter(f => ({ ...f, status: 'all', only_to_order: 'all', only_oos_demand: 'with' }))
+      else if (kpi === 'to_order') setOrderFilter(f => ({ ...f, status: 'all', only_to_order: 'with', only_oos_demand: 'all' }))
     }
-    setActiveKpi(kpi)
-    if (kpi === 'critical') setOrderFilter(f => ({ ...f, status: 'critical', only_to_order: 'all', only_oos_demand: 'all' }))
-    else if (kpi === 'warning') setOrderFilter(f => ({ ...f, status: 'warning', only_to_order: 'all', only_oos_demand: 'all' }))
-    else if (kpi === 'oos_demand') setOrderFilter(f => ({ ...f, status: 'all', only_to_order: 'all', only_oos_demand: 'with' }))
-    else if (kpi === 'to_order') setOrderFilter(f => ({ ...f, status: 'all', only_to_order: 'with', only_oos_demand: 'all' }))
+    setTimeout(() => filterBarRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80)
   }
 
   return (
@@ -441,11 +443,15 @@ export default function OrderTab() {
                 { value: 'all',  label: 'Все' },
                 { value: 'with', label: 'Только OOS+спрос' },
               ]},
+              { label: 'База velocity', key: 'velocity_base', options: [
+                { value: '31', label: '31 дн' },
+                { value: '90', label: '90 дн' },
+              ]},
             ]}
             values={orderFilter}
             onChange={(k, v) => setOrderFilter(f => ({ ...f, [k]: v }))}
             onReset={() => {
-              setOrderFilter({ status: 'all', abc: 'all', horizon: '60', period: '31', only_to_order: 'all', only_oos_demand: 'all' })
+              setOrderFilter({ status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '31', only_to_order: 'all', only_oos_demand: 'all' })
               setSearch('')
               setActiveKpi(null)
             }}
@@ -464,28 +470,27 @@ export default function OrderTab() {
           />
         </div>
 
-        <div style={{ overflowX: 'clip', padding: '0 1rem' }}>
-          <table className="w-full text-sm">
+        <div style={{ overflowX: 'auto', padding: '0 1rem' }}>
+          <table className="w-full text-sm" style={{ minWidth: 900 }}>
             <thead>
               <tr className="text-xs" style={{ position: 'sticky', top: stickyTop.thead, zIndex: 10, background: 'var(--surface-solid)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', color: 'var(--text)', fontWeight: 600 }}>
                 <SortTh label="SKU WB" sk="sku_wb" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortTh label="Название" sk="name" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Менеджер" sk="manager" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortTh label="Статус" sk="status" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortTh label="ABC" sk="abc_class" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Прод. 31д" sk="sales_qty_31d" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="OOS дн" sk="oos_days_31" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Наличие" sk="total_stock" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Дни" sk="stock_days" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Лог.пл." sk="lead_time_days" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Расч. заказ" sk="calc_order" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Заказ менедж." sk="svod_order_qty" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Δ заказа" sk="delta_order" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Прогн. 30д" sk="forecast_30d" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Выручка" sk="period_revenue" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Δ Выручка" sk="delta_revenue_pct" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Маржа" sk="margin_pct" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="GMROI" sk="gmroi" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Прод. 31д" sk="sales_qty_31d" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="OOS дн" sk="oos_days_31" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Наличие" sk="total_stock" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Дни" sk="stock_days" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Лог.пл." sk="lead_time_days" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Расч. заказ" sk="calc_order" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Заказ менедж." sk="svod_order_qty" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Δ заказа" sk="delta_order" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Прогн. 30д" sk="forecast_30d" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Выручка" sk="period_revenue" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Δ Выручка" sk="delta_revenue_pct" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Маржа" sk="margin_pct" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="GMROI" sk="gmroi" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               </tr>
             </thead>
             <tbody>
@@ -500,7 +505,6 @@ export default function OrderTab() {
                         onClick={() => setExpandedSku(s => s === row.sku_ms ? null : row.sku_ms)}>
                       <td className="py-2 px-2 font-mono text-xs" style={{ color: 'var(--text-muted)' }}>{row.sku_wb}</td>
                       <td className="py-2 px-2 max-w-[180px] truncate text-xs" style={{ color: 'var(--text)' }} title={row.name}>{row.name}</td>
-                      <td className="py-2 px-2 text-xs max-w-[120px] truncate" style={{ color: 'var(--text-muted)' }}>{row.manager || '—'}</td>
                       <td className="py-2 px-2 text-center">
                         <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium whitespace-nowrap"
                               style={{ background: sc.bg, color: sc.color }}>{sc.label}</span>
@@ -512,49 +516,49 @@ export default function OrderTab() {
                                : (row.abc_class ?? '').charAt(0) === 'C' ? 'var(--danger)' : 'var(--text-subtle)',
                         }}>{row.abc_class ?? '—'}</span>
                       </td>
-                      <td className="py-2 px-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmt(row.sales_qty_31d)}</td>
-                      <td className="py-2 px-2 text-right text-xs">
+                      <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{fmt(row.sales_qty_31d)}</td>
+                      <td className="py-2 px-2 text-center text-xs">
                         {row.oos_days_31 > 0
                           ? <span className="font-semibold" style={{ color: 'var(--danger)' }}>{row.oos_days_31}</span>
                           : <span style={{ color: 'var(--text-subtle)' }}>0</span>}
                       </td>
-                      <td className="py-2 px-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmt(row.total_stock)}</td>
-                      <td className="py-2 px-2 text-right text-xs">
+                      <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{fmt(row.total_stock)}</td>
+                      <td className="py-2 px-2 text-center text-xs">
                         <span style={{ color: row.stock_days < row.lead_time_days ? 'var(--danger)' : 'var(--text-muted)' }}>{row.stock_days}</span>
                       </td>
-                      <td className="py-2 px-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{row.lead_time_days}</td>
-                      <td className="py-2 px-2 text-right text-xs font-semibold"
+                      <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{row.lead_time_days}</td>
+                      <td className="py-2 px-2 text-center text-xs font-semibold"
                           style={{ color: row.calc_order > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>{fmt(row.calc_order)}</td>
-                      <td className="py-2 px-2 text-right text-xs font-semibold"
+                      <td className="py-2 px-2 text-center text-xs font-semibold"
                           style={{ color: row.svod_order_qty > 0 ? 'var(--warning)' : 'var(--text-muted)' }}>{fmt(row.svod_order_qty)}</td>
-                      <td className="py-2 px-2 text-right text-xs">
+                      <td className="py-2 px-2 text-center text-xs">
                         {row.delta_order !== 0 ? (
                           <span className="font-semibold" style={{ color: row.delta_order > 0 ? 'var(--info)' : 'var(--text-muted)' }}>
                             {row.delta_order > 0 ? '+' : ''}{fmt(row.delta_order)}
                           </span>
                         ) : <span style={{ color: 'var(--text-subtle)' }}>0</span>}
                       </td>
-                      <td className="py-2 px-2 text-right text-xs" style={{ color: 'var(--text-muted)' }}>{fmt(row.forecast_30d)}</td>
-                      <td className="py-2 px-2 text-right text-xs font-semibold" style={{ color: 'var(--text)' }}>{fmt(row.period_revenue)}</td>
-                      <td className="py-2 px-2 text-right text-xs">
+                      <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{fmt(row.forecast_30d)}</td>
+                      <td className="py-2 px-2 text-center text-xs font-semibold" style={{ color: 'var(--text)' }}>{fmt(row.period_revenue)}</td>
+                      <td className="py-2 px-2 text-center text-xs">
                         {row.delta_revenue_pct != null ? (
                           <span className="font-semibold" style={{ color: row.delta_revenue_pct >= 0 ? 'var(--success)' : 'var(--danger)' }}>
                             {row.delta_revenue_pct >= 0 ? '+' : ''}{(row.delta_revenue_pct * 100).toFixed(1)}%
                           </span>
                         ) : <span style={{ color: 'var(--text-subtle)' }}>—</span>}
                       </td>
-                      <td className="py-2 px-2 text-right">
+                      <td className="py-2 px-2 text-center">
                         <span className="px-1.5 py-0.5 rounded text-[10px] font-medium"
                               style={{ background: isLowMargin ? 'var(--danger-bg)' : 'var(--success-bg)',
                                        color: isLowMargin ? 'var(--danger)' : 'var(--success)' }}>{fmtPct(row.margin_pct)}</span>
                       </td>
-                      <td className="py-2 px-2 text-right text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+                      <td className="py-2 px-2 text-center text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
                         {row.gmroi != null ? row.gmroi.toFixed(2) : '—'}
                       </td>
                     </tr>
                     {isExpanded && (
                       <tr style={{ background: 'var(--surface-2)' }}>
-                        <td colSpan={18} className="p-0">
+                        <td colSpan={17} className="p-0">
                           <OrderCalcDetails row={row} />
                         </td>
                       </tr>
@@ -563,7 +567,7 @@ export default function OrderTab() {
                 )
               })}
               {pagedRows.length === 0 && (
-                <tr><td colSpan={18} className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+                <tr><td colSpan={17} className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
                   {hasFilter ? 'Нет SKU по выбранным фильтрам' : 'Нет данных. Загрузите таблицы в разделе «Обновление данных».'}
                 </td></tr>
               )}
