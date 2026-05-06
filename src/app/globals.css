@@ -121,7 +121,6 @@ body {
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
   position: relative;
-  overflow-x: hidden;
 }
 
 /* ── Ambient mesh — цветные пятна за стеклом ────────────────── */

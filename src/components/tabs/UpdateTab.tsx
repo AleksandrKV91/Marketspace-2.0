@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef } from 'react'
+import { createBrowserClient } from '@/lib/supabase/client'
 import { clearAllTabCaches } from '@/lib/tabCache'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
@@ -52,10 +53,12 @@ async function uploadViaStorage(
   file: File,
   onProgress: (pct: number) => void
 ): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_variants?: number; skipped_skus?: string[]; unknown_skus?: string[]; error?: string }> {
-  // 1. Получить presigned URL (запрос к Supabase Storage, минуя Vercel лимит 4.5 МБ)
+  // 1. Получить presigned token (запрос через наш API, избегая прямого доступа к ключам)
   onProgress(10)
-  const storageKey = `${type}/${Date.now()}-${file.name}`
-  let signedUrl: string
+  const safeName = file.name.replace(/[^\w.\-]/g, '_')
+  const storageKey = `${type}/${Date.now()}-${safeName}`
+  let presignToken: string
+  let presignPath: string
   try {
     const presignRes = await fetch('/api/upload/presign', {
       method: 'POST',
@@ -66,22 +69,25 @@ async function uploadViaStorage(
       const err = await presignRes.json().catch(() => ({}))
       return { ok: false, error: (err as { error?: string }).error ?? 'Ошибка получения URL загрузки' }
     }
-    const presignData = await presignRes.json() as { signedUrl: string }
-    signedUrl = presignData.signedUrl
+    const presignData = await presignRes.json() as { signedUrl: string; token: string; path: string }
+    presignToken = presignData.token
+    presignPath = presignData.path
   } catch (e) {
     return { ok: false, error: String(e) }
   }
 
-  // 2. Загрузить файл напрямую в Supabase Storage (не через Vercel — нет ограничения размера)
+  // 2. Загрузить через Supabase JS client — он правильно ставит CORS-совместимые заголовки
   onProgress(30)
   try {
-    const uploadRes = await fetch(signedUrl, {
-      method: 'PUT',
-      body: file,
-      headers: { 'Content-Type': 'application/octet-stream' },
-    })
-    if (!uploadRes.ok) {
-      return { ok: false, error: `Ошибка загрузки в хранилище (${uploadRes.status})` }
+    const supabase = createBrowserClient()
+    const { error: uploadError } = await supabase.storage
+      .from('uploads')
+      .uploadToSignedUrl(presignPath, presignToken, file, {
+        contentType: 'application/octet-stream',
+        upsert: true,
+      })
+    if (uploadError) {
+      return { ok: false, error: `Ошибка загрузки в хранилище: ${uploadError.message}` }
     }
   } catch (e) {
     return { ok: false, error: String(e) }

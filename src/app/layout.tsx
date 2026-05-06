@@ -19,7 +19,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         />
       </head>
       <body className="min-h-full">
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <div style={{ overflowX: 'hidden', minHeight: '100vh' }}>{children}</div>
+        </ThemeProvider>
       </body>
     </html>
   )
