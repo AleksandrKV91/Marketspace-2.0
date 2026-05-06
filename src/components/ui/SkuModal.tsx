@@ -59,10 +59,13 @@ interface Props {
 }
 
 export function SkuModal({ skuMs, onClose }: Props) {
+  const [mounted, setMounted] = useState(false)
   const [data, setData] = useState<SkuModalData | null>(null)
   const [loading, setLoading] = useState(false)
   const [note, setNote] = useState('')
   const [noteSaving, setNoteSaving] = useState(false)
+
+  useEffect(() => { setMounted(true) }, [])
 
   useEffect(() => {
     if (!skuMs) return
@@ -305,6 +308,7 @@ export function SkuModal({ skuMs, onClose }: Props) {
     </AnimatePresence>
   )
 
-  if (typeof document === 'undefined') return null
-  return createPortal(modalContent, document.body)
+  if (!mounted) return null
+  const portalRoot = document.getElementById('modal-root') ?? document.body
+  return createPortal(modalContent, portalRoot)
 }

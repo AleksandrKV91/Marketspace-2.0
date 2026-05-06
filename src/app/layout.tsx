@@ -22,6 +22,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <ThemeProvider>
           <div style={{ overflowX: 'hidden', minHeight: '100vh' }}>{children}</div>
         </ThemeProvider>
+        {/* Dedicated portal root — no CSS, no stacking context, no transforms */}
+        <div id="modal-root" />
       </body>
     </html>
   )
