@@ -91,26 +91,28 @@ export function SkuModal({ skuMs, onClose }: Props) {
     <AnimatePresence>
       {skuMs && (
         <>
-          {/* Overlay */}
+          {/* Overlay — fixed-элемент без backdrop-filter (внутренний div делает blur) */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[300] bg-black/40"
-            style={{ backdropFilter: 'blur(6px)' }}
+            className="fixed inset-0 z-[300]"
             onClick={onClose}
-          />
+          >
+            <div className="absolute inset-0 bg-black/40" style={{ backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }} />
+          </motion.div>
 
-          {/* Modal */}
+          {/* Modal — fixed-обёртка чистая, glass-стили на внутреннем div */}
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-            className="fixed inset-4 md:inset-8 lg:inset-12 z-[301] flex flex-col overflow-hidden glass"
-            style={{ borderRadius: 'var(--radius-xl)', maxWidth: 900, margin: 'auto' }}
+            className="fixed inset-4 md:inset-8 lg:inset-12 z-[301] flex"
+            style={{ maxWidth: 900, margin: 'auto' }}
             onClick={e => e.stopPropagation()}
           >
+            <div className="glass flex-1 flex flex-col overflow-hidden" style={{ borderRadius: 'var(--radius-xl)' }}>
             {/* ── Header ── */}
             <div className="flex items-start justify-between px-5 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
               <div className="flex-1 min-w-0">
@@ -301,6 +303,7 @@ export function SkuModal({ skuMs, onClose }: Props) {
               >
                 <Save size={13} /> {noteSaving ? 'Сохранение...' : 'Сохранить заметку'}
               </button>
+            </div>
             </div>
           </motion.div>
         </>

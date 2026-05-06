@@ -1,4 +1,4 @@
-import { readWorkbook, sheetToRows, norm, toNum, excelToISO } from './utils'
+import { readWorkbook, sheetToRows, norm, toNum, parseDateVal } from './utils'
 
 export interface ChinaRow {
   sku_ms: string
@@ -229,21 +229,7 @@ export function parseChina(buffer: ArrayBuffer): ParseChinaResult {
       return idx !== undefined ? row[idx] : null
     }
 
-    const nearestDateRaw = get('nearest_date')
-    let nearestDate: string | null = null
-    if (nearestDateRaw) {
-      if (typeof nearestDateRaw === 'number') {
-        nearestDate = excelToISO(nearestDateRaw)
-      } else {
-        const s = String(nearestDateRaw).trim()
-        if (/\d{2}\.\d{2}\.\d{4}/.test(s)) {
-          const [d, m, y] = s.split('.')
-          nearestDate = `${y}-${m}-${d}`
-        } else {
-          nearestDate = s || null
-        }
-      }
-    }
+    const nearestDate = parseDateVal(get('nearest_date'))
 
     result.push({
       sku_ms: skuMs,

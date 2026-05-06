@@ -868,15 +868,15 @@ export default function OverviewTab() {
       {showLostModal && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' }}
           onClick={() => setShowLostModal(false)}
         >
+          <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)' }} />
           <motion.div
             initial={{ opacity: 0, scale: 0.96, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-            className="glass w-full max-w-2xl mx-4 rounded-2xl overflow-hidden"
+            className="glass w-full max-w-2xl mx-4 rounded-2xl overflow-hidden relative"
             onClick={e => e.stopPropagation()}
           >
             <div className="px-6 py-4 flex items-center justify-between gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
