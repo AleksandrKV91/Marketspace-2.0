@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
 import { cached } from '@/lib/cache'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 const MONTH_KEYS = [
   'month_jan','month_feb','month_mar','month_apr','month_may','month_jun',

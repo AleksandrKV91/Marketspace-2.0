@@ -222,16 +222,18 @@ export function SkuModal({ skuMs, onClose }: Props) {
                       <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>Выручка и расходы</h3>
                       <div style={{ height: 180 }}>
                         <ResponsiveContainer width="100%" height="100%">
-                          <ComposedChart data={dailyChart} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                          <ComposedChart data={dailyChart} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                             <XAxis dataKey="metric_date" tick={{ fontSize: 10 }} tickFormatter={v => v.slice(5)} />
-                            <YAxis tick={{ fontSize: 10 }} tickFormatter={v => fmt(v, 0)} width={48} />
+                            <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={v => fmt(v, 0)} width={48} />
+                            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} tickFormatter={v => fmt(v, 0)} width={44} />
                             <Tooltip
                               contentStyle={{ background: '#fff', border: '1px solid #ccc', color: '#000', fontSize: 12 }}
-                              formatter={(v) => fmt(v as number, 0, ' ₽')}
+                              formatter={(v, name) => [fmt(v as number, 0, ' ₽'), name]}
                             />
-                            <Bar dataKey="revenue" name="Выручка" fill="#3B82F6" opacity={0.7} radius={[2, 2, 0, 0]} />
-                            <Line type="monotone" dataKey="ad_spend" name="Расходы" stroke="#EF4444" strokeWidth={2} dot={false} connectNulls />
+                            <Legend wrapperStyle={{ fontSize: 11 }} />
+                            <Bar yAxisId="left" dataKey="revenue" name="Выручка" fill="#3B82F6" opacity={0.7} radius={[2, 2, 0, 0]} />
+                            <Line yAxisId="right" type="monotone" dataKey="ad_spend" name="Расходы" stroke="#EF4444" strokeWidth={2} dot={false} connectNulls />
                           </ComposedChart>
                         </ResponsiveContainer>
                       </div>
