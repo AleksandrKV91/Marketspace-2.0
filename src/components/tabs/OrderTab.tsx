@@ -89,14 +89,24 @@ function fmtFullQty(n: number | null | undefined) {
   return Math.round(n).toLocaleString('ru-RU') + ' шт'
 }
 
-function SortTh({ label, sk, align = 'right', sortKey, sortDir, onSort }: {
+function SortTh({ label, sk, align = 'right', sortKey, sortDir, onSort, stickyTop }: {
   label: string; sk: string; align?: 'left' | 'right' | 'center'
   sortKey: string; sortDir: 'asc' | 'desc'; onSort: (k: string) => void
+  stickyTop?: number
 }) {
   const active = sortKey === sk
   return (
     <th className={`text-${align} pb-3 pt-2 px-2 font-medium cursor-pointer select-none whitespace-nowrap text-xs`}
-        style={{ color: active ? 'var(--accent)' : 'var(--text)' }}
+        style={{
+          color: active ? 'var(--accent)' : 'var(--text)',
+          position: 'sticky',
+          top: stickyTop,
+          zIndex: 10,
+          background: 'var(--surface-solid)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          borderBottom: '1px solid var(--border)',
+        }}
         onClick={() => onSort(sk)}>
       <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : ''}`}>
         {label}
@@ -147,9 +157,12 @@ export default function OrderTab() {
     return params.toString()
   }
 
+  // По умолчанию month = текущий месяц (показывает выручку за этот календарный месяц).
+  // User может переключить на «Все месяцы» — тогда выручка будет за последние 30 дней.
   const [orderFilter, setOrderFilter] = useState<Record<string, string>>({
     status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '31',
-    only_to_order: 'all', only_oos_demand: 'all', month: 'all',
+    only_to_order: 'all', only_oos_demand: 'all',
+    month: String(new Date().getMonth()),
   })
   const [activeKpi, setActiveKpi] = useState<'critical' | 'warning' | 'oos_demand' | 'to_order' | null>(null)
 
@@ -495,7 +508,11 @@ export default function OrderTab() {
             values={orderFilter}
             onChange={(k, v) => setOrderFilter(f => ({ ...f, [k]: v }))}
             onReset={() => {
-              setOrderFilter({ status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '31', only_to_order: 'all', only_oos_demand: 'all', month: 'all' })
+              setOrderFilter({
+                status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '31',
+                only_to_order: 'all', only_oos_demand: 'all',
+                month: String(new Date().getMonth()),
+              })
               setSearch('')
               setActiveKpi(null)
             }}
@@ -514,27 +531,28 @@ export default function OrderTab() {
           />
         </div>
 
-        <div style={{ overflowX: 'auto', padding: '0 1rem' }}>
+        {/* overflow-x: visible — sticky на <th> требует чтобы родитель не создавал scroll-context */}
+        <div style={{ padding: '0 1rem', overflowX: 'auto' }}>
           <table className="w-full text-sm" style={{ minWidth: 900 }}>
             <thead>
-              <tr className="text-xs" style={{ position: 'sticky', top: stickyTop.thead, zIndex: 10, background: 'var(--surface-solid)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', color: 'var(--text)', fontWeight: 600 }}>
-                <SortTh label="SKU WB" sk="sku_wb" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Название" sk="name" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Статус" sk="status" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="ABC" sk="abc_class" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Прод. 31д" sk="sales_qty_31d" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="OOS дн" sk="oos_days_31" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Наличие" sk="total_stock" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Дни" sk="stock_days" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Лог.пл." sk="lead_time_days" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Расч. заказ" sk="calc_order" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Заказ менедж." sk="svod_order_qty" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Δ заказа" sk="delta_order" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Прогн. 30д" sk="forecast_30d" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Выручка" sk="period_revenue" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Δ Выручка" sk="delta_revenue_pct" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="Маржа" sk="margin_pct" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh label="GMROI" sk="gmroi" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <tr className="text-xs">
+                <SortTh stickyTop={stickyTop.thead} label="SKU WB" sk="sku_wb" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Название" sk="name" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Статус" sk="status" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="ABC" sk="abc_class" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Прод. 31д" sk="sales_qty_31d" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="OOS дн" sk="oos_days_31" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Наличие" sk="total_stock" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Дни" sk="stock_days" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Лог.пл." sk="lead_time_days" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Расч. заказ" sk="calc_order" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Заказ менедж." sk="svod_order_qty" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Δ заказа" sk="delta_order" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Прогн. 30д" sk="forecast_30d" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Выручка" sk="period_revenue" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Δ Выручка" sk="delta_revenue_pct" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="Маржа" sk="margin_pct" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="GMROI" sk="gmroi" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               </tr>
             </thead>
             <tbody>

@@ -18,41 +18,42 @@ function addDaysISO(iso: string, days: number): string {
 }
 
 /**
- * Прогноз продаж: 30 дней назад + 30 дней вперёд.
- * - fact (синяя): Σ fact_sku_daily.sales_qty GROUP BY metric_date — реальные продажи (шт.)
- * - forecast (зелёная): на каждый будущий день — Σ_по_SKU(velocity_31d × seasonal_coef(month) / avg_year_coef)
- * - stock (красная): кумулятивный остаток в шт. = current_total_stock - Σ_до_дня(forecast)
- *   Линия обрывается, когда уходит в 0.
+ * Прогноз продаж — ПОНЕДЕЛЬНО, в РУБЛЯХ:
+ *   • 4 прошлые недели (фактическая выручка)
+ *   • 4 будущие недели (прогноз)
+ *   • Остаток в рублях (накопительно убывает по мере прогноза)
  *
- * Важно: возвращаются ТОЛЬКО шт. — линии идут по разным полям, поэтому никогда не совпадают.
+ * Логика:
+ *   • week_start = maxDate - (28-1) дней, и далее шаг 7 дней.
+ *   • Прошлое: fact_rub = Σ revenue по неделе.
+ *   • Будущее: forecast_rub = Σ velocity_30d × seasonal × price (по SKU).
+ *   • Остаток: stock_rub_start = Σ stock_qty × price; убывает по forecast (в рублях).
  */
 export async function GET() {
   const supabase = createServiceClient()
 
-  // 1. Последняя дата в fact_sku_daily
   const { data: maxRow } = await supabase
     .from('fact_sku_daily').select('metric_date')
     .order('metric_date', { ascending: false }).limit(1)
   const maxDate: string | null = maxRow?.[0]?.metric_date ?? null
   if (!maxDate) return NextResponse.json({ rows: [] })
 
-  // 2. Последний снапшот fact_sku_period — для текущего остатка
   const { data: maxSnapRow } = await supabase
     .from('fact_sku_period').select('period_end')
     .order('period_end', { ascending: false }).limit(1)
   const maxSnapDate: string | null = maxSnapRow?.[0]?.period_end ?? null
 
-  // 3. Последние 31 день в fact_sku_daily — для velocity и фактического тренда
-  const factFrom = addDaysISO(maxDate, -29)  // 30 точек включая maxDate
+  // Берём 30 дней назад для расчёта velocity + 28 дней для факта (4 недели)
+  const factFrom = addDaysISO(maxDate, -29)
 
-  type Daily = { sku_ms: string; metric_date: string; sales_qty: number | null }
-  type Snap  = { sku_ms: string; fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null; kits_qty: number | null }
+  type Daily = { sku_ms: string; metric_date: string; sales_qty: number | null; revenue: number | null }
+  type Snap  = { sku_ms: string; fbo_wb: number | null; fbs_pushkino: number | null; fbs_smolensk: number | null; kits_qty: number | null; price: number | null }
   type Dim   = { sku_ms: string } & Record<MonthKey, number | null>
 
   const [allDaily, snapRows, dimRows] = await Promise.all([
     fetchAll<Daily>(
       (sb) => sb.from('fact_sku_daily')
-        .select('sku_ms, metric_date, sales_qty')
+        .select('sku_ms, metric_date, sales_qty, revenue')
         .gte('metric_date', factFrom).lte('metric_date', maxDate)
         .order('metric_date'),
       supabase,
@@ -60,7 +61,7 @@ export async function GET() {
     maxSnapDate
       ? fetchAll<Snap>(
           (sb) => sb.from('fact_sku_period')
-            .select('sku_ms, fbo_wb, fbs_pushkino, fbs_smolensk, kits_qty')
+            .select('sku_ms, fbo_wb, fbs_pushkino, fbs_smolensk, kits_qty, price')
             .eq('period_end', maxSnapDate),
           supabase,
         )
@@ -73,28 +74,24 @@ export async function GET() {
     ),
   ])
 
-  // 4. Факт по дням (шт.)
-  const factByDate: Record<string, number> = {}
-  for (const r of allDaily) {
-    factByDate[r.metric_date] = (factByDate[r.metric_date] ?? 0) + (r.sales_qty ?? 0)
-  }
-
-  // 5. velocity_31d по SKU — суммарные продажи за 31 день / 31
-  const sumByMs: Record<string, number> = {}
-  for (const r of allDaily) sumByMs[r.sku_ms] = (sumByMs[r.sku_ms] ?? 0) + (r.sales_qty ?? 0)
+  // velocity_30d (шт/день) и avg_price по SKU
+  const sumQtyByMs: Record<string, number> = {}
+  for (const r of allDaily) sumQtyByMs[r.sku_ms] = (sumQtyByMs[r.sku_ms] ?? 0) + (r.sales_qty ?? 0)
   const velocityByMs: Record<string, number> = {}
-  for (const [ms, sum] of Object.entries(sumByMs)) velocityByMs[ms] = sum / 30
+  for (const [ms, sum] of Object.entries(sumQtyByMs)) velocityByMs[ms] = sum / 30
 
-  // 6. Текущий остаток по SKU + общий
+  // Цена и остатки по SKU
+  const priceByMs: Record<string, number> = {}
   const stockByMs: Record<string, number> = {}
-  let totalStock = 0
+  let totalStockRub = 0
   for (const r of snapRows) {
-    const s = (r.fbo_wb ?? 0) + (r.fbs_pushkino ?? 0) + (r.fbs_smolensk ?? 0) + (r.kits_qty ?? 0)
-    stockByMs[r.sku_ms] = s
-    totalStock += s
+    const stockQty = (r.fbo_wb ?? 0) + (r.fbs_pushkino ?? 0) + (r.fbs_smolensk ?? 0) + (r.kits_qty ?? 0)
+    stockByMs[r.sku_ms] = stockQty
+    priceByMs[r.sku_ms] = r.price ?? 0
+    totalStockRub += stockQty * (r.price ?? 0)
   }
 
-  // 7. dim_sku — сезонные коэффициенты + avg_year по SKU (для де-сезонализации velocity)
+  // Сезонные коэффициенты
   const dimByMs: Record<string, Dim> = {}
   for (const d of dimRows) dimByMs[d.sku_ms] = d
   const avgYearByMs: Record<string, number> = {}
@@ -105,60 +102,93 @@ export async function GET() {
     avgYearByMs[ms] = vals.length > 0 ? (vals.reduce((a, b) => a + b, 0) / vals.length) : 1
   }
 
-  // 8. Прогноз на 30 дней вперёд: для каждого дня — Σ_SKU(velocity × seasonal_coef / avg_year)
-  const forecastByDate: Record<string, number> = {}
-  for (let i = 1; i <= 30; i++) {
-    const date = addDaysISO(maxDate, i)
-    const month = new Date(date).getMonth()  // 0..11
-    let sum = 0
-    for (const [ms, v] of Object.entries(velocityByMs)) {
-      const dim = dimByMs[ms]
-      const coef = dim?.[MONTH_KEYS[month]] ?? null
-      const avg = avgYearByMs[ms] ?? 1
-      const adj = (coef != null && coef > 0 && avg > 0) ? (coef / avg) : 1
-      sum += v * adj
+  // ── Понедельная агрегация ──────────────────────────────────────────────
+  // Текущая неделя: maxDate-6..maxDate. Прошлые: -13..-7, -20..-14, -27..-21.
+  // Будущие: maxDate+1..+7, +8..+14, +15..+21, +22..+28.
+
+  type WeekPoint = {
+    week_label: string
+    week_start: string
+    week_end:   string
+    type: 'past' | 'future'
+    fact_rub: number | null
+    forecast_rub: number | null
+    stock_rub: number | null
+  }
+
+  const weeks: WeekPoint[] = []
+
+  // Факт по дням: revenue (₽)
+  const revByDate: Record<string, number> = {}
+  for (const r of allDaily) {
+    revByDate[r.metric_date] = (revByDate[r.metric_date] ?? 0) + (r.revenue ?? 0)
+  }
+
+  // 4 прошлые недели (включая текущую как самую правую)
+  for (let w = 3; w >= 0; w--) {
+    const weekEnd   = addDaysISO(maxDate, -7 * w)
+    const weekStart = addDaysISO(weekEnd, -6)
+    let factRub = 0
+    for (let d = 0; d < 7; d++) {
+      const date = addDaysISO(weekStart, d)
+      factRub += revByDate[date] ?? 0
     }
-    forecastByDate[date] = sum
-  }
-
-  // 9. Stock — стартует с totalStock на maxDate, убывает по forecast
-  const stockByDate: Record<string, number> = {}
-  let runningStock = totalStock
-  stockByDate[maxDate] = runningStock
-  for (let i = 1; i <= 30; i++) {
-    const date = addDaysISO(maxDate, i)
-    runningStock = runningStock - (forecastByDate[date] ?? 0)
-    if (runningStock < 0) runningStock = 0
-    stockByDate[date] = runningStock
-  }
-
-  // 10. Собираем массив точек: 30 дней назад + 30 вперёд
-  type ChartPoint = { date: string; fact: number | null; forecast: number | null; stock: number | null }
-  const points: ChartPoint[] = []
-  // прошлое
-  for (let i = -29; i <= 0; i++) {
-    const date = addDaysISO(maxDate, i)
-    points.push({
-      date,
-      fact: Math.round(factByDate[date] ?? 0),
-      forecast: null,
-      stock: i === 0 ? Math.round(stockByDate[date] ?? totalStock) : null,
+    const lbl = formatWeekLabel(weekStart, weekEnd)
+    weeks.push({
+      week_label: lbl,
+      week_start: weekStart,
+      week_end:   weekEnd,
+      type: 'past',
+      fact_rub:     Math.round(factRub),
+      forecast_rub: null,
+      stock_rub:    w === 0 ? Math.round(totalStockRub) : null,
     })
   }
-  // будущее
-  for (let i = 1; i <= 30; i++) {
-    const date = addDaysISO(maxDate, i)
-    points.push({
-      date,
-      fact: null,
-      forecast: Math.round(forecastByDate[date] ?? 0),
-      stock: Math.round(stockByDate[date] ?? 0),
+
+  // 4 будущие недели — прогноз
+  let runningStockRub = totalStockRub
+  for (let w = 1; w <= 4; w++) {
+    const weekStart = addDaysISO(maxDate, 7 * (w - 1) + 1)
+    const weekEnd   = addDaysISO(maxDate, 7 * w)
+    // forecast_rub = Σ_SKU velocity × seasonal × price × 7
+    let forecastRub = 0
+    // Используем средний месяц этой недели для сезонного коэффициента
+    const midDate = addDaysISO(weekStart, 3)
+    const midMonth = new Date(midDate).getMonth()
+    for (const [ms, vel] of Object.entries(velocityByMs)) {
+      const dim = dimByMs[ms]
+      const coef = dim?.[MONTH_KEYS[midMonth]] ?? null
+      const avg = avgYearByMs[ms] ?? 1
+      const adj = (coef != null && coef > 0 && avg > 0) ? (coef / avg) : 1
+      const price = priceByMs[ms] ?? 0
+      forecastRub += vel * adj * price * 7
+    }
+    runningStockRub = Math.max(0, runningStockRub - forecastRub)
+    const lbl = formatWeekLabel(weekStart, weekEnd)
+    weeks.push({
+      week_label: lbl,
+      week_start: weekStart,
+      week_end:   weekEnd,
+      type: 'future',
+      fact_rub:     null,
+      forecast_rub: Math.round(forecastRub),
+      stock_rub:    Math.round(runningStockRub),
     })
   }
 
   return NextResponse.json({
-    rows: points,
+    rows: weeks,
     latest_date: maxDate,
-    total_stock: Math.round(totalStock),
+    total_stock_rub: Math.round(totalStockRub),
   })
+}
+
+function formatWeekLabel(start: string, end: string): string {
+  // Формат «10–16 окт»
+  const MONTHS = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек']
+  const s = new Date(start), e = new Date(end)
+  const sd = s.getDate(), ed = e.getDate()
+  const sm = MONTHS[s.getMonth()], em = MONTHS[e.getMonth()]
+  if (sm === em) return `${sd}–${ed} ${em}`
+  return `${sd} ${sm} – ${ed} ${em}`
 }

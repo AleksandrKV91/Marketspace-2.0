@@ -1,8 +1,12 @@
 'use client'
 
 import { useState, useCallback, useRef } from 'react'
-import { createBrowserClient } from '@/lib/supabase/client'
 import { clearAllTabCaches } from '@/lib/tabCache'
+import { parseSkuReport } from '@/lib/parsers/parseSkuReport'
+import { parseABC } from '@/lib/parsers/parseABC'
+import { parseChina } from '@/lib/parsers/parseChina'
+import { parseCatalog } from '@/lib/parsers/parseCatalog'
+import { parseAnalytics } from '@/lib/parsers/parseAnalytics'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
 
@@ -46,59 +50,70 @@ const FILE_CONFIGS: Array<{
   { type: 'analytics' as FileType, label: 'Аналитика', hint: 'Аналитика_*.xlsx', accept: '.xlsx,.xlsb', order: 5 },
 ]
 
-// ── Загрузка через Supabase Storage → API parse ───────────────────────────────
+// ── Парсинг на frontend → JSON POST → backend upsert ──────────────────────────
+//
+// Раньше: FE → presign → Supabase Storage PUT → backend download (egress!) → parse → upsert.
+// Сейчас: FE парсит файл локально через xlsx.js → шлёт готовый JSON (1-3 МБ) → backend upsert.
+// Преимущества:
+//   • Storage не используется → НИКАКОГО egress на загрузку
+//   • Меньше HTTP-запросов (1 вместо 3)
+//   • JSON ~1-3 МБ влезает в Vercel 4.5MB limit для body
+//   • Легче debugging — ошибка либо в parse (frontend), либо в upsert (backend)
 
-async function uploadViaStorage(
+async function uploadDirect(
   type: FileType,
   file: File,
   onProgress: (pct: number) => void
 ): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_variants?: number; skipped_skus?: string[]; unknown_skus?: string[]; error?: string }> {
-  // 1. Получить presigned token (запрос через наш API, избегая прямого доступа к ключам)
-  onProgress(10)
-  const safeName = file.name.replace(/[^\w.\-]/g, '_')
-  const storageKey = `${type}/${Date.now()}-${safeName}`
-  let presignToken: string
-  let presignPath: string
+  // 1. Читаем файл в browser (быстро, всё в memory)
+  onProgress(5)
+  let buffer: ArrayBuffer
   try {
-    const presignRes = await fetch('/api/upload/presign', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ storageKey }),
-    })
-    if (!presignRes.ok) {
-      const err = await presignRes.json().catch(() => ({}))
-      return { ok: false, error: (err as { error?: string }).error ?? 'Ошибка получения URL загрузки' }
-    }
-    const presignData = await presignRes.json() as { signedUrl: string; token: string; path: string }
-    presignToken = presignData.token
-    presignPath = presignData.path
+    buffer = await file.arrayBuffer()
   } catch (e) {
-    return { ok: false, error: String(e) }
+    return { ok: false, error: `Не удалось прочитать файл: ${String(e)}` }
   }
 
-  // 2. Загрузить через Supabase JS client — он правильно ставит CORS-совместимые заголовки
-  onProgress(30)
+  // 2. Парсим в browser через xlsx.js (тот же код что был на backend)
+  onProgress(20)
+  let parsed: unknown
   try {
-    const supabase = createBrowserClient()
-    const { error: uploadError } = await supabase.storage
-      .from('uploads')
-      .uploadToSignedUrl(presignPath, presignToken, file, {
-        contentType: 'application/octet-stream',
-        upsert: true,
-      })
-    if (uploadError) {
-      return { ok: false, error: `Ошибка загрузки в хранилище: ${uploadError.message}` }
+    // Уступаем main thread на короткое время чтобы UI не замёрз перед тяжёлым парсингом
+    await new Promise(resolve => setTimeout(resolve, 0))
+    switch (type) {
+      case 'sku-report': {
+        // Для sku-report нужен skuMap (wb→ms) — тащим маленький JSON с backend (~30KB)
+        let skuMap: Map<string, string> | undefined
+        try {
+          const mapRes = await fetch('/api/dim-sku/wb-map', { method: 'GET' })
+          if (mapRes.ok) {
+            const json = await mapRes.json() as { map: Record<string, string> }
+            skuMap = new Map(Object.entries(json.map ?? {}))
+          }
+        } catch { /* ignore — парсер сам разберётся */ }
+        parsed = parseSkuReport(buffer, skuMap)
+        break
+      }
+      case 'abc':       parsed = parseABC(buffer, file.name); break
+      case 'china':     parsed = parseChina(buffer); break
+      case 'catalog':   parsed = parseCatalog(buffer); break
+      case 'analytics': parsed = parseAnalytics(buffer, file.name); break
+      default: return { ok: false, error: `Неизвестный тип: ${type}` }
     }
   } catch (e) {
-    return { ok: false, error: String(e) }
+    return { ok: false, error: `Ошибка парсинга файла: ${String(e)}` }
   }
 
-  // 3. Запросить парсинг файла из хранилища
-  onProgress(70)
+  // 3. Шлём parsed JSON на backend
+  onProgress(60)
   try {
     const res = await fetch(
-      `/api/upload/${type}?storageKey=${encodeURIComponent(storageKey)}&filename=${encodeURIComponent(file.name)}`,
-      { method: 'POST' }
+      `/api/upload/${type}?filename=${encodeURIComponent(file.name)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parsed }),
+      }
     )
     onProgress(90)
     let json: { ok?: boolean; rows_parsed?: number; rows_skipped?: number; skipped_variants?: number; diag_skipped_skus?: string[]; unknown_skus?: string[]; error?: string }
@@ -117,7 +132,7 @@ async function uploadViaStorage(
         unknown_skus: json.unknown_skus,
       }
     }
-    return { ok: false, error: json.error ?? 'Ошибка парсинга' }
+    return { ok: false, error: json.error ?? 'Ошибка сохранения в БД' }
   } catch (e) {
     return { ok: false, error: String(e) }
   }
@@ -317,7 +332,7 @@ export default function UpdateTab() {
   const handleFile = async (type: FileType, file: File) => {
     patchState(type, { status: 'uploading', progress: 10, message: 'Загрузка...', detail: undefined })
 
-    const result = await uploadViaStorage(type, file, pct => {
+    const result = await uploadDirect(type, file, pct => {
       patchState(type, { progress: pct })
     })
 

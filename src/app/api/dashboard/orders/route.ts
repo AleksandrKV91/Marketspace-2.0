@@ -78,20 +78,44 @@ export async function GET(req: Request) {
   const maxSnapDate: string | null = maxSnapRow?.[0]?.period_end ?? null
   const maxDate:     string | null = maxMetricRow?.[0]?.metric_date ?? null
 
-  // ── Фиксированный 30-дневный период из последних метрик ────────────────
-  // Эта вкладка ВСЕГДА показывает последние 30 дней — глобальный DateRangePicker не применяется.
+  // ── Период для расчёта заказа: ВСЕГДА последние 30 дней ────────────────
+  // Расчёт заказа всегда актуальный на сегодня — не зависит от month-фильтра.
   let fromDaily: string | null = null
   let toDaily:   string | null = null
   if (maxDate) {
     toDaily = maxDate
     fromDaily = addDaysISO(maxDate, -29)
   }
-  // Предыдущий равный 30-дневный период для дельты выручки
+
+  // ── Период для отображения «Выручка за период» в таблице ───────────────
+  // Если month-фильтр выбран — показываем выручку за этот календарный месяц
+  // (тот же месяц последнего года данных, либо предыдущего, если месяц ещё не наступил).
+  let revenueFrom: string | null = fromDaily
+  let revenueTo:   string | null = toDaily
+  if (monthFilter != null && maxDate) {
+    const maxYear   = new Date(maxDate).getFullYear()
+    const maxMonth  = new Date(maxDate).getMonth()
+    const targetYear = monthFilter > maxMonth ? maxYear - 1 : maxYear
+    const monthStart = new Date(targetYear, monthFilter, 1)
+    const monthEnd   = new Date(targetYear, monthFilter + 1, 0)
+    revenueFrom = monthStart.toISOString().split('T')[0]
+    revenueTo   = monthEnd.toISOString().split('T')[0]
+  }
+
+  // Предыдущий равный период для дельты выручки
   let prevFrom: string | null = null
   let prevTo:   string | null = null
-  if (fromDaily && toDaily) {
-    prevTo   = addDaysISO(fromDaily, -1)
-    prevFrom = addDaysISO(prevTo, -29)
+  if (revenueFrom && revenueTo) {
+    if (monthFilter != null) {
+      // Тот же месяц год назад
+      const f = new Date(revenueFrom); f.setFullYear(f.getFullYear() - 1)
+      const t = new Date(revenueTo);   t.setFullYear(t.getFullYear() - 1)
+      prevFrom = f.toISOString().split('T')[0]
+      prevTo   = t.toISOString().split('T')[0]
+    } else {
+      prevTo   = addDaysISO(revenueFrom, -1)
+      prevFrom = addDaysISO(prevTo, -29)
+    }
   }
 
   // ── 3-4. Параллельно: snapshot + daily sales + china + abc + period rev ─
@@ -116,11 +140,13 @@ export async function GET(req: Request) {
   // ── Вычисляем границы окон для RPC ─────────────────────────────────────
   // RPC orders_daily_agg сам считает 7д/14д/31д/90д от p_max_date,
   // плюс period_revenue и prev_period_revenue для соответствующих диапазонов.
+  // p_max_date — для velocity/sigma/oos (всегда актуально, последние 30д)
+  // p_period_* — для period_revenue (зависит от month-фильтра: либо 30д, либо календарный месяц)
   const rpcMaxDate     = maxDate ?? '1970-01-01'
-  const rpcPeriodFrom  = fromDaily ?? '1970-01-01'
-  const rpcPeriodTo    = toDaily   ?? '1970-01-01'
-  const rpcPrevFrom    = prevFrom  ?? '1970-01-01'
-  const rpcPrevTo      = prevTo    ?? '1970-01-01'
+  const rpcPeriodFrom  = revenueFrom ?? '1970-01-01'
+  const rpcPeriodTo    = revenueTo   ?? '1970-01-01'
+  const rpcPrevFrom    = prevFrom    ?? '1970-01-01'
+  const rpcPrevTo      = prevTo      ?? '1970-01-01'
 
   const [periodRows, dailyAggResult, chinaDbRows, abcRows] = await Promise.all([
     maxSnapDate
@@ -264,21 +290,11 @@ export async function GET(req: Request) {
     if (dim?.sku_wb != null) chinaByWb[dim.sku_wb] = chinaMap[skuMs]
   }
 
-  // ── Универсум SKU: только те, что в последнем fact_sku_period снапшоте.
+  // ── Универсум SKU: ВСЕ из последнего fact_sku_period снапшоте.
   // Глобальные фильтры (category/manager/novelty) на этой вкладке НЕ применяются.
-  // Если задан month-фильтр — оставляем только SKU с ненулевым коэффициентом сезонности на этот месяц.
-  const universe: string[] = []
-  for (const skuMs of Object.keys(snapMap)) {
-    if (monthFilter != null) {
-      // dim матчится по нормализованному sku_ms (см. dimByMs выше)
-      const dim = dimByMs[skuMs]
-      const coef = dim?.[MONTH_KEYS[monthFilter]]
-      // Если коэффициент задан и > 0 — товар «активен» в этом месяце.
-      // Если dim вообще не найден — пропускаем (сезонность неизвестна).
-      if (coef == null || coef <= 0) continue
-    }
-    universe.push(skuMs)
-  }
+  // Month-фильтр ТОЖЕ не влияет на universe — он только меняет колонку «Выручка за период».
+  // SKU из sku-report которых нет в China → остаются с manager_order=0 (через chinaMap fallback).
+  const universe: string[] = Object.keys(snapMap)
 
   // ── 7. YoY fallback: для тех, у кого base_31d < 5 и target_coef > 1.3*avg
   // Запрос делаем ниже после первого прохода — собираем кандидатов

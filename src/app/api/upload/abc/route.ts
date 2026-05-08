@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { parseABC, ABCRow } from '@/lib/parsers/parseABC'
+import { parseABC, ABCRow, type ParseABCResult } from '@/lib/parsers/parseABC'
 import { createServiceClient } from '@/lib/supabase/server'
 import { loadKnownSkus } from '@/lib/supabase/loadKnownSkus'
 import { chunk } from '@/lib/parsers/utils'
@@ -7,8 +7,6 @@ import { chunk } from '@/lib/parsers/utils'
 export const maxDuration = 300
 
 // Aggregate rows sharing the same (sku_ms, product_name) key.
-// Different product_name = different size/kit variant → kept as separate rows.
-// Only exact (sku_ms + product_name) duplicates are collapsed (rare data artifacts).
 function aggregateByVariant(rows: ABCRow[]): ABCRow[] {
   const byKey = new Map<string, { dominant: ABCRow; sums: Partial<ABCRow> }>()
 
@@ -34,7 +32,6 @@ function aggregateByVariant(rows: ABCRow[]): ABCRow[] {
       })
       continue
     }
-    // Accumulate financials for exact duplicates
     const s = entry.sums
     s.qty_stock_rub  = (s.qty_stock_rub  ?? 0) + (row.qty_stock_rub  ?? 0)
     s.cost           = (s.cost           ?? 0) + (row.cost           ?? 0)
@@ -59,66 +56,70 @@ function aggregateByVariant(rows: ABCRow[]): ABCRow[] {
       ...sums,
       profitability:  rev > 0 ? (sums.chmd_clean ?? 0) / rev : dominant.profitability,
       revenue_margin: rev > 0 ? (sums.chmd ?? 0) / rev : dominant.revenue_margin,
-      chmd_share:     null, // not meaningful after aggregation
+      chmd_share:     null,
     }
   })
 }
 
 export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
+  const filename = req.nextUrl.searchParams.get('filename') ?? 'abc.xlsx'
+  const ct = req.headers.get('content-type') ?? ''
 
-  let buffer: ArrayBuffer
-  let filename = req.nextUrl.searchParams.get('filename') ?? 'abc.xlsx'
-  const storageKey = req.nextUrl.searchParams.get('storageKey')
-  try {
-    if (storageKey) {
-      const { data, error } = await supabase.storage.from('uploads').download(storageKey)
-      if (error) return NextResponse.json({ error: `Хранилище: ${error.message}` }, { status: 500 })
-      buffer = await data.arrayBuffer()
-    } else {
-      const ct = req.headers.get('content-type') ?? ''
-      if (ct.includes('application/octet-stream') || ct.includes('application/vnd')) {
+  let parsed: ParseABCResult
+
+  if (ct.includes('application/json')) {
+    try {
+      const body = await req.json()
+      if (!body.parsed) return NextResponse.json({ error: 'Поле parsed отсутствует в JSON' }, { status: 400 })
+      parsed = body.parsed as ParseABCResult
+    } catch (e) {
+      return NextResponse.json({ error: `Ошибка чтения JSON: ${String(e)}` }, { status: 400 })
+    }
+  } else {
+    let buffer: ArrayBuffer
+    const storageKey = req.nextUrl.searchParams.get('storageKey')
+    try {
+      if (storageKey) {
+        const { data, error } = await supabase.storage.from('uploads').download(storageKey)
+        if (error) return NextResponse.json({ error: `Хранилище: ${error.message}` }, { status: 500 })
+        buffer = await data.arrayBuffer()
+      } else if (ct.includes('application/octet-stream') || ct.includes('application/vnd')) {
         buffer = await req.arrayBuffer()
       } else {
         const form = await req.formData()
         const file = form.get('file') as File | null
-        if (!file) return NextResponse.json({ error: 'Файл не передан (поле file)' }, { status: 400 })
-        filename = file.name
+        if (!file) return NextResponse.json({ error: 'Файл не передан' }, { status: 400 })
         buffer = await file.arrayBuffer()
       }
+    } catch (e) {
+      return NextResponse.json({ error: `Ошибка чтения файла: ${String(e)}` }, { status: 400 })
     }
-  } catch (e) {
-    return NextResponse.json({ error: `Ошибка чтения файла: ${String(e)}` }, { status: 400 })
+
+    try {
+      parsed = parseABC(buffer, filename)
+    } catch (e) {
+      return NextResponse.json({ error: String(e) }, { status: 422 })
+    }
   }
 
-  let parsed
-  try {
-    parsed = parseABC(buffer, filename)
-  } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 422 })
-  }
-
-  // Keep size variants separate — group only by exact (sku_ms, product_name)
   const aggregated = aggregateByVariant(parsed.rows)
   const skippedVariants = parsed.rows.length - aggregated.length
 
-  // Update dim_sku name for all SKUs; create stubs for new ones
   const dimUpdates = aggregated
     .filter(r => r.product_name)
     .map(r => ({ sku_ms: r.sku_ms, name: r.product_name! }))
-  for (const batch of chunk(dimUpdates, 500)) {
+  for (const batch of chunk(dimUpdates, 1000)) {
     await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
   }
 
-  // Write subject_wb from «Ниша/Предмет» column into dim_sku
   const nicheUpdates = aggregated
     .filter(r => r.niche)
     .map(r => ({ sku_ms: r.sku_ms, subject_wb: r.niche! }))
-  for (const batch of chunk(nicheUpdates, 500)) {
+  for (const batch of chunk(nicheUpdates, 1000)) {
     await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
   }
 
-  // Cascade niche seasonality/month coefficients to SKUs that share the same subject_wb
   if (nicheUpdates.length > 0) {
     await supabase.rpc('refresh_dim_sku_niche_cascade')
   }
@@ -146,7 +147,7 @@ export async function POST(req: NextRequest) {
     upload_id: uploadId,
     variant_name: r.product_name ?? '',
   }))
-  for (const batch of chunk(rowsWithUpload, 500)) {
+  for (const batch of chunk(rowsWithUpload, 1000)) {
     const { error } = await supabase.from('fact_abc').upsert(batch, { onConflict: 'sku_ms,upload_id,variant_name' })
     if (error) {
       await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)

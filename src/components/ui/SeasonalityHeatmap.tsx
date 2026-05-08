@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { GlassCard } from './GlassCard'
 
 const MONTH_RU = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек']
@@ -24,13 +24,31 @@ function colorFor(v: number | null, min: number, max: number): string {
 
 export function SeasonalityHeatmap({ rows, currentMonth }: { rows: HeatmapRow[]; currentMonth: number }) {
   const [selectedMonth, setSelectedMonth] = useState<number>(currentMonth)
+  // По умолчанию — фильтр «пиковые в выбранном месяце» включён.
+  // Это показывает ниши, для которых selectedMonth = argmax их собственного годового профиля сезонности.
+  const [peakOnly, setPeakOnly] = useState<boolean>(true)
 
-  // Сортируем по выбранному месяцу (убывание)
-  const top = [...rows].sort((a, b) => {
+  const filteredRows = useMemo(() => {
+    if (!peakOnly) return rows
+    // Оставляем только ниши, у которых argmax(coeffs) === selectedMonth
+    return rows.filter(r => {
+      const valid = r.coeffs.map((v, i) => ({ v, i })).filter(x => x.v != null && x.v > 0)
+      if (valid.length === 0) return false
+      let bestIdx = -1
+      let bestVal = -Infinity
+      for (const { v, i } of valid) {
+        if ((v as number) > bestVal) { bestVal = v as number; bestIdx = i }
+      }
+      return bestIdx === selectedMonth
+    })
+  }, [rows, peakOnly, selectedMonth])
+
+  // Сортируем по коэффициенту в выбранном месяце (по убыванию)
+  const top = useMemo(() => [...filteredRows].sort((a, b) => {
     const av = a.coeffs[selectedMonth] ?? -Infinity
     const bv = b.coeffs[selectedMonth] ?? -Infinity
     return bv - av
-  })
+  }), [filteredRows, selectedMonth])
 
   return (
     <GlassCard padding="md">
@@ -38,22 +56,40 @@ export function SeasonalityHeatmap({ rows, currentMonth }: { rows: HeatmapRow[];
         <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
           Сезонность ниш
           <span className="ml-2 text-[10px] font-normal" style={{ color: 'var(--text-subtle)' }}>
-            ({rows.length} ниш)
+            {peakOnly
+              ? `пиковые в ${MONTH_RU[selectedMonth]}: ${top.length} из ${rows.length}`
+              : `${rows.length} ниш`}
           </span>
         </h3>
-        <select
-          value={selectedMonth}
-          onChange={e => setSelectedMonth(Number(e.target.value))}
-          className="text-[11px] rounded-lg px-2 py-1"
-          style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)' }}
-        >
-          {MONTH_RU.map((m, i) => (
-            <option key={m} value={i}>{m}{i === currentMonth ? ' ●' : ''}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setPeakOnly(p => !p)}
+            className="text-[11px] rounded-lg px-2 py-1 cursor-pointer"
+            style={{
+              background: peakOnly ? 'var(--accent-glass)' : 'var(--surface)',
+              border: '1px solid ' + (peakOnly ? 'var(--accent)' : 'var(--border)'),
+              color: peakOnly ? 'var(--accent)' : 'var(--text-muted)',
+            }}
+            title="Только ниши, для которых выбранный месяц — пик годовой сезонности"
+          >
+            {peakOnly ? '★ Пиковые' : 'Все ниши'}
+          </button>
+          <select
+            value={selectedMonth}
+            onChange={e => setSelectedMonth(Number(e.target.value))}
+            className="text-[11px] rounded-lg px-2 py-1"
+            style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)' }}
+          >
+            {MONTH_RU.map((m, i) => (
+              <option key={m} value={i}>{m}{i === currentMonth ? ' ●' : ''}</option>
+            ))}
+          </select>
+        </div>
       </div>
       {top.length === 0 ? (
-        <div className="h-56 flex items-center justify-center text-xs" style={{ color: 'var(--text-subtle)' }}>Нет данных по сезонности</div>
+        <div className="h-56 flex items-center justify-center text-xs" style={{ color: 'var(--text-subtle)' }}>
+          {peakOnly ? `Нет ниш с пиком в ${MONTH_RU[selectedMonth]}` : 'Нет данных по сезонности'}
+        </div>
       ) : (
         <div style={{ maxHeight: 480, overflowY: 'auto', overflowX: 'auto' }}>
           <table className="w-full text-[10px]">
