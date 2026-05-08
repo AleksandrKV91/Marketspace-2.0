@@ -103,20 +103,26 @@ export async function GET(req: Request) {
     period_marginality_wgt: number | null; plan_supply_date: string | null; plan_supply_qty: number | null
     days_until_arrival: number | null; manager: string | null; novelty_status: string | null
   }
-  type DailyAgg  = { sku_ms: string; metric_date: string; sales_qty: number | null; revenue: number | null }
+  type DailyAggRpc = {
+    sku_ms: string
+    sales_qty_7d: number; sales_qty_14d: number; sales_qty_31d: number; sales_qty_90d: number
+    sigma_31d: number
+    oos_days_31: number; non_zero_days_31: number; data_days_total: number
+    period_revenue: number; prev_period_revenue: number
+  }
   type AbcRow    = { sku_ms: string; final_class_1: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
   type ChinaDbRow = { sku_ms: string; in_transit: number | null; in_production: number | null; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null; order_qty: number | null }
 
-  const from90 = maxDate ? addDaysISO(maxDate, -89) : null
+  // ── Вычисляем границы окон для RPC ─────────────────────────────────────
+  // RPC orders_daily_agg сам считает 7д/14д/31д/90д от p_max_date,
+  // плюс period_revenue и prev_period_revenue для соответствующих диапазонов.
+  const rpcMaxDate     = maxDate ?? '1970-01-01'
+  const rpcPeriodFrom  = fromDaily ?? '1970-01-01'
+  const rpcPeriodTo    = toDaily   ?? '1970-01-01'
+  const rpcPrevFrom    = prevFrom  ?? '1970-01-01'
+  const rpcPrevTo      = prevTo    ?? '1970-01-01'
 
-  // Единый расширенный диапазон для всех временных нужд: velocity (90д), curr period, prev period.
-  // Запрашиваем один раз — фильтруем в памяти.
-  const isoMin = (a: string | null, b: string | null) => a && b ? (a < b ? a : b) : (a ?? b ?? null)
-  const isoMax = (a: string | null, b: string | null) => a && b ? (a > b ? a : b) : (a ?? b ?? null)
-  const dailyFrom = isoMin(from90, prevFrom)
-  const dailyTo   = isoMax(maxDate, toDaily)
-
-  const [periodRows, allDaily, chinaDbRows, abcRows] = await Promise.all([
+  const [periodRows, dailyAggResult, chinaDbRows, abcRows] = await Promise.all([
     maxSnapDate
       ? fetchAll<PeriodRow>(
           (sb) => sb.from('fact_sku_period')
@@ -126,15 +132,15 @@ export async function GET(req: Request) {
           supabase,
         )
       : Promise.resolve([] as PeriodRow[]),
-    dailyFrom && dailyTo
-      ? fetchAll<DailyAgg>(
-          (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, metric_date, sales_qty, revenue')
-            .gte('metric_date', dailyFrom!).lte('metric_date', dailyTo!)
-            .order('sku_ms').order('metric_date'),
-          supabase,
-        )
-      : Promise.resolve([] as DailyAgg[]),
+    maxDate
+      ? supabase.rpc('orders_daily_agg', {
+          p_max_date:    rpcMaxDate,
+          p_period_from: rpcPeriodFrom,
+          p_period_to:   rpcPeriodTo,
+          p_prev_from:   rpcPrevFrom,
+          p_prev_to:     rpcPrevTo,
+        })
+      : Promise.resolve({ data: null as DailyAggRpc[] | null, error: null }),
     chinaId
       ? supabase.from('fact_china_supply')
           .select('sku_ms, in_transit, in_production, nearest_date, cost_plan, lead_time_days, order_qty')
@@ -150,21 +156,26 @@ export async function GET(req: Request) {
       : Promise.resolve([] as AbcRow[]),
   ])
 
-  // sales90 = последние 90 дней для velocity / OOS (включает 31д как подмножество)
-  const sales90: DailyAgg[] = from90 && maxDate
-    ? allDaily.filter(r => r.metric_date >= from90 && r.metric_date <= maxDate)
-    : []
+  // Если функция orders_daily_agg ещё не применена в Supabase — подсказываем что делать
+  if (dailyAggResult && 'error' in dailyAggResult && dailyAggResult.error) {
+    const msg = (dailyAggResult.error as { message?: string }).message ?? String(dailyAggResult.error)
+    if (msg.toLowerCase().includes('orders_daily_agg') || msg.toLowerCase().includes('function')) {
+      return NextResponse.json({
+        error: 'Миграция 016_orders_daily_agg не применена. Запустите supabase/016_orders_daily_agg.sql в Supabase Studio → SQL editor.',
+        details: msg,
+      }, { status: 503 })
+    }
+    return NextResponse.json({ error: `daily_agg: ${msg}` }, { status: 500 })
+  }
+  const dailyAggRows: DailyAggRpc[] = (dailyAggResult?.data as DailyAggRpc[] | null) ?? []
+  const dailyAggMap: Record<string, DailyAggRpc> = {}
+  for (const r of dailyAggRows) dailyAggMap[r.sku_ms] = r
 
-  // Per-SKU revenue map (current и previous период) — фильтруем в памяти из allDaily
   const periodRevenueMap: Record<string, number> = {}
   const prevPeriodRevenueMap: Record<string, number> = {}
-  for (const r of allDaily) {
-    if (fromDaily && toDaily && r.metric_date >= fromDaily && r.metric_date <= toDaily) {
-      periodRevenueMap[r.sku_ms] = (periodRevenueMap[r.sku_ms] ?? 0) + (r.revenue ?? 0)
-    }
-    if (prevFrom && prevTo && r.metric_date >= prevFrom && r.metric_date <= prevTo) {
-      prevPeriodRevenueMap[r.sku_ms] = (prevPeriodRevenueMap[r.sku_ms] ?? 0) + (r.revenue ?? 0)
-    }
+  for (const r of dailyAggRows) {
+    periodRevenueMap[r.sku_ms]     = Number(r.period_revenue ?? 0)
+    prevPeriodRevenueMap[r.sku_ms] = Number(r.prev_period_revenue ?? 0)
   }
 
   // ── Build maps ──────────────────────────────────────────────────────────
@@ -188,14 +199,6 @@ export async function GET(req: Request) {
       manager: r.manager, novelty_status: r.novelty_status,
     }
   }
-
-  const dailyByMs: Record<string, Array<{ date: string; qty: number }>> = {}
-  for (const r of sales90) {
-    if (!r.sku_ms) continue
-    if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = []
-    dailyByMs[r.sku_ms].push({ date: r.metric_date, qty: r.sales_qty ?? 0 })
-  }
-  for (const arr of Object.values(dailyByMs)) arr.sort((a, b) => a.date.localeCompare(b.date))
 
   type ChinaRec = { in_transit: number; in_production: number; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null; order_qty: number | null }
   const chinaMap: Record<string, ChinaRec> = {}
@@ -261,7 +264,7 @@ export async function GET(req: Request) {
   // ── 9. Первый проход: считаем base_31d, cur_coef, target_coef ──────────
   type Pass1 = {
     sku: DimRow
-    daily: Array<{ date: string; qty: number }>
+    agg: DailyAggRpc | null
     sales_qty_7d: number; sales_qty_14d: number; sales_qty_31d: number; sales_qty_90d: number
     base_31d: number; base_90d: number
     avg_year: number; cur_coef: number; target_coef: number
@@ -276,15 +279,11 @@ export async function GET(req: Request) {
       name: null, brand: null, subject_wb: null, category_wb: null,
       ...Object.fromEntries(MONTH_KEYS.map(k => [k, null])) as Record<MonthKey, number | null>,
     }
-    const daily = dailyByMs[skuMs] ?? []
-    const last7  = daily.slice(-7)
-    const last14 = daily.slice(-14)
-    const last31 = daily.slice(-31)
-    const last90 = daily.slice(-90)
-    const sales_qty_7d  = last7.reduce((s, d) => s + d.qty, 0)
-    const sales_qty_14d = last14.reduce((s, d) => s + d.qty, 0)
-    const sales_qty_31d = last31.reduce((s, d) => s + d.qty, 0)
-    const sales_qty_90d = last90.reduce((s, d) => s + d.qty, 0)
+    const agg = dailyAggMap[skuMs] ?? null
+    const sales_qty_7d  = Number(agg?.sales_qty_7d  ?? 0)
+    const sales_qty_14d = Number(agg?.sales_qty_14d ?? 0)
+    const sales_qty_31d = Number(agg?.sales_qty_31d ?? 0)
+    const sales_qty_90d = Number(agg?.sales_qty_90d ?? 0)
     const base_31d = sales_qty_31d / 31
     const base_90d = sales_qty_90d / 90
 
@@ -302,7 +301,7 @@ export async function GET(req: Request) {
     const target_coef = target_coef_raw / (avg_year || 1)  // относительный
 
     pass1[skuMs] = {
-      sku, daily,
+      sku, agg,
       sales_qty_7d, sales_qty_14d, sales_qty_31d, sales_qty_90d,
       base_31d, base_90d, avg_year, cur_coef, target_coef,
       horizon_months: hm, lt,
@@ -340,7 +339,7 @@ export async function GET(req: Request) {
   // ── 11. Финальная сборка строк ─────────────────────────────────────────
   type OrderRow = ReturnType<typeof buildRow>
   function buildRow(skuMs: string, p1: Pass1) {
-    const { sku, daily, sales_qty_7d, sales_qty_14d, sales_qty_31d, sales_qty_90d,
+    const { sku, agg, sales_qty_7d, sales_qty_14d, sales_qty_31d, sales_qty_90d,
             base_31d, base_90d, avg_year, cur_coef, target_coef, horizon_months: hm, lt } = p1
 
     // ШАГ 2: base_norm — берём 31д или 90д в зависимости от velocityBase
@@ -361,11 +360,11 @@ export async function GET(req: Request) {
     // ШАГ 3: потребность
     const demand_qty = base_norm * target_coef * horizon
 
-    // ШАГ 4: страховой запас
-    const sigma_31d = stddev(daily.slice(-31).map(d => d.qty))
+    // ШАГ 4: страховой запас (sigma уже посчитан в Postgres)
+    const sigma_31d = Number(agg?.sigma_31d ?? 0)
     let cv = base_31d > 0.1 ? sigma_31d / base_31d : 1.0
     if (sigma_31d === 0) cv = Math.max(cv, 0.3)
-    const non_zero_days = daily.slice(-31).filter(d => d.qty > 0).length
+    const non_zero_days = Number(agg?.non_zero_days_31 ?? 0)
     const low_data = non_zero_days < 10
     if (low_data) cv = Math.max(cv, 1.0)
     const safety_days = Math.sqrt(lt) * cv
@@ -389,7 +388,7 @@ export async function GET(req: Request) {
     // Производные
     const dpd = base_31d
     const days_stock = dpd > 0 ? Math.round(total_stock / dpd) : (total_stock > 0 ? 999 : 0)
-    const oos_days_31 = daily.slice(-31).filter(d => d.qty === 0).length
+    const oos_days_31 = Number(agg?.oos_days_31 ?? 0)
 
     // Выручка за выбранный период + дельта vs предыдущий равный период
     const period_revenue = periodRevenueMap[skuMs] ?? 0
@@ -428,7 +427,7 @@ export async function GET(req: Request) {
     else if (days_stock < lt) status = 'warning'
     else status = 'ok'
 
-    const is_new = daily.length < 14
+    const is_new = Number(agg?.data_days_total ?? 0) < 14
 
     return {
       sku_ms: skuMs,

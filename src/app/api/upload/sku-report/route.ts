@@ -6,6 +6,29 @@ import { invalidatePrefix, invalidate } from '@/lib/cache'
 
 export const maxDuration = 300
 
+// Параллельный upsert с ограничением concurrency.
+// Снимает «Connection to the database timed out» — частые сервиальные апсерты
+// исчерпывают пул соединений Supabase. С concurrency=4 — 4 одновременных батча,
+// каждый ждёт своего соединения, нет долгих ожиданий в одной очереди.
+async function parallelUpsert<T>(
+  batches: T[][],
+  upsertFn: (batch: T[]) => Promise<{ error: { message: string } | null }>,
+  concurrency = 4,
+): Promise<{ error: string | null }> {
+  let firstError: string | null = null
+  const queue = batches.slice()
+  async function worker() {
+    while (queue.length > 0 && !firstError) {
+      const batch = queue.shift()
+      if (!batch) break
+      const { error } = await upsertFn(batch)
+      if (error && !firstError) firstError = error.message
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker))
+  return { error: firstError }
+}
+
 export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
 
@@ -83,33 +106,52 @@ export async function POST(req: NextRequest) {
       ...(r.subject_wb ? { subject_wb: r.subject_wb } : {}),
     }])
   ).values()]
-  for (const batch of chunk(dimUpdates, 500)) {
-    await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
+  // dim_sku остаётся последовательным — нужно завершить перед FK-зависимыми таблицами.
+  // Но размер батча увеличиваем до 1000 (Supabase REST лимит).
+  for (const batch of chunk(dimUpdates, 1000)) {
+    const { error } = await supabase.from('dim_sku').upsert(batch, { onConflict: 'sku_ms' })
+    if (error) {
+      await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)
+      return NextResponse.json({ error: `dim_sku: ${error.message}` }, { status: 500 })
+    }
   }
 
-  // ── 2. fact_sku_daily ─────────────────────────────────────────
+  // ── 2. fact_sku_daily ──────────────────────────────────────────
+  // Это самая большая таблица (60K+ строк). Параллельный upsert critically важен.
   const dedupedDaily = [...new Map(
     parsed.daily.map(r => [`${r.sku_ms}|${r.metric_date}`, r])
   ).values()]
 
-  for (const batch of chunk(dedupedDaily.map(r => ({ ...r, upload_id: uploadId })), 500)) {
-    const { error } = await supabase.from('fact_sku_daily').upsert(batch, { onConflict: 'sku_ms,metric_date' })
-    if (error) {
-      await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)
-      return NextResponse.json({ error: `fact_sku_daily: ${error.message}` }, { status: 500 })
-    }
+  const dailyBatches = chunk(dedupedDaily.map(r => ({ ...r, upload_id: uploadId })), 1000)
+  const dailyRes = await parallelUpsert(
+    dailyBatches,
+    async (b) => {
+      const r = await supabase.from('fact_sku_daily').upsert(b, { onConflict: 'sku_ms,metric_date' })
+      return { error: r.error }
+    },
+    4,
+  )
+  if (dailyRes.error) {
+    await supabase.from('uploads').update({ status: 'error', error_msg: dailyRes.error }).eq('id', uploadId)
+    return NextResponse.json({ error: `fact_sku_daily: ${dailyRes.error}` }, { status: 500 })
   }
 
-  // ── 3. fact_sku_period ────────────────────────────────────────
-  for (const batch of chunk(dedupedPeriod.map(r => ({ ...r, upload_id: uploadId })), 500)) {
-    const { error } = await supabase.from('fact_sku_period').upsert(batch, { onConflict: 'sku_ms,period_start,period_end' })
-    if (error) {
-      await supabase.from('uploads').update({ status: 'error', error_msg: error.message }).eq('id', uploadId)
-      return NextResponse.json({ error: `fact_sku_period: ${error.message}` }, { status: 500 })
-    }
+  // ── 3. fact_sku_period ─────────────────────────────────────────
+  const periodBatches = chunk(dedupedPeriod.map(r => ({ ...r, upload_id: uploadId })), 1000)
+  const periodRes = await parallelUpsert(
+    periodBatches,
+    async (b) => {
+      const r = await supabase.from('fact_sku_period').upsert(b, { onConflict: 'sku_ms,period_start,period_end' })
+      return { error: r.error }
+    },
+    4,
+  )
+  if (periodRes.error) {
+    await supabase.from('uploads').update({ status: 'error', error_msg: periodRes.error }).eq('id', uploadId)
+    return NextResponse.json({ error: `fact_sku_period: ${periodRes.error}` }, { status: 500 })
   }
 
-  // ── 4. fact_price_changes ─────────────────────────────────────
+  // ── 4. fact_price_changes ──────────────────────────────────────
   const priceChangeDedup = new Map<string, typeof parsed.priceChanges[0]>()
   for (const r of parsed.priceChanges) {
     priceChangeDedup.set(`${r.sku_wb}|${r.price_date}`, r)
@@ -126,10 +168,16 @@ export async function POST(req: NextRequest) {
     upload_id: uploadId,
   }))
 
-  for (const batch of chunk(dedupedPriceChanges, 500)) {
-    const { error } = await supabase.from('fact_price_changes').upsert(batch, { onConflict: 'sku_wb,price_date' })
-    if (error) console.error('fact_price_changes upsert error:', error.message)
-  }
+  const priceBatches = chunk(dedupedPriceChanges, 1000)
+  const priceRes = await parallelUpsert(
+    priceBatches,
+    async (b) => {
+      const r = await supabase.from('fact_price_changes').upsert(b, { onConflict: 'sku_wb,price_date' })
+      return { error: r.error }
+    },
+    4,
+  )
+  if (priceRes.error) console.error('fact_price_changes upsert error:', priceRes.error)
 
   // Инвалидировать серверный кэш — следующие запросы к дашборду получат свежие данные
   invalidatePrefix('overview|')
