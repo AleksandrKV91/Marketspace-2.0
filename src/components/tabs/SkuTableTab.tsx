@@ -63,9 +63,9 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   return dir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />
 }
 
-function Th({ label, sortKey, current, dir, onClick, align = 'right' }: {
+function Th({ label, sortKey, current, dir, onClick, align = 'center' }: {
   label: string; sortKey: SortKey; current: SortKey; dir: SortDir
-  onClick: (k: SortKey) => void; align?: 'left' | 'right'
+  onClick: (k: SortKey) => void; align?: 'left' | 'right' | 'center'
 }) {
   return (
     <th
@@ -73,7 +73,7 @@ function Th({ label, sortKey, current, dir, onClick, align = 'right' }: {
       style={{ color: current === sortKey ? 'var(--accent)' : 'var(--text-subtle)', fontSize: 11 }}
       onClick={() => onClick(sortKey)}
     >
-      <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''}`}>
+      <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : ''}`}>
         {label}
         <SortIcon active={current === sortKey} dir={dir} />
       </span>
@@ -640,9 +640,9 @@ export default function SkuTableTab() {
                       backdropFilter: 'blur(12px)',
                     }}
                   >
-                    <th className="text-left px-2 py-2 font-medium whitespace-nowrap" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>OOS</th>
-                    <th className="px-2 py-2 font-medium whitespace-nowrap" style={{ color: sortKey === 'score' ? 'var(--accent)' : 'var(--text-subtle)', fontSize: 11, cursor: 'pointer' }} onClick={() => toggleSort('score')}>
-                      <span className="inline-flex items-center gap-0.5">Score <SortIcon active={sortKey === 'score'} dir={sortDir} /></span>
+                    <th className="text-center px-2 py-2 font-medium whitespace-nowrap" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>OOS</th>
+                    <th className="text-center px-2 py-2 font-medium whitespace-nowrap" style={{ color: sortKey === 'score' ? 'var(--accent)' : 'var(--text-subtle)', fontSize: 11, cursor: 'pointer' }} onClick={() => toggleSort('score')}>
+                      <span className="inline-flex items-center gap-0.5 justify-center">Score <SortIcon active={sortKey === 'score'} dir={sortDir} /></span>
                     </th>
                     <th className="text-left px-2 py-2 font-medium" style={{ color: 'var(--text-subtle)', fontSize: 11, minWidth: 180 }}>SKU / Название</th>
                     <th className="text-left px-2 py-2 font-medium max-w-[80px]" style={{ color: 'var(--text-subtle)', fontSize: 11 }}>Менеджер</th>
@@ -682,14 +682,14 @@ export default function SkuTableTab() {
                         onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}
                       >
                         {/* OOS badge */}
-                        <td className="px-2 py-1">
+                        <td className="px-2 py-1 text-center">
                           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md whitespace-nowrap"
                             style={{ background: row.oos_status === 'critical' ? 'var(--danger-bg)' : row.oos_status === 'warning' ? 'var(--warning-bg)' : 'transparent', color: oosColor }}>
                             {row.oos_status === 'critical' ? 'OOS' : row.oos_status === 'warning' ? 'Low' : '—'}
                           </span>
                         </td>
                         {/* Score */}
-                        <td className="px-2 py-1"><ScoreBadge score={row.score} size="sm" /></td>
+                        <td className="px-2 py-1 text-center"><ScoreBadge score={row.score} size="sm" /></td>
                         {/* SKU / Name combined */}
                         <td className="px-2 py-1" style={{ minWidth: 180 }}>
                           <span className="block font-mono text-[10px] whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>{row.sku}</span>
@@ -705,7 +705,7 @@ export default function SkuTableTab() {
                           <span className="block truncate" title={row.category} style={{ color: 'var(--text-muted)' }}>{row.category || '—'}</span>
                         </td>
                         {/* Revenue */}
-                        <td className="px-2 py-1 text-right font-semibold whitespace-nowrap" title={fmtFull(row.revenue) + ' ₽'} style={{ color: 'var(--text)' }}>
+                        <td className="px-2 py-1 text-center font-semibold whitespace-nowrap" title={fmtFull(row.revenue) + ' ₽'} style={{ color: 'var(--text)' }}>
                           {fmtAxis(row.revenue)}
                           {row.delta_revenue_pct != null && (
                             <div className="text-[10px] font-normal leading-none mt-0.5"
@@ -715,27 +715,27 @@ export default function SkuTableTab() {
                           )}
                         </td>
                         {/* Margin % */}
-                        <td className="px-2 py-1 text-right" style={{ color: marginColor }}>{fmtPct(row.margin_pct)}</td>
+                        <td className="px-2 py-1 text-center" style={{ color: marginColor }}>{fmtPct(row.margin_pct)}</td>
                         {/* ЧМД */}
-                        <td className="px-2 py-1 text-right whitespace-nowrap" title={fmtFull(row.chmd) + ' ₽'} style={{ color: 'var(--text-muted)' }}>{fmtAxis(row.chmd)}</td>
+                        <td className="px-2 py-1 text-center whitespace-nowrap" title={fmtFull(row.chmd) + ' ₽'} style={{ color: 'var(--text-muted)' }}>{fmtAxis(row.chmd)}</td>
                         {/* ДРР */}
-                        <td className="px-2 py-1 text-right" style={{ color: isDrrOver ? 'var(--danger)' : 'var(--text-muted)' }}>{fmtPct(row.drr)}</td>
+                        <td className="px-2 py-1 text-center" style={{ color: isDrrOver ? 'var(--danger)' : 'var(--text-muted)' }}>{fmtPct(row.drr)}</td>
                         {/* CTR */}
-                        <td className="px-2 py-1 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(row.ctr)}</td>
+                        <td className="px-2 py-1 text-center" style={{ color: 'var(--text-muted)' }}>{fmtPct(row.ctr)}</td>
                         {/* CR заказ */}
-                        <td className="px-2 py-1 text-right" style={{ color: 'var(--text-muted)' }}>{fmtPct(row.cr_order)}</td>
+                        <td className="px-2 py-1 text-center" style={{ color: 'var(--text-muted)' }}>{fmtPct(row.cr_order)}</td>
                         {/* Остаток */}
-                        <td className="px-2 py-1 text-right" style={{ color: 'var(--text-muted)' }}>{fmtAxis(row.stock_qty)}</td>
+                        <td className="px-2 py-1 text-center" style={{ color: 'var(--text-muted)' }}>{fmtAxis(row.stock_qty)}</td>
                         {/* Запас дней */}
-                        <td className="px-2 py-1 text-right">
+                        <td className="px-2 py-1 text-center">
                           <span style={{ color: row.stock_days < 7 ? 'var(--danger)' : row.stock_days < 14 ? 'var(--warning)' : 'var(--text-muted)' }}>{row.stock_days}</span>
                         </td>
                         {/* CPO */}
-                        <td className="px-2 py-1 text-right whitespace-nowrap" title={row.cpo != null ? fmtFull(row.cpo) + ' ₽' : ''} style={{ color: 'var(--text-muted)' }}>
+                        <td className="px-2 py-1 text-center whitespace-nowrap" title={row.cpo != null ? fmtFull(row.cpo) + ' ₽' : ''} style={{ color: 'var(--text-muted)' }}>
                           {row.cpo != null ? fmtAxis(row.cpo) : '—'}
                         </td>
                         {/* Прогноз 30д ₽ */}
-                        <td className="px-2 py-1 text-right whitespace-nowrap" title={row.forecast_30d != null ? fmtFull(row.forecast_30d) + ' ₽' : ''} style={{ color: 'var(--text-muted)' }}>
+                        <td className="px-2 py-1 text-center whitespace-nowrap" title={row.forecast_30d != null ? fmtFull(row.forecast_30d) + ' ₽' : ''} style={{ color: 'var(--text-muted)' }}>
                           {row.forecast_30d != null ? fmtAxis(row.forecast_30d) : '—'}
                         </td>
                       </tr>

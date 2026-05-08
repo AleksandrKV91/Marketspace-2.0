@@ -451,7 +451,9 @@ export default function DashboardPage() {
         </div>
 
         {/* Row 2: DateRangePicker + global filters */}
-        {activeTab !== 'niche' && activeTab !== 'update' && (
+        {/* Orders-таб использует фиксированный 30-дневный период из последних метрик
+            и собственный month-фильтр — глобальные фильтры здесь не применимы. */}
+        {activeTab !== 'niche' && activeTab !== 'update' && activeTab !== 'orders' && (
           <div className="flex items-center justify-center gap-2 h-[28px] flex-wrap">
             <DateRangePicker />
             <PeriodButtons />

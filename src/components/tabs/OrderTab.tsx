@@ -12,8 +12,6 @@ import { StockTrendChart } from '@/components/ui/StockTrendChart'
 import { PlanVsFactChart } from '@/components/ui/PlanVsFactChart'
 import { ForecastChart } from '@/components/ui/ForecastChart'
 import { SeasonalityHeatmap, type HeatmapRow } from '@/components/ui/SeasonalityHeatmap'
-import { useDateRange } from '@/components/ui/DateRangePicker'
-import { useGlobalFilters } from '@/app/dashboard/page'
 
 interface OrderRow extends OrderRowDetails {
   sku_ms: string
@@ -85,6 +83,11 @@ function fmtRub(n: number | null | undefined) {
   if (n == null) return '—'
   return Math.round(n).toLocaleString('ru-RU') + ' ₽'
 }
+// Полное число без сокращений (для KPI «Текущий остаток»)
+function fmtFullQty(n: number | null | undefined) {
+  if (n == null) return '—'
+  return Math.round(n).toLocaleString('ru-RU') + ' шт'
+}
 
 function SortTh({ label, sk, align = 'right', sortKey, sortDir, onSort }: {
   label: string; sk: string; align?: 'left' | 'right' | 'center'
@@ -112,26 +115,41 @@ const statusCfg = {
 // Module-shared cache (typed)
 const orderCache = orderTabCache as Map<string, OrderData>
 
-export default function OrderTab() {
-  const { range } = useDateRange()
-  const { filters } = useGlobalFilters()
+const MONTH_OPTIONS = [
+  { value: 'all', label: 'Все месяцы' },
+  { value: '0',  label: 'Январь' },
+  { value: '1',  label: 'Февраль' },
+  { value: '2',  label: 'Март' },
+  { value: '3',  label: 'Апрель' },
+  { value: '4',  label: 'Май' },
+  { value: '5',  label: 'Июнь' },
+  { value: '6',  label: 'Июль' },
+  { value: '7',  label: 'Август' },
+  { value: '8',  label: 'Сентябрь' },
+  { value: '9',  label: 'Октябрь' },
+  { value: '10', label: 'Ноябрь' },
+  { value: '11', label: 'Декабрь' },
+]
 
-  function makeCacheKey(p?: { period?: string; horizon?: string; velocity_base?: string }) {
+export default function OrderTab() {
+  // Эта вкладка НЕ использует глобальный DateRangePicker и глобальные фильтры —
+  // данные строятся всегда за последние 30 дней из fact_sku_daily,
+  // а внутренний фильтр по месяцу применяется к сезонной выручке.
+
+  function makeCacheKey(p?: { period?: string; horizon?: string; velocity_base?: string; month?: string }) {
     const params = new URLSearchParams({
-      from: range.from, to: range.to,
       horizon: p?.horizon ?? orderFilter.horizon ?? '60',
       period:  p?.period  ?? orderFilter.period  ?? '31',
       velocity_base: p?.velocity_base ?? orderFilter.velocity_base ?? '31',
     })
-    if (filters.category) params.set('category', filters.category)
-    if (filters.manager)  params.set('manager',  filters.manager)
-    if (filters.novelty)  params.set('novelty',  filters.novelty)
+    const m = p?.month ?? orderFilter.month
+    if (m && m !== 'all') params.set('month', m)
     return params.toString()
   }
 
   const [orderFilter, setOrderFilter] = useState<Record<string, string>>({
     status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '31',
-    only_to_order: 'all', only_oos_demand: 'all',
+    only_to_order: 'all', only_oos_demand: 'all', month: 'all',
   })
   const [activeKpi, setActiveKpi] = useState<'critical' | 'warning' | 'oos_demand' | 'to_order' | null>(null)
 
@@ -154,12 +172,31 @@ export default function OrderTab() {
       const header = document.querySelector('header.top-nav') as HTMLElement | null
       const headerH = header ? header.getBoundingClientRect().height : 88
       const filterH = filterBarRef.current ? filterBarRef.current.getBoundingClientRect().height : 56
-      setStickyTop({ filterBar: headerH, thead: headerH + filterH })
+      setStickyTop(prev => {
+        const next = { filterBar: headerH, thead: headerH + filterH }
+        if (prev.filterBar === next.filterBar && prev.thead === next.thead) return prev
+        return next
+      })
     }
-    // double-RAF — даём DOM времени закончить layout после рендера KPI/charts/data
+    // Первичный замер после рендера
     const t = setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(measure)), 100)
+    // Реактивно отслеживаем изменения высоты header и filterBar
+    const ros: ResizeObserver[] = []
+    if (typeof ResizeObserver !== 'undefined') {
+      const header = document.querySelector('header.top-nav')
+      if (header) {
+        const ro = new ResizeObserver(measure); ro.observe(header); ros.push(ro)
+      }
+      if (filterBarRef.current) {
+        const ro = new ResizeObserver(measure); ro.observe(filterBarRef.current); ros.push(ro)
+      }
+    }
     window.addEventListener('resize', measure)
-    return () => { clearTimeout(t); window.removeEventListener('resize', measure) }
+    return () => {
+      clearTimeout(t)
+      window.removeEventListener('resize', measure)
+      ros.forEach(ro => ro.disconnect())
+    }
   }, [loading, data])
 
   function toggleSort(key: string) {
@@ -171,7 +208,12 @@ export default function OrderTab() {
   useEffect(() => { setPage(0) }, [search, orderFilter, sortKey, sortDir, activeKpi])
 
   useEffect(() => {
-    const key = makeCacheKey({ period: orderFilter.period, horizon: orderFilter.horizon })
+    const key = makeCacheKey({
+      period: orderFilter.period,
+      horizon: orderFilter.horizon,
+      velocity_base: orderFilter.velocity_base,
+      month: orderFilter.month,
+    })
     const hit = orderCache.get(key)
     if (hit) { setData(hit); setLoading(false); return }
 
@@ -187,7 +229,7 @@ export default function OrderTab() {
       })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.from, range.to, filters.category, filters.manager, filters.novelty, orderFilter.period, orderFilter.horizon, orderFilter.velocity_base])
+  }, [orderFilter.period, orderFilter.horizon, orderFilter.velocity_base, orderFilter.month])
 
   const heatmapRows: HeatmapRow[] = useMemo(() => data?.heatmap_rows ?? [], [data?.heatmap_rows])
 
@@ -205,6 +247,7 @@ export default function OrderTab() {
     || orderFilter.abc !== 'all'
     || orderFilter.only_to_order !== 'all'
     || orderFilter.only_oos_demand !== 'all'
+    || orderFilter.month !== 'all'
     || activeKpi !== null
 
   const filteredRows = (data.rows ?? []).filter(row => {
@@ -286,24 +329,24 @@ export default function OrderTab() {
       <KPIBar items={[
         {
           label: 'Текущий остаток',
-          value: fmt(s.total_stock_qty) + ' шт',
-          hint: fmtRub(s.total_stock_rub),
+          value: fmtRub(s.total_stock_rub),                 // ₽ — основное значение
+          hint: fmtFullQty(s.total_stock_qty),              // шт — без сокращений
         },
         {
           label: 'Скорость продаж',
           value: (s.velocity_avg > 0 ? s.velocity_avg.toFixed(1) : '0') + ' /дн',
-          hint: 'среднее по всем SKU',
+          hint: 'среднее по SKU с продажами',
         },
         {
           label: 'Оборачиваемость',
           value: s.turnover_days_avg + ' дн',
           danger: s.turnover_days_avg > 0 && s.turnover_days_avg < 14,
-          hint: 'остаток / скорость',
+          hint: 'Σ остаток / Σ скорость',
         },
         {
           label: 'Прогноз 30д',
           value: fmtRub(s.forecast_30d_rub_total ?? 0),
-          hint: fmt(s.forecast_30d_total) + ' шт · сезонность × velocity',
+          hint: fmtFullQty(s.forecast_30d_total),           // шт — без сокращений
         },
       ]} />
 
@@ -447,11 +490,12 @@ export default function OrderTab() {
                 { value: '31', label: '31 дн' },
                 { value: '90', label: '90 дн' },
               ]},
+              { label: 'Месяц', key: 'month', options: MONTH_OPTIONS },
             ]}
             values={orderFilter}
             onChange={(k, v) => setOrderFilter(f => ({ ...f, [k]: v }))}
             onReset={() => {
-              setOrderFilter({ status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '31', only_to_order: 'all', only_oos_demand: 'all' })
+              setOrderFilter({ status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '31', only_to_order: 'all', only_oos_demand: 'all', month: 'all' })
               setSearch('')
               setActiveKpi(null)
             }}

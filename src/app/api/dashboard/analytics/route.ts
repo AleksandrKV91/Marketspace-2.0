@@ -152,22 +152,26 @@ export async function GET(req: Request) {
     const rev   = r.revenue   ?? 0
     const spend = r.ad_spend  ?? 0
     const mPct  = snapByMs[r.sku_ms]?.margin_pct ?? 0
+    // FALLBACK: для категорий, где парсер sku-report не заполнил chmd_rub
+    // (Посуда и инвентарь, Игрушки, Одежда), считаем chmd как rev × margin_pct.
+    // Это даёт корректную сумму при свёрнутой иерархии.
+    const chmdRub = r.chmd_rub != null ? r.chmd_rub : (rev * mPct)
 
     totalRevenue   += rev
     totalAdSpend   += spend
     totalMarginSum += rev * mPct
-    totalChmdSum   += r.chmd_rub ?? 0
+    totalChmdSum   += chmdRub
 
     if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0, marginSum: 0, chmd: 0 }
     dateAgg[r.metric_date].revenue   += rev
     dateAgg[r.metric_date].ad_spend  += spend
     dateAgg[r.metric_date].marginSum += rev * mPct
-    dateAgg[r.metric_date].chmd      += r.chmd_rub ?? 0
+    dateAgg[r.metric_date].chmd      += chmdRub
 
     if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0 }
     skuAgg[r.sku_ms].revenue   += rev
     skuAgg[r.sku_ms].ad_spend  += spend
-    skuAgg[r.sku_ms].chmd      += r.chmd_rub  ?? 0
+    skuAgg[r.sku_ms].chmd      += chmdRub
     skuAgg[r.sku_ms].marginRub += r.margin_rub ?? 0
   }
 
@@ -188,11 +192,12 @@ export async function GET(req: Request) {
     const rev   = r.revenue  ?? 0
     const spend = r.ad_spend ?? 0
     const mPct  = snapByMs[r.sku_ms]?.margin_pct ?? 0
+    const chmdRub = r.chmd_rub != null ? r.chmd_rub : (rev * mPct)
 
     prevRevenue   += rev
     prevAdSpend   += spend
     prevMarginSum += rev * mPct
-    prevChmdSum   += r.chmd_rub ?? 0
+    prevChmdSum   += chmdRub
     prevSkuRev[r.sku_ms] = (prevSkuRev[r.sku_ms] ?? 0) + rev
     prevDateAgg[r.metric_date] = (prevDateAgg[r.metric_date] ?? 0) + rev
   }

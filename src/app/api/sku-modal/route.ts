@@ -35,6 +35,24 @@ export async function GET(req: NextRequest) {
     .limit(1)
   const snap = snapRows?.[0] ?? null
 
+  // FALLBACK: те же поля из fact_sku_period (заполняется при загрузке Свода / Отчёт по SKU).
+  // Если snap (из fact_sku_daily) пуст или часть полей NULL — берём из периодического снапшота.
+  const { data: periodSnapRows } = await supabase.from('fact_sku_period')
+    .select('period_end, price, plan_supply_date, plan_supply_qty, fbo_wb, fbs_pushkino, fbs_smolensk, kits_qty, period_marginality_wgt, manager, days_until_arrival')
+    .eq('sku_ms', skuMs)
+    .order('period_end', { ascending: false })
+    .limit(1)
+  const periodSnap = periodSnapRows?.[0] ?? null
+
+  // FALLBACK 2: данные из «Потребность Китай» (fact_china_supply) — там тоже есть nearest_date,
+  // in_transit, in_production, cost_plan, order_qty
+  const { data: chinaRows } = await supabase.from('fact_china_supply')
+    .select('nearest_date, in_transit, in_production, cost_plan, order_qty')
+    .eq('sku_ms', skuMs)
+    .order('upload_id', { ascending: false })
+    .limit(1)
+  const chinaSnap = chinaRows?.[0] ?? null
+
   // ABC данные — всегда последний файл, без фильтра периода
   const { data: abc } = abcUploadId ? await supabase.from('fact_abc')
     .select('final_class_1, final_class_2, chmd_class, revenue_class, chmd_clean, chmd, revenue, profitability, tz, turnover_days')
@@ -84,20 +102,35 @@ export async function GET(req: NextRequest) {
   const avgCpm = avg(daily.map(d => d.cpm).filter(v => v != null) as number[])
   const avgCpc = avg(daily.map(d => d.cpc).filter(v => v != null) as number[])
 
-  // Строим stock_snap из snap (fact_sku_daily) — именно это поле ожидает SkuModal
-  const stock_snap = snap ? {
-    fbo_wb:       snap.fbo_wb       ?? 0,
-    fbs_pushkino: snap.fbs_pushkino ?? 0,
-    fbs_smolensk: snap.fbs_smolensk ?? 0,
-    total_stock:  (snap.fbo_wb ?? 0) + (snap.fbs_pushkino ?? 0) + (snap.fbs_smolensk ?? 0) + (snap.kits_stock ?? 0),
-    supply_date:  snap.supply_date  ?? '',
-    supply_qty:   snap.supply_qty   ?? null,
-    price:        snap.price        ?? null,
-    margin_pct:   snap.margin_pct   ?? null,
+  // Строим stock_snap: snap (fact_sku_daily) → periodSnap (fact_sku_period) → chinaSnap (fact_china_supply).
+  // Каскад фоллбэков обеспечивает данные при любой комбинации загруженных файлов.
+  const fbo_wb       = snap?.fbo_wb       ?? periodSnap?.fbo_wb       ?? 0
+  const fbs_pushkino = snap?.fbs_pushkino ?? periodSnap?.fbs_pushkino ?? 0
+  const fbs_smolensk = snap?.fbs_smolensk ?? periodSnap?.fbs_smolensk ?? 0
+  const kits_stock   = snap?.kits_stock   ?? periodSnap?.kits_qty     ?? 0
+
+  const supply_date  = snap?.supply_date ?? periodSnap?.plan_supply_date ?? chinaSnap?.nearest_date ?? ''
+  const supply_qty   = snap?.supply_qty  ?? periodSnap?.plan_supply_qty  ?? null
+  const price        = snap?.price       ?? periodSnap?.price ?? null
+  const margin_pct   = snap?.margin_pct  ?? periodSnap?.period_marginality_wgt ?? null
+
+  const stock_snap = (snap || periodSnap || chinaSnap) ? {
+    fbo_wb,
+    fbs_pushkino,
+    fbs_smolensk,
+    total_stock: fbo_wb + fbs_pushkino + fbs_smolensk + kits_stock,
+    supply_date,
+    supply_qty,
+    price,
+    margin_pct,
+    in_transit:    chinaSnap?.in_transit    ?? 0,
+    in_production: chinaSnap?.in_production ?? 0,
+    cost_plan:     chinaSnap?.cost_plan     ?? null,
+    order_qty:     chinaSnap?.order_qty     ?? null,
   } : null
 
-  // manager берётся из снапшота (fact_sku_daily), не из dim_sku
-  const manager = snap?.manager ?? null
+  // manager: fact_sku_daily → fact_sku_period
+  const manager = snap?.manager ?? periodSnap?.manager ?? null
 
   return NextResponse.json({
     dim: dim ? { ...dim, manager } : null,

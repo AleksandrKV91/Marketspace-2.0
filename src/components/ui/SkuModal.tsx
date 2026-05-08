@@ -14,7 +14,7 @@ import { useDateRange } from '@/components/ui/DateRangePicker'
 interface SkuModalData {
   dim: { sku_ms: string; sku_wb: number; name: string; brand: string; category_wb: string; manager: string } | null
   snap: Record<string, unknown> | null
-  stock_snap: { fbo_wb: number; fbs_pushkino: number; fbs_smolensk: number; total_stock: number; supply_date: string; supply_qty: number; price: number; margin_pct: number } | null
+  stock_snap: { fbo_wb: number; fbs_pushkino: number; fbs_smolensk: number; total_stock: number; supply_date: string; supply_qty: number | null; price: number | null; margin_pct: number | null; in_transit?: number; in_production?: number; cost_plan?: number | null; order_qty?: number | null } | null
   abc: { final_class_1: string; final_class_2: string; chmd: number; chmd_clean: number; revenue: number; profitability: number; tz: number; turnover_days: number } | null
   daily: Array<{ metric_date: string; revenue: number | null; ad_spend: number | null; drr_total: number | null; ctr: number | null; cr_cart: number | null; cr_order: number | null; cpm: number | null; cpc: number | null }>
   price_changes: Array<{ price_date: string; price: number; delta_pct?: number | null }>
@@ -214,6 +214,19 @@ export function SkuModal({ skuMs, onClose }: Props) {
                       <MetricCard label="Объём поставки" value={data.stock_snap?.supply_qty != null ? String(data.stock_snap.supply_qty) + ' шт' : '—'} />
                       <MetricCard label="Оборачиваемость" value={data.abc?.turnover_days != null ? String(Math.round(data.abc.turnover_days)) + ' дн' : '—'} />
                     </div>
+                    {(data.stock_snap?.in_transit || data.stock_snap?.in_production || data.stock_snap?.order_qty) && (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2">
+                        {data.stock_snap?.in_transit != null && data.stock_snap.in_transit > 0 && (
+                          <MetricCard label="В пути" value={String(data.stock_snap.in_transit) + ' шт'} />
+                        )}
+                        {data.stock_snap?.in_production != null && data.stock_snap.in_production > 0 && (
+                          <MetricCard label="В производстве" value={String(data.stock_snap.in_production) + ' шт'} />
+                        )}
+                        {data.stock_snap?.order_qty != null && data.stock_snap.order_qty > 0 && (
+                          <MetricCard label="К заказу (СВОД)" value={String(data.stock_snap.order_qty) + ' шт'} />
+                        )}
+                      </div>
+                    )}
                   </section>
 
                   {/* ── График выручки + расходов ── */}

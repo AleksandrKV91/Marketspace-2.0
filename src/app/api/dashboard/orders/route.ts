@@ -33,11 +33,13 @@ export async function GET(req: Request) {
   const horizon = parseInt(url.searchParams.get('horizon') ?? '60', 10)
   const period = parseInt(url.searchParams.get('period') ?? '31', 10)  // 7|14|31
   const velocityBase = parseInt(url.searchParams.get('velocity_base') ?? '31', 10) // 31|90
-  const fromParam = url.searchParams.get('from')
-  const toParam = url.searchParams.get('to')
-  const categoryFilter = url.searchParams.get('category') ?? ''
-  const managerFilter  = url.searchParams.get('manager') ?? ''
-  const noveltyFilter  = url.searchParams.get('novelty') ?? ''
+  // Внутренний фильтр по месяцу (0-11). Без него — все месяцы.
+  const monthParam = url.searchParams.get('month')
+  const monthFilter: number | null = monthParam != null && monthParam !== 'all'
+    ? parseInt(monthParam, 10)
+    : null
+  // Глобальные фильтры (category/manager/novelty) на этой вкладке НЕ применяются —
+  // данные за фиксированные 30 дней из последних метрик.
 
   // ── 1-2. Параллельно: uploads + dim_sku + max dates ─────────────────────
   type DimRow = {
@@ -76,22 +78,20 @@ export async function GET(req: Request) {
   const maxSnapDate: string | null = maxSnapRow?.[0]?.period_end ?? null
   const maxDate:     string | null = maxMetricRow?.[0]?.metric_date ?? null
 
-  // ── Период из глобального DateRangePicker ───────────────────────────────
-  // Если from/to не передан — берём последние 7 дней (как fallback)
-  let fromDaily: string | null = fromParam
-  let toDaily:   string | null = toParam
-  if ((!fromDaily || !toDaily) && maxDate) {
+  // ── Фиксированный 30-дневный период из последних метрик ────────────────
+  // Эта вкладка ВСЕГДА показывает последние 30 дней — глобальный DateRangePicker не применяется.
+  let fromDaily: string | null = null
+  let toDaily:   string | null = null
+  if (maxDate) {
     toDaily = maxDate
-    fromDaily = addDaysISO(maxDate, -6)
+    fromDaily = addDaysISO(maxDate, -29)
   }
-  // Предыдущий равный период для дельты выручки
+  // Предыдущий равный 30-дневный период для дельты выручки
   let prevFrom: string | null = null
   let prevTo:   string | null = null
   if (fromDaily && toDaily) {
-    const ms = new Date(toDaily).getTime() - new Date(fromDaily).getTime()
-    const days = Math.round(ms / 86400000) + 1
     prevTo   = addDaysISO(fromDaily, -1)
-    prevFrom = addDaysISO(prevTo, -(days - 1))
+    prevFrom = addDaysISO(prevTo, -29)
   }
 
   // ── 3-4. Параллельно: snapshot + daily sales + china + abc + period rev ─
@@ -169,13 +169,20 @@ export async function GET(req: Request) {
   }
   const dailyAggRows: DailyAggRpc[] = (dailyAggResult?.data as DailyAggRpc[] | null) ?? []
   const dailyAggMap: Record<string, DailyAggRpc> = {}
-  for (const r of dailyAggRows) dailyAggMap[r.sku_ms] = r
+  // normMs объявляется ниже — здесь используем inline trim, чтобы не сломать порядок объявлений
+  const norm = (s: string | null | undefined) => (s == null ? '' : String(s).trim())
+  for (const r of dailyAggRows) {
+    const key = norm(r.sku_ms)
+    if (key) dailyAggMap[key] = r
+  }
 
   const periodRevenueMap: Record<string, number> = {}
   const prevPeriodRevenueMap: Record<string, number> = {}
   for (const r of dailyAggRows) {
-    periodRevenueMap[r.sku_ms]     = Number(r.period_revenue ?? 0)
-    prevPeriodRevenueMap[r.sku_ms] = Number(r.prev_period_revenue ?? 0)
+    const key = norm(r.sku_ms)
+    if (!key) continue
+    periodRevenueMap[key]     = Number(r.period_revenue ?? 0)
+    prevPeriodRevenueMap[key] = Number(r.prev_period_revenue ?? 0)
   }
 
   // ── Build maps ──────────────────────────────────────────────────────────
@@ -189,8 +196,10 @@ export async function GET(req: Request) {
   }
   const snapMap: Record<string, SnapRow> = {}
   for (const r of periodRows) {
-    if (!snapMap[r.sku_ms]) snapMap[r.sku_ms] = {
-      sku_ms: r.sku_ms, sku_wb: r.sku_wb, snap_date: r.period_end,
+    const key = norm(r.sku_ms)
+    if (!key) continue
+    if (!snapMap[key]) snapMap[key] = {
+      sku_ms: key, sku_wb: r.sku_wb, snap_date: r.period_end,
       name: r.product_name, brand: r.brand, subject_wb: r.subject_wb, category: r.category,
       fbo_wb: r.fbo_wb, fbs_pushkino: r.fbs_pushkino, fbs_smolensk: r.fbs_smolensk,
       kits_stock: r.kits_qty, stock_days: r.stock_days, price: r.price,
@@ -200,11 +209,21 @@ export async function GET(req: Request) {
     }
   }
 
+  // Нормализация sku_ms: trim + строка. Защищает от случайных пробелов/переносов
+  // в файлах Excel — частая причина «не матчится» между fact_abc / fact_china_supply
+  // и fact_sku_period.
+  function normMs(s: string | number | null | undefined): string {
+    if (s == null) return ''
+    return String(s).trim()
+  }
+
   type ChinaRec = { in_transit: number; in_production: number; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null; order_qty: number | null }
   const chinaMap: Record<string, ChinaRec> = {}
   if (chinaDbRows.data) {
     for (const r of chinaDbRows.data) {
-      chinaMap[r.sku_ms] = {
+      const key = normMs(r.sku_ms)
+      if (!key) continue
+      chinaMap[key] = {
         in_transit: r.in_transit ?? 0, in_production: r.in_production ?? 0,
         nearest_date: r.nearest_date, cost_plan: r.cost_plan, lead_time_days: r.lead_time_days,
         order_qty: r.order_qty,
@@ -215,26 +234,49 @@ export async function GET(req: Request) {
   type AbcRec = { abc_class: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
   const abcMap: Record<string, AbcRec> = {}
   for (const r of abcRows) {
-    if (!abcMap[r.sku_ms]) {
-      abcMap[r.sku_ms] = { abc_class: r.final_class_1, profitability: r.profitability, chmd_clean: r.chmd_clean, tz: r.tz }
+    const key = normMs(r.sku_ms)
+    if (!key) continue
+    if (!abcMap[key]) {
+      abcMap[key] = { abc_class: r.final_class_1, profitability: r.profitability, chmd_clean: r.chmd_clean, tz: r.tz }
     }
   }
 
   // ── dim_sku map (только для коэффициентов сезонности month_*) ────────
   const dimByMs: Record<string, DimRow> = {}
-  for (const r of dimRows) dimByMs[r.sku_ms] = r
+  // Backup-индекс через WB-артикул (Свод): sku_wb → sku_ms.
+  // Используется когда прямой матчинг по sku_ms не нашёл — например, fact_abc
+  // загружена с одним форматом sku_ms, а fact_sku_period с другим.
+  const msByWb: Record<number, string> = {}
+  for (const r of dimRows) {
+    const key = normMs(r.sku_ms)
+    dimByMs[key] = r
+    if (r.sku_wb != null) msByWb[r.sku_wb] = key
+  }
+  // Также построим обратный индекс abc/china по sku_wb (через dim_sku):
+  const abcByWb: Record<number, AbcRec> = {}
+  for (const skuMs of Object.keys(abcMap)) {
+    const dim = dimByMs[skuMs]
+    if (dim?.sku_wb != null) abcByWb[dim.sku_wb] = abcMap[skuMs]
+  }
+  const chinaByWb: Record<number, ChinaRec> = {}
+  for (const skuMs of Object.keys(chinaMap)) {
+    const dim = dimByMs[skuMs]
+    if (dim?.sku_wb != null) chinaByWb[dim.sku_wb] = chinaMap[skuMs]
+  }
 
   // ── Универсум SKU: только те, что в последнем fact_sku_period снапшоте.
-  // Применяем глобальные фильтры (category/manager/novelty) — все из snapMap.
+  // Глобальные фильтры (category/manager/novelty) на этой вкладке НЕ применяются.
+  // Если задан month-фильтр — оставляем только SKU с ненулевым коэффициентом сезонности на этот месяц.
   const universe: string[] = []
   for (const skuMs of Object.keys(snapMap)) {
-    const snap = snapMap[skuMs]
-    const cat = snap.category ?? snap.subject_wb ?? ''
-    if (categoryFilter && cat !== categoryFilter) continue
-    if (managerFilter  && (snap.manager ?? '') !== managerFilter) continue
-    const ns = snap.novelty_status ?? ''
-    if (noveltyFilter === 'Новинки'    && ns !== 'Новинки') continue
-    if (noveltyFilter === 'Не новинки' && ns === 'Новинки') continue
+    if (monthFilter != null) {
+      // dim матчится по нормализованному sku_ms (см. dimByMs выше)
+      const dim = dimByMs[skuMs]
+      const coef = dim?.[MONTH_KEYS[monthFilter]]
+      // Если коэффициент задан и > 0 — товар «активен» в этом месяце.
+      // Если dim вообще не найден — пропускаем (сезонность неизвестна).
+      if (coef == null || coef <= 0) continue
+    }
     universe.push(skuMs)
   }
 
@@ -377,7 +419,8 @@ export async function GET(req: Request) {
     const fbsSmol = snap?.fbs_smolensk ?? 0
     const kits = snap?.kits_stock ?? 0
     const total_stock = fbo + fbsPush + fbsSmol + kits
-    const china = chinaMap[skuMs]
+    // FALLBACK: если china не нашёлся по sku_ms — пробуем через sku_wb (Свод)
+    const china = chinaMap[skuMs] ?? (snap?.sku_wb != null ? chinaByWb[snap.sku_wb] : null)
     const in_transit = china?.in_transit ?? 0
     const in_production = china?.in_production ?? 0
     const on_hand_total = total_stock + in_transit + in_production
@@ -414,8 +457,8 @@ export async function GET(req: Request) {
       : 1
     const forecast_30d = Math.round(base_norm * next30TargetRel * 30)
 
-    // GMROI
-    const abc = abcMap[skuMs]
+    // GMROI: ABC с fallback через sku_wb (Свод)
+    const abc = abcMap[skuMs] ?? (snap?.sku_wb != null ? abcByWb[snap.sku_wb] : null)
     const gmroi = (abc?.chmd_clean != null && abc?.tz != null && abc.tz > 0)
       ? Math.round((abc.chmd_clean / abc.tz) * 100) / 100
       : null
@@ -539,11 +582,20 @@ export async function GET(req: Request) {
   const order_sum_rub_svod   = rows.reduce((s, r) => s + r.svod_order_qty * (r.cost_plan ?? 0), 0)
   const order_qty_svod       = rows.reduce((s, r) => s + r.svod_order_qty, 0)
 
-  const velocity_avg = rows.length > 0 ? rows.reduce((s, r) => s + r.dpd, 0) / rows.length : 0
-  const turnover_days_avg = velocity_avg > 0
-    ? Math.round(total_stock_qty / (velocity_avg * rows.length))
+  // ── Корректные KPI ────────────────────────────────────────────────────
+  // velocity_avg: средняя по SKU С ПРОДАЖАМИ (исключаем нулевые dpd —
+  // они занижали среднее в разы и вводили в заблуждение)
+  const activeRows = rows.filter(r => r.dpd > 0)
+  const velocity_avg = activeRows.length > 0
+    ? activeRows.reduce((s, r) => s + r.dpd, 0) / activeRows.length
+    : 0
+  // turnover_days_avg: суммарный остаток / суммарная скорость продаж (в днях)
+  const total_velocity = rows.reduce((s, r) => s + r.dpd, 0)
+  const turnover_days_avg = total_velocity > 0
+    ? Math.round(total_stock_qty / total_velocity)
     : 0
   const forecast_30d_total = rows.reduce((s, r) => s + r.forecast_30d, 0)
+  // Прогноз 30д в рублях = Σ(forecast_30d × price) по всем SKU
   const forecast_30d_rub_total = rows.reduce((s, r) => s + r.forecast_30d * (r.price ?? 0), 0)
   const period_revenue_total = rows.reduce((s, r) => s + r.period_revenue, 0)
   const prev_period_revenue_total = rows.reduce((s, r) => s + r.prev_period_revenue, 0)
@@ -586,9 +638,9 @@ export async function GET(req: Request) {
       }
     }
   }
+  // Все ниши, без отсечения. SeasonalityHeatmap имеет вертикальный скролл.
   const heatmap_rows = Object.entries(niches)
     .sort((a, b) => b[1].revenue - a[1].revenue)
-    .slice(0, 15)
     .map(([name, { coeffs, sample_sku }]) => {
       const avgCoeffs: Array<number | null> = []
       for (let i = 0; i < 12; i++) {
