@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef } from 'react'
 import { clearAllTabCaches } from '@/lib/tabCache'
-import { parseSkuReport } from '@/lib/parsers/parseSkuReport'
+import { parseSkuReport, type ParseSkuReportResult } from '@/lib/parsers/parseSkuReport'
 import { parseABC } from '@/lib/parsers/parseABC'
 import { parseChina } from '@/lib/parsers/parseChina'
 import { parseCatalog } from '@/lib/parsers/parseCatalog'
@@ -53,19 +53,152 @@ const FILE_CONFIGS: Array<{
 // ── Парсинг на frontend → JSON POST → backend upsert ──────────────────────────
 //
 // Раньше: FE → presign → Supabase Storage PUT → backend download (egress!) → parse → upsert.
-// Сейчас: FE парсит файл локально через xlsx.js → шлёт готовый JSON (1-3 МБ) → backend upsert.
+// Сейчас: FE парсит файл локально через xlsx.js → шлёт готовый JSON → backend upsert.
 // Преимущества:
 //   • Storage не используется → НИКАКОГО egress на загрузку
-//   • Меньше HTTP-запросов (1 вместо 3)
-//   • JSON ~1-3 МБ влезает в Vercel 4.5MB limit для body
 //   • Легче debugging — ошибка либо в parse (frontend), либо в upsert (backend)
+//
+// Для маленьких типов (catalog/abc/china/analytics) — один POST с {parsed}.
+// Для sku-report (~12МБ JSON, не влезает в Vercel 4.5MB limit) — chunked upload:
+// init → batches × N → finalize.
+
+type UploadResult = {
+  ok: boolean
+  rows_parsed?: number
+  rows_skipped?: number
+  skipped_variants?: number
+  skipped_skus?: string[]
+  unknown_skus?: string[]
+  error?: string
+}
+
+// ── Chunked upload для sku-report ─────────────────────────────────────────────
+async function uploadSkuReportChunked(
+  parsed: ParseSkuReportResult,
+  filename: string,
+  onProgress: (pct: number) => void,
+): Promise<UploadResult> {
+  // 1. init — создаём upload record (status=pending)
+  onProgress(55)
+  const initRes = await fetch('/api/upload/sku-report/init', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filename,
+      period_start: parsed.period_start,
+      period_end: parsed.period_end,
+      rows_parsed: parsed.rows_parsed,
+    }),
+  })
+  if (!initRes.ok) {
+    const err = await initRes.json().catch(() => ({}))
+    return { ok: false, error: (err as { error?: string }).error ?? `init: HTTP ${initRes.status}` }
+  }
+  const { upload_id } = await initRes.json() as { upload_id: string }
+
+  // Helper: серийная отправка батчей
+  async function sendChunks(
+    part: 'dim' | 'daily' | 'period' | 'price_changes',
+    rows: Record<string, unknown>[],
+    chunkSize: number,
+    fromPct: number,
+    toPct: number,
+  ): Promise<string | null> {
+    if (rows.length === 0) { onProgress(toPct); return null }
+    const total = rows.length
+    for (let i = 0; i < total; i += chunkSize) {
+      const slice = rows.slice(i, i + chunkSize)
+      const res = await fetch(
+        `/api/upload/sku-report/batch?upload_id=${encodeURIComponent(upload_id)}&part=${part}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rows: slice }),
+        }
+      )
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        return (err as { error?: string }).error ?? `${part}: HTTP ${res.status}`
+      }
+      const done = Math.min(i + chunkSize, total)
+      const pct = fromPct + (toPct - fromPct) * (done / total)
+      onProgress(Math.round(pct))
+    }
+    return null
+  }
+
+  // 2. dim_sku enrichment — ПЕРВЫМ (FK satisfaction для остальных таблиц)
+  const dedupedPeriod = [...new Map(
+    parsed.period.map(r => [`${r.sku_ms}|${r.period_start}|${r.period_end}`, r])
+  ).values()]
+  const dimUpdates = [...new Map(
+    dedupedPeriod.map(r => {
+      const obj: Record<string, unknown> = { sku_ms: r.sku_ms }
+      if (r.sku_wb != null)  obj.sku_wb      = r.sku_wb
+      if (r.product_name)    obj.name         = r.product_name
+      if (r.brand)           obj.brand        = r.brand
+      if (r.category)        obj.category_wb  = r.category
+      if (r.subject_wb)      obj.subject_wb   = r.subject_wb
+      return [r.sku_ms, obj]
+    })
+  ).values()]
+  let err = await sendChunks('dim', dimUpdates, 500, 55, 65)
+  if (err) {
+    return { ok: false, error: `dim_sku: ${err}` }
+  }
+
+  // 3. fact_sku_daily (самая большая таблица)
+  const dedupedDaily = [...new Map(
+    parsed.daily.map(r => [`${r.sku_ms}|${r.metric_date}`, r])
+  ).values()] as unknown as Record<string, unknown>[]
+  err = await sendChunks('daily', dedupedDaily, 500, 65, 85)
+  if (err) {
+    return { ok: false, error: `fact_sku_daily: ${err}` }
+  }
+
+  // 4. fact_sku_period
+  err = await sendChunks('period', dedupedPeriod as unknown as Record<string, unknown>[], 500, 85, 90)
+  if (err) {
+    return { ok: false, error: `fact_sku_period: ${err}` }
+  }
+
+  // 5. fact_price_changes
+  const priceChangeDedup = new Map<string, typeof parsed.priceChanges[0]>()
+  for (const r of parsed.priceChanges) {
+    priceChangeDedup.set(`${r.sku_wb}|${r.price_date}`, r)
+  }
+  const dedupedPriceChanges = [...priceChangeDedup.values()] as unknown as Record<string, unknown>[]
+  err = await sendChunks('price_changes', dedupedPriceChanges, 500, 90, 95)
+  if (err) {
+    // price_changes — некритично, продолжаем (backend сам помечает upload как error)
+    console.warn('price_changes upload failed (non-critical):', err)
+  }
+
+  // 6. finalize — status=ok + cache invalidation
+  const finRes = await fetch(
+    `/api/upload/sku-report/finalize?upload_id=${encodeURIComponent(upload_id)}`,
+    { method: 'POST' }
+  )
+  onProgress(98)
+  if (!finRes.ok) {
+    const e = await finRes.json().catch(() => ({}))
+    return { ok: false, error: `finalize: ${(e as { error?: string }).error ?? finRes.status}` }
+  }
+
+  return {
+    ok: true,
+    rows_parsed: parsed.rows_parsed,
+    rows_skipped: parsed.skipped_skus.length,
+    skipped_skus: parsed.skipped_skus.slice(0, 20),
+  }
+}
 
 async function uploadDirect(
   type: FileType,
   file: File,
   onProgress: (pct: number) => void
-): Promise<{ ok: boolean; rows_parsed?: number; rows_skipped?: number; skipped_variants?: number; skipped_skus?: string[]; unknown_skus?: string[]; error?: string }> {
-  // 1. Читаем файл в browser (быстро, всё в memory)
+): Promise<UploadResult> {
+  // 1. Читаем файл в browser
   onProgress(5)
   let buffer: ArrayBuffer
   try {
@@ -74,11 +207,10 @@ async function uploadDirect(
     return { ok: false, error: `Не удалось прочитать файл: ${String(e)}` }
   }
 
-  // 2. Парсим в browser через xlsx.js (тот же код что был на backend)
+  // 2. Парсим в browser через xlsx.js
   onProgress(20)
   let parsed: unknown
   try {
-    // Уступаем main thread на короткое время чтобы UI не замёрз перед тяжёлым парсингом
     await new Promise(resolve => setTimeout(resolve, 0))
     switch (type) {
       case 'sku-report': {
@@ -90,7 +222,7 @@ async function uploadDirect(
             const json = await mapRes.json() as { map: Record<string, string> }
             skuMap = new Map(Object.entries(json.map ?? {}))
           }
-        } catch { /* ignore — парсер сам разберётся */ }
+        } catch { /* ignore */ }
         parsed = parseSkuReport(buffer, skuMap)
         break
       }
@@ -104,7 +236,12 @@ async function uploadDirect(
     return { ok: false, error: `Ошибка парсинга файла: ${String(e)}` }
   }
 
-  // 3. Шлём parsed JSON на backend
+  // 3a. SKU-report — chunked upload (12+ МБ JSON не влезает в Vercel 4.5MB)
+  if (type === 'sku-report') {
+    return uploadSkuReportChunked(parsed as ParseSkuReportResult, file.name, onProgress)
+  }
+
+  // 3b. Остальные типы — один POST с {parsed} (≤ 1-2 МБ JSON, влезает)
   onProgress(60)
   try {
     const res = await fetch(
