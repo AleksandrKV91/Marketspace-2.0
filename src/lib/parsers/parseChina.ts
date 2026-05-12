@@ -2,6 +2,7 @@ import { readWorkbook, sheetToRows, norm, toNum, parseDateVal } from './utils'
 
 export interface ChinaRow {
   sku_ms: string
+  sku_wb: number | null   // Артикул WB из колонки A — для resolve через dim_sku
   plan_jan: number | null
   plan_feb: number | null
   plan_mar: number | null
@@ -47,6 +48,7 @@ export interface ParseChinaResult {
 
 const COL_QUERIES: Array<{ key: keyof ChinaRow; queries: string[] }> = [
   { key: 'sku_ms', queries: ['артикул склада'] },
+  { key: 'sku_wb', queries: ['артикул wb', 'артикул вб'] },
   { key: 'plan_jan', queries: ['январь', 'январ'] },
   { key: 'plan_feb', queries: ['февраль', 'феврал'] },
   { key: 'plan_mar', queries: ['март'] },
@@ -202,16 +204,36 @@ export function parseChina(buffer: ArrayBuffer): ParseChinaResult {
   const colIdx: Partial<Record<keyof ChinaRow, number>> = {}
   for (const { key, queries } of COL_QUERIES) {
     const isMonthKey = monthKeys.has(key)
+    // Для sku_wb используем точное совпадение (а не include): иначе 'артикул' (без 'wb')
+    // подхватит просто 'Артикул', а нам нужен именно 'Артикул WB'.
+    const isExactKey = key === 'sku_wb'
     for (const q of queries) {
-      // Месяцы: точное совпадение или startsWith ('январ' матчит 'январь', но не наоборот),
-      // и cutoff по wbBlockEnd чтобы не подхватить второй блок (OZ).
-      // Остальные поля ('себа план', 'кол-во к заказу' и т.п.): partial include по всей строке.
       const idx = headerRow.findIndex((h, i) => {
         if (isMonthKey && i >= wbBlockEnd) return false
         const n = norm(h)
-        return isMonthKey ? (n === q || n.startsWith(q)) : n.includes(q)
+        if (isMonthKey) return n === q || n.startsWith(q)
+        if (isExactKey) return n === q
+        return n.includes(q)
       })
       if (idx !== -1) { colIdx[key] = idx; break }
+    }
+  }
+
+  // Fallback для sku_wb: если в шапке нет «Артикул WB», берём колонку A (index 0).
+  // Это случай когда первая колонка не подписана либо подписана просто как «Артикул»/«SKU».
+  // По словам пользователя: колонка A — артикул WB (число), колонка C — артикул склада (текст).
+  if (colIdx['sku_wb'] === undefined && colIdx['sku_ms'] !== undefined && colIdx['sku_ms'] !== 0) {
+    // Проверяем что колонка 0 содержит числовые значения в первых нескольких строках
+    let numericCount = 0
+    let checked = 0
+    for (let ri = DATA_START; ri < Math.min(DATA_START + 5, rows.length); ri++) {
+      const v = rows[ri]?.[0]
+      if (v == null || v === '') continue
+      checked++
+      if (toNum(v) != null) numericCount++
+    }
+    if (checked > 0 && numericCount === checked) {
+      colIdx['sku_wb'] = 0
     }
   }
 
@@ -233,6 +255,7 @@ export function parseChina(buffer: ArrayBuffer): ParseChinaResult {
 
     result.push({
       sku_ms: skuMs,
+      sku_wb: toNum(get('sku_wb')),
       plan_jan: toNum(get('plan_jan')),
       plan_feb: toNum(get('plan_feb')),
       plan_mar: toNum(get('plan_mar')),
