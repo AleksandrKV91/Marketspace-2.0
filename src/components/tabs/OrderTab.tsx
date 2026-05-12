@@ -75,6 +75,11 @@ function fmt(n: number | null | undefined) {
   if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(0) + 'К'
   return String(Math.round(n))
 }
+// Полное число штук с разделителями (для заказов и дельт — без округлений до К/М).
+function fmtQty(n: number | null | undefined) {
+  if (n == null) return '—'
+  return Math.round(n).toLocaleString('ru-RU')
+}
 function fmtPct(n: number | null | undefined) {
   if (n == null) return '—'
   return (n * 100).toFixed(1) + '%'
@@ -531,8 +536,10 @@ export default function OrderTab() {
           />
         </div>
 
-        {/* overflow-x: visible — sticky на <th> требует чтобы родитель не создавал scroll-context */}
-        <div style={{ padding: '0 1rem', overflowX: 'auto' }}>
+        {/* overflow-x: visible — sticky на <th> требует чтобы родитель НЕ создавал scroll-context.
+            При overflowX:'auto' nearest scrolling ancestor становится этот div и sticky top работает
+            относительно него, а не вьюпорта — шапка «съезжает». Visible пускает горизонт. скролл на страницу. */}
+        <div style={{ padding: '0 1rem', overflowX: 'visible' }}>
           <table className="w-full text-sm" style={{ minWidth: 900 }}>
             <thead>
               <tr className="text-xs">
@@ -578,29 +585,29 @@ export default function OrderTab() {
                                : (row.abc_class ?? '').charAt(0) === 'C' ? 'var(--danger)' : 'var(--text-subtle)',
                         }}>{row.abc_class ?? '—'}</span>
                       </td>
-                      <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{fmt(row.sales_qty_31d)}</td>
+                      <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{fmtQty(row.sales_qty_31d)}</td>
                       <td className="py-2 px-2 text-center text-xs">
                         {row.oos_days_31 > 0
                           ? <span className="font-semibold" style={{ color: 'var(--danger)' }}>{row.oos_days_31}</span>
                           : <span style={{ color: 'var(--text-subtle)' }}>0</span>}
                       </td>
-                      <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{fmt(row.total_stock)}</td>
+                      <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{fmtQty(row.total_stock)}</td>
                       <td className="py-2 px-2 text-center text-xs">
                         <span style={{ color: row.stock_days < row.lead_time_days ? 'var(--danger)' : 'var(--text-muted)' }}>{row.stock_days}</span>
                       </td>
                       <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{row.lead_time_days}</td>
                       <td className="py-2 px-2 text-center text-xs font-semibold"
-                          style={{ color: row.calc_order > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>{fmt(row.calc_order)}</td>
+                          style={{ color: row.calc_order > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>{fmtQty(row.calc_order)}</td>
                       <td className="py-2 px-2 text-center text-xs font-semibold"
-                          style={{ color: row.svod_order_qty > 0 ? 'var(--warning)' : 'var(--text-muted)' }}>{fmt(row.svod_order_qty)}</td>
+                          style={{ color: row.svod_order_qty > 0 ? 'var(--warning)' : 'var(--text-muted)' }}>{fmtQty(row.svod_order_qty)}</td>
                       <td className="py-2 px-2 text-center text-xs">
                         {row.delta_order !== 0 ? (
                           <span className="font-semibold" style={{ color: row.delta_order > 0 ? 'var(--info)' : 'var(--text-muted)' }}>
-                            {row.delta_order > 0 ? '+' : ''}{fmt(row.delta_order)}
+                            {row.delta_order > 0 ? '+' : ''}{fmtQty(row.delta_order)}
                           </span>
                         ) : <span style={{ color: 'var(--text-subtle)' }}>0</span>}
                       </td>
-                      <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{fmt(row.forecast_30d)}</td>
+                      <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{fmtQty(row.forecast_30d)}</td>
                       <td className="py-2 px-2 text-center text-xs font-semibold" style={{ color: 'var(--text)' }}>{fmt(row.period_revenue)}</td>
                       <td className="py-2 px-2 text-center text-xs">
                         {row.delta_revenue_pct != null ? (
