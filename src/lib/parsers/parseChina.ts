@@ -28,6 +28,8 @@ export interface ChinaRow {
   order_sum_cost: number | null
   rating: number | null
   lead_time_days: number | null
+  /** Снимок всех колонок исходной строки как { norm(header): value }. Для фич без миграций. */
+  raw_data: Record<string, unknown> | null
 }
 
 export interface NomenRow {
@@ -237,6 +239,18 @@ export function parseChina(buffer: ArrayBuffer): ParseChinaResult {
     }
   }
 
+  // Карта индекс→стабильный JSON-ключ. Месяцы и «запас 15» в исходном файле повторяются
+  // 3 раза (WB-блок / ОЗ-блок / итоговый). Уникализируем ключи суффиксом _2/_3, чтобы
+  // ни одно значение не терялось при сохранении в JSONB.
+  const seenKeys = new Map<string, number>()
+  const rawKey: string[] = headerRow.map((h, i) => {
+    const base = norm(h).replace(/\s+/g, '_').replace(/[^\wЀ-ӿ]+/g, '_').replace(/^_+|_+$/g, '')
+    const key = base || `col_${i}`
+    const seen = seenKeys.get(key) ?? 0
+    seenKeys.set(key, seen + 1)
+    return seen === 0 ? key : `${key}_${seen + 1}`
+  })
+
   const result: ChinaRow[] = []
   let skipped = 0
 
@@ -252,6 +266,15 @@ export function parseChina(buffer: ArrayBuffer): ParseChinaResult {
     }
 
     const nearestDate = parseDateVal(get('nearest_date'))
+
+    // Снимок всех колонок строки. Excel-дата приходит как Date — приводим к ISO,
+    // числа/строки оставляем как есть, пустые ячейки пропускаем.
+    const raw: Record<string, unknown> = {}
+    for (let ci = 0; ci < headerRow.length; ci++) {
+      const v = row[ci]
+      if (v == null || v === '') continue
+      raw[rawKey[ci]] = v instanceof Date ? v.toISOString() : v
+    }
 
     result.push({
       sku_ms: skuMs,
@@ -281,6 +304,7 @@ export function parseChina(buffer: ArrayBuffer): ParseChinaResult {
       order_sum_cost: toNum(get('order_sum_cost')),
       rating: toNum(get('rating')),
       lead_time_days: leadTimes.get(skuMs) ?? null,
+      raw_data: Object.keys(raw).length > 0 ? raw : null,
     })
   }
 
