@@ -42,7 +42,7 @@ export function ForecastChart() {
   }, [])
 
   return (
-    <GlassCard padding="md">
+    <GlassCard padding="md" className="h-full flex flex-col">
       <h3 className="text-sm font-semibold mb-1" style={{ color: 'var(--text)' }}>
         Прогноз продаж — 8 недель (4 назад + 4 вперёд)
       </h3>
@@ -50,12 +50,15 @@ export function ForecastChart() {
         Левая ось — выручка (₽): синий = факт (только прошлое), зелёный = прогноз (вся шкала).
         Правая ось — остаток на складах (₽): убывает по прогнозу, растёт на плановые приходы (`plan_supply_date`).
       </p>
+      {/* flex-1 + min-h-[260px] → график занимает всё остающееся место карточки.
+          В grid-row равной высоты с SeasonalityHeatmap график больше не прижимается к верху. */}
+      <div className="flex-1 flex items-center justify-center min-h-[260px]">
       {loading ? (
         <div className="h-56 flex items-center justify-center text-xs" style={{ color: 'var(--text-subtle)' }}>Загрузка…</div>
       ) : data.length === 0 ? (
         <div className="h-56 flex items-center justify-center text-xs" style={{ color: 'var(--text-subtle)' }}>Нет данных</div>
       ) : (
-        <ResponsiveContainer width="100%" height={260}>
+        <ResponsiveContainer width="100%" height="100%" minHeight={260}>
           <ComposedChart data={data} margin={{ top: 5, right: 15, left: -10, bottom: 0 }}>
             <CartesianGrid stroke="var(--border-subtle)" strokeDasharray="3 3" />
             <XAxis dataKey="week_label" tick={{ fontSize: 10, fill: 'var(--text-subtle)' }} interval={0} />
@@ -99,6 +102,7 @@ export function ForecastChart() {
           </ComposedChart>
         </ResponsiveContainer>
       )}
+      </div>
     </GlassCard>
   )
 }

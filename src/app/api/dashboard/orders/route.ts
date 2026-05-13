@@ -32,14 +32,10 @@ export async function GET(req: Request) {
   const url = new URL(req.url)
   const horizon = parseInt(url.searchParams.get('horizon') ?? '60', 10)
   const period = parseInt(url.searchParams.get('period') ?? '31', 10)  // 7|14|31
-  const velocityBase = parseInt(url.searchParams.get('velocity_base') ?? '31', 10) // 31|90
-  // Внутренний фильтр по месяцу (0-11). Без него — все месяцы.
-  const monthParam = url.searchParams.get('month')
-  const monthFilter: number | null = monthParam != null && monthParam !== 'all'
-    ? parseInt(monthParam, 10)
-    : null
-  // Глобальные фильтры (category/manager/novelty) на этой вкладке НЕ применяются —
-  // данные за фиксированные 30 дней из последних метрик.
+  const velocityBase = parseInt(url.searchParams.get('velocity_base') ?? '90', 10) // 31|90
+  // Month-фильтр убран по запросу пользователя — таблица всегда показывает выручку
+  // за скользящие последние 31 день, дельта vs предыдущие 31 день.
+  // Глобальные фильтры (category/manager/novelty) на этой вкладке НЕ применяются.
 
   // ── 1-2. Параллельно: uploads + dim_sku + max dates ─────────────────────
   type DimRow = {
@@ -87,35 +83,16 @@ export async function GET(req: Request) {
     fromDaily = addDaysISO(maxDate, -29)
   }
 
-  // ── Период для отображения «Выручка за период» в таблице ───────────────
-  // Если month-фильтр выбран — показываем выручку за этот календарный месяц
-  // (тот же месяц последнего года данных, либо предыдущего, если месяц ещё не наступил).
-  let revenueFrom: string | null = fromDaily
-  let revenueTo:   string | null = toDaily
-  if (monthFilter != null && maxDate) {
-    const maxYear   = new Date(maxDate).getFullYear()
-    const maxMonth  = new Date(maxDate).getMonth()
-    const targetYear = monthFilter > maxMonth ? maxYear - 1 : maxYear
-    const monthStart = new Date(targetYear, monthFilter, 1)
-    const monthEnd   = new Date(targetYear, monthFilter + 1, 0)
-    revenueFrom = monthStart.toISOString().split('T')[0]
-    revenueTo   = monthEnd.toISOString().split('T')[0]
-  }
+  // Период для «Выручки» в таблице = последние 31 день (= fromDaily/toDaily).
+  const revenueFrom: string | null = fromDaily
+  const revenueTo:   string | null = toDaily
 
-  // Предыдущий равный период для дельты выручки
+  // Предыдущий равный 31-дневный период для дельты выручки.
   let prevFrom: string | null = null
   let prevTo:   string | null = null
   if (revenueFrom && revenueTo) {
-    if (monthFilter != null) {
-      // Тот же месяц год назад
-      const f = new Date(revenueFrom); f.setFullYear(f.getFullYear() - 1)
-      const t = new Date(revenueTo);   t.setFullYear(t.getFullYear() - 1)
-      prevFrom = f.toISOString().split('T')[0]
-      prevTo   = t.toISOString().split('T')[0]
-    } else {
-      prevTo   = addDaysISO(revenueFrom, -1)
-      prevFrom = addDaysISO(prevTo, -29)
-    }
+    prevTo   = addDaysISO(revenueFrom, -1)
+    prevFrom = addDaysISO(prevTo, -29)
   }
 
   // ── 3-4. Параллельно: snapshot + daily sales + china + abc + period rev ─
@@ -134,14 +111,14 @@ export async function GET(req: Request) {
     oos_days_31: number; non_zero_days_31: number; data_days_total: number
     period_revenue: number; prev_period_revenue: number
   }
-  type AbcRow    = { sku_ms: string; sku_wb: number | null; final_class_1: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
+  type AbcRow    = { sku_ms: string; sku_wb: number | null; final_class_1: string | null; final_class_2: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
   type ChinaDbRow = { sku_ms: string; in_transit: number | null; in_production: number | null; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null; order_qty: number | null }
 
   // ── Вычисляем границы окон для RPC ─────────────────────────────────────
   // RPC orders_daily_agg сам считает 7д/14д/31д/90д от p_max_date,
   // плюс period_revenue и prev_period_revenue для соответствующих диапазонов.
   // p_max_date — для velocity/sigma/oos (всегда актуально, последние 30д)
-  // p_period_* — для period_revenue (зависит от month-фильтра: либо 30д, либо календарный месяц)
+  // p_period_* / p_prev_* — скользящие 31д и предыдущие 31д (без month-фильтра)
   const rpcMaxDate     = maxDate ?? '1970-01-01'
   const rpcPeriodFrom  = revenueFrom ?? '1970-01-01'
   const rpcPeriodTo    = revenueTo   ?? '1970-01-01'
@@ -175,7 +152,7 @@ export async function GET(req: Request) {
     abcId
       ? fetchAll<AbcRow>(
           (sb) => sb.from('fact_abc')
-            .select('sku_ms, sku_wb, final_class_1, profitability, chmd_clean, tz')
+            .select('sku_ms, sku_wb, final_class_1, final_class_2, profitability, chmd_clean, tz')
             .eq('upload_id', abcId),
           supabase,
         )
@@ -257,14 +234,20 @@ export async function GET(req: Request) {
     }
   }
 
-  type AbcRec = { abc_class: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
+  type AbcRec = { abc_class: string | null; abc_class_2: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
   const abcMap: Record<string, AbcRec> = {}
   // Прямой индекс по sku_wb из fact_abc (заполняется парсером ABC v7+).
   // Это основной fallback, когда sku_ms в fact_abc не совпадает с fact_sku_period.sku_ms
   // (мусорные/legacy значения в fact_abc.sku_ms — частая причина потери ABC у ~10% SKU).
   const abcByWbDirect: Record<number, AbcRec> = {}
   for (const r of abcRows) {
-    const rec: AbcRec = { abc_class: r.final_class_1, profitability: r.profitability, chmd_clean: r.chmd_clean, tz: r.tz }
+    const rec: AbcRec = {
+      abc_class:   r.final_class_1,
+      abc_class_2: r.final_class_2,
+      profitability: r.profitability,
+      chmd_clean:  r.chmd_clean,
+      tz:          r.tz,
+    }
     const key = normMs(r.sku_ms)
     if (key && !abcMap[key]) abcMap[key] = rec
     if (r.sku_wb != null && !abcByWbDirect[r.sku_wb]) abcByWbDirect[r.sku_wb] = rec
@@ -565,6 +548,7 @@ export async function GET(req: Request) {
 
       // ABC
       abc_class:     abc?.abc_class ?? null,
+      abc_class_2:   abc?.abc_class_2 ?? null,
       profitability: abc?.profitability ?? null,
       gmroi,
 

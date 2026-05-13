@@ -22,6 +22,7 @@ interface OrderRow extends OrderRowDetails {
   manager: string | null
   status: 'critical' | 'warning' | 'ok'
   abc_class: string | null
+  abc_class_2: string | null
   profitability: number | null
   margin_pct: number | null
   gmroi: number | null
@@ -130,44 +131,26 @@ const statusCfg = {
 // Module-shared cache (typed)
 const orderCache = orderTabCache as Map<string, OrderData>
 
-const MONTH_OPTIONS = [
-  { value: 'all', label: 'Все месяцы' },
-  { value: '0',  label: 'Январь' },
-  { value: '1',  label: 'Февраль' },
-  { value: '2',  label: 'Март' },
-  { value: '3',  label: 'Апрель' },
-  { value: '4',  label: 'Май' },
-  { value: '5',  label: 'Июнь' },
-  { value: '6',  label: 'Июль' },
-  { value: '7',  label: 'Август' },
-  { value: '8',  label: 'Сентябрь' },
-  { value: '9',  label: 'Октябрь' },
-  { value: '10', label: 'Ноябрь' },
-  { value: '11', label: 'Декабрь' },
-]
 
 export default function OrderTab() {
   // Эта вкладка НЕ использует глобальный DateRangePicker и глобальные фильтры —
   // данные строятся всегда за последние 30 дней из fact_sku_daily,
   // а внутренний фильтр по месяцу применяется к сезонной выручке.
 
-  function makeCacheKey(p?: { period?: string; horizon?: string; velocity_base?: string; month?: string }) {
+  function makeCacheKey(p?: { period?: string; horizon?: string; velocity_base?: string }) {
     const params = new URLSearchParams({
       horizon: p?.horizon ?? orderFilter.horizon ?? '60',
       period:  p?.period  ?? orderFilter.period  ?? '31',
-      velocity_base: p?.velocity_base ?? orderFilter.velocity_base ?? '31',
+      velocity_base: p?.velocity_base ?? orderFilter.velocity_base ?? '90',
     })
-    const m = p?.month ?? orderFilter.month
-    if (m && m !== 'all') params.set('month', m)
     return params.toString()
   }
 
-  // По умолчанию month = текущий месяц (показывает выручку за этот календарный месяц).
-  // User может переключить на «Все месяцы» — тогда выручка будет за последние 30 дней.
+  // Выручка/qty в таблице — ВСЕГДА последние 31 день, дельта — предыдущие 31 день.
+  // Month-фильтр убран по запросу пользователя (использовали скользящие окна вместо месячных).
   const [orderFilter, setOrderFilter] = useState<Record<string, string>>({
-    status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '31',
+    status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '90',
     only_to_order: 'all', only_oos_demand: 'all',
-    month: String(new Date().getMonth()),
   })
   const [activeKpi, setActiveKpi] = useState<'critical' | 'warning' | 'oos_demand' | 'to_order' | null>(null)
 
@@ -230,7 +213,6 @@ export default function OrderTab() {
       period: orderFilter.period,
       horizon: orderFilter.horizon,
       velocity_base: orderFilter.velocity_base,
-      month: orderFilter.month,
     })
     const hit = orderCache.get(key)
     if (hit) { setData(hit); setLoading(false); return }
@@ -247,7 +229,7 @@ export default function OrderTab() {
       })
       .catch((e: unknown) => { setError(String(e)); setLoading(false) })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderFilter.period, orderFilter.horizon, orderFilter.velocity_base, orderFilter.month])
+  }, [orderFilter.period, orderFilter.horizon, orderFilter.velocity_base])
 
   const heatmapRows: HeatmapRow[] = useMemo(() => data?.heatmap_rows ?? [], [data?.heatmap_rows])
 
@@ -265,7 +247,6 @@ export default function OrderTab() {
     || orderFilter.abc !== 'all'
     || orderFilter.only_to_order !== 'all'
     || orderFilter.only_oos_demand !== 'all'
-    || orderFilter.month !== 'all'
     || activeKpi !== null
 
   const filteredRows = (data.rows ?? []).filter(row => {
@@ -305,7 +286,8 @@ export default function OrderTab() {
       'Категория': r.subject_wb,
       'Менеджер': r.manager,
       'Статус': r.status,
-      'ABC': r.abc_class ?? '',
+      'Класс 1 (ЧМД/Выр.)': r.abc_class ?? '',
+      'Класс 2 (Рент./Об.)': r.abc_class_2 ?? '',
       'Продажи 7д (шт)': r.sales_qty_7d,
       'Продажи 14д (шт)': r.sales_qty_14d,
       'Продажи 31д (шт)': r.sales_qty_31d,
@@ -508,15 +490,13 @@ export default function OrderTab() {
                 { value: '31', label: '31 дн' },
                 { value: '90', label: '90 дн' },
               ]},
-              { label: 'Месяц', key: 'month', options: MONTH_OPTIONS },
             ]}
             values={orderFilter}
             onChange={(k, v) => setOrderFilter(f => ({ ...f, [k]: v }))}
             onReset={() => {
               setOrderFilter({
-                status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '31',
+                status: 'all', abc: 'all', horizon: '60', period: '31', velocity_base: '90',
                 only_to_order: 'all', only_oos_demand: 'all',
-                month: String(new Date().getMonth()),
               })
               setSearch('')
               setActiveKpi(null)
@@ -536,17 +516,20 @@ export default function OrderTab() {
           />
         </div>
 
-        {/* overflow-x: visible — sticky на <th> требует чтобы родитель НЕ создавал scroll-context.
-            При overflowX:'auto' nearest scrolling ancestor становится этот div и sticky top работает
-            относительно него, а не вьюпорта — шапка «съезжает». Visible пускает горизонт. скролл на страницу. */}
-        <div style={{ padding: '0 1rem', overflowX: 'visible' }}>
-          <table className="w-full text-sm" style={{ minWidth: 900 }}>
+        {/* overflow-x: clip — современная альтернатива visible: контент клипается по границе
+            карточки, но НЕ создаётся scroll-context (sticky thead остаётся прикреплённым к viewport).
+            Если на узком экране (<1300px) последние колонки не помещаются — пользователь
+            может скроллить страницу горизонтально через scrollbar. minWidth: 1200 — компактная
+            раскладка 18 колонок × ~67px. */}
+        <div style={{ overflowX: 'clip' }}>
+          <table className="w-full text-[11px]" style={{ minWidth: 1200 }}>
             <thead>
               <tr className="text-xs">
                 <SortTh stickyTop={stickyTop.thead} label="SKU WB" sk="sku_wb" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortTh stickyTop={stickyTop.thead} label="Название" sk="name" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortTh stickyTop={stickyTop.thead} label="Статус" sk="status" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="ABC" sk="abc_class" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="К1" sk="abc_class" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="К2" sk="abc_class_2" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortTh stickyTop={stickyTop.thead} label="Прод. 31д" sk="sales_qty_31d" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortTh stickyTop={stickyTop.thead} label="OOS дн" sk="oos_days_31" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortTh stickyTop={stickyTop.thead} label="Наличие" sk="total_stock" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -584,6 +567,13 @@ export default function OrderTab() {
                                : (row.abc_class ?? '').charAt(0) === 'B' ? 'var(--warning)'
                                : (row.abc_class ?? '').charAt(0) === 'C' ? 'var(--danger)' : 'var(--text-subtle)',
                         }}>{row.abc_class ?? '—'}</span>
+                      </td>
+                      <td className="py-2 px-2 text-center">
+                        <span className="font-bold text-xs" style={{
+                          color: (row.abc_class_2 ?? '').charAt(0) === 'A' ? 'var(--success)'
+                               : (row.abc_class_2 ?? '').charAt(0) === 'B' ? 'var(--warning)'
+                               : (row.abc_class_2 ?? '').charAt(0) === 'C' ? 'var(--danger)' : 'var(--text-subtle)',
+                        }}>{row.abc_class_2 ?? '—'}</span>
                       </td>
                       <td className="py-2 px-2 text-center text-xs" style={{ color: 'var(--text-muted)' }}>{fmtQty(row.sales_qty_31d)}</td>
                       <td className="py-2 px-2 text-center text-xs">
@@ -627,7 +617,7 @@ export default function OrderTab() {
                     </tr>
                     {isExpanded && (
                       <tr style={{ background: 'var(--surface-2)' }}>
-                        <td colSpan={17} className="p-0">
+                        <td colSpan={18} className="p-0">
                           <OrderCalcDetails row={row} />
                         </td>
                       </tr>
@@ -636,7 +626,7 @@ export default function OrderTab() {
                 )
               })}
               {pagedRows.length === 0 && (
-                <tr><td colSpan={17} className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+                <tr><td colSpan={18} className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
                   {hasFilter ? 'Нет SKU по выбранным фильтрам' : 'Нет данных. Загрузите таблицы в разделе «Обновление данных».'}
                 </td></tr>
               )}
