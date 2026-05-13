@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
+import { rpcFetchAll } from '@/lib/supabase/rpcFetchAll'
 import { cached } from '@/lib/cache'
 
 export const maxDuration = 300
@@ -134,19 +135,20 @@ export async function GET(req: Request) {
   ).data?.[0]?.period_end ?? '1970-01-01'
 
   const haveDates = !!(fromDate && toDate && prevFrom && prevTo)
+  // ВАЖНО: Supabase managed PostgREST режет любой одноразовый .range на 1000 строк
+  // (серверный max-rows). Используем постраничный фетчер чтобы получить ВСЕ SKU,
+  // иначе на 3-10К SKU теряли 60-80% выручки.
   const [periodAggRes, dailyAggRes] = haveDates
     ? await Promise.all([
-        // .range(0, N) — PostgREST по умолчанию режет RPC TABLE на 1000 строк.
-        // С 3K-10K SKU без этого теряем 60-80% выручки в итогах.
-        supabase.rpc('analytics_period_agg', {
+        rpcFetchAll<SkuAggRpc>(() => supabase.rpc('analytics_period_agg', {
           p_from: fromDate, p_to: toDate, p_prev_from: prevFrom, p_prev_to: prevTo,
-        }).range(0, 199_999),
-        supabase.rpc('analytics_daily_agg', {
+        })),
+        rpcFetchAll<DailyAggRpc>(() => supabase.rpc('analytics_daily_agg', {
           p_from: fromDate, p_to: toDate, p_prev_from: prevFrom, p_prev_to: prevTo,
           p_snap_period: lastSnapDate,
-        }).range(0, 9_999),
+        })),
       ])
-    : [{ data: null as SkuAggRpc[] | null, error: null }, { data: null as DailyAggRpc[] | null, error: null }]
+    : [{ data: [] as SkuAggRpc[], error: null }, { data: [] as DailyAggRpc[], error: null }]
 
   // Если миграция ещё не применена — даём явный 503 с подсказкой
   if (periodAggRes.error || dailyAggRes.error) {
@@ -160,8 +162,8 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 
-  const periodAggRows: SkuAggRpc[] = (periodAggRes.data as SkuAggRpc[] | null) ?? []
-  const dailyAggRows:  DailyAggRpc[] = (dailyAggRes.data  as DailyAggRpc[] | null) ?? []
+  const periodAggRows: SkuAggRpc[] = periodAggRes.data ?? []
+  const dailyAggRows:  DailyAggRpc[] = dailyAggRes.data ?? []
 
   // ── 5. Агрегация текущего периода ────────────────────────────────────────────
   let totalRevenue   = 0

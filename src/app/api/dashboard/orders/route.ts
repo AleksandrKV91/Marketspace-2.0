@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
+import { rpcFetchAll } from '@/lib/supabase/rpcFetchAll'
 import { cached } from '@/lib/cache'
 
 export const maxDuration = 300
@@ -136,15 +137,14 @@ export async function GET(req: Request) {
         )
       : Promise.resolve([] as PeriodRow[]),
     maxDate
-      ? supabase.rpc('orders_daily_agg', {
+      ? rpcFetchAll<DailyAggRpc>(() => supabase.rpc('orders_daily_agg', {
           p_max_date:    rpcMaxDate,
           p_period_from: rpcPeriodFrom,
           p_period_to:   rpcPeriodTo,
           p_prev_from:   rpcPrevFrom,
           p_prev_to:     rpcPrevTo,
-        }).range(0, 199_999)  // PostgREST по умолчанию режет RPC на 1000 строк.
-                              // С 3K-10K SKU теряли 60-80% выручки. Лимит 200K — с большим запасом.
-      : Promise.resolve({ data: null as DailyAggRpc[] | null, error: null }),
+        }))
+      : Promise.resolve({ data: [] as DailyAggRpc[], error: null }),
     chinaId
       ? supabase.from('fact_china_supply')
           .select('sku_ms, in_transit, in_production, nearest_date, cost_plan, lead_time_days, order_qty')
@@ -161,8 +161,8 @@ export async function GET(req: Request) {
   ])
 
   // Если функция orders_daily_agg ещё не применена в Supabase — подсказываем что делать
-  if (dailyAggResult && 'error' in dailyAggResult && dailyAggResult.error) {
-    const msg = (dailyAggResult.error as { message?: string }).message ?? String(dailyAggResult.error)
+  if (dailyAggResult?.error) {
+    const msg = dailyAggResult.error.message ?? String(dailyAggResult.error)
     if (msg.toLowerCase().includes('orders_daily_agg') || msg.toLowerCase().includes('function')) {
       return NextResponse.json({
         error: 'Миграция 016_orders_daily_agg не применена. Запустите supabase/016_orders_daily_agg.sql в Supabase Studio → SQL editor.',
@@ -171,7 +171,7 @@ export async function GET(req: Request) {
     }
     return NextResponse.json({ error: `daily_agg: ${msg}` }, { status: 500 })
   }
-  const dailyAggRows: DailyAggRpc[] = (dailyAggResult?.data as DailyAggRpc[] | null) ?? []
+  const dailyAggRows: DailyAggRpc[] = dailyAggResult?.data ?? []
   const dailyAggMap: Record<string, DailyAggRpc> = {}
   // normMs объявляется ниже — здесь используем inline trim, чтобы не сломать порядок объявлений
   const norm = (s: string | null | undefined) => (s == null ? '' : String(s).trim())
@@ -671,6 +671,24 @@ export async function GET(req: Request) {
       }
     })
 
+  // Диагностика — видна в DevTools → Network → этот response.
+  // Помогает понять "почему выручка такая": сколько SKU вернул RPC, сколько в universe,
+  // какое окно даты, сумма по RPC до фильтрации rows.
+  const skusWithRevenue = Object.values(periodRevenueMap).filter(v => v > 0).length
+  const _diag = {
+    max_date_in_daily: maxDate,
+    period_from:       fromDaily,
+    period_to:         toDaily,
+    prev_from:         prevFrom,
+    prev_to:           prevTo,
+    rpc_orders_daily_agg_rows: dailyAggRows.length,         // должно быть = SKU c активностью в окнах
+    snap_skus:        Object.keys(snapMap).length,
+    universe_total:   universe.length,
+    period_revenue_from_rpc:      Math.round(period_revenue_total),     // Σ из periodRevenueMap (все SKU из RPC)
+    prev_revenue_from_rpc:        Math.round(prev_period_revenue_total),
+    skus_with_revenue_in_window:  skusWithRevenue,
+  }
+
   return NextResponse.json({
     summary,
     rows,
@@ -681,5 +699,6 @@ export async function GET(req: Request) {
     horizon,
     period_from: fromDaily,
     period_to:   toDaily,
+    _diag,
   })
 }
