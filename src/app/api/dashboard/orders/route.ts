@@ -134,7 +134,7 @@ export async function GET(req: Request) {
     oos_days_31: number; non_zero_days_31: number; data_days_total: number
     period_revenue: number; prev_period_revenue: number
   }
-  type AbcRow    = { sku_ms: string; final_class_1: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
+  type AbcRow    = { sku_ms: string; sku_wb: number | null; final_class_1: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
   type ChinaDbRow = { sku_ms: string; in_transit: number | null; in_production: number | null; nearest_date: string | null; cost_plan: number | null; lead_time_days: number | null; order_qty: number | null }
 
   // ── Вычисляем границы окон для RPC ─────────────────────────────────────
@@ -175,7 +175,7 @@ export async function GET(req: Request) {
     abcId
       ? fetchAll<AbcRow>(
           (sb) => sb.from('fact_abc')
-            .select('sku_ms, final_class_1, profitability, chmd_clean, tz')
+            .select('sku_ms, sku_wb, final_class_1, profitability, chmd_clean, tz')
             .eq('upload_id', abcId),
           supabase,
         )
@@ -259,12 +259,15 @@ export async function GET(req: Request) {
 
   type AbcRec = { abc_class: string | null; profitability: number | null; chmd_clean: number | null; tz: number | null }
   const abcMap: Record<string, AbcRec> = {}
+  // Прямой индекс по sku_wb из fact_abc (заполняется парсером ABC v7+).
+  // Это основной fallback, когда sku_ms в fact_abc не совпадает с fact_sku_period.sku_ms
+  // (мусорные/legacy значения в fact_abc.sku_ms — частая причина потери ABC у ~10% SKU).
+  const abcByWbDirect: Record<number, AbcRec> = {}
   for (const r of abcRows) {
+    const rec: AbcRec = { abc_class: r.final_class_1, profitability: r.profitability, chmd_clean: r.chmd_clean, tz: r.tz }
     const key = normMs(r.sku_ms)
-    if (!key) continue
-    if (!abcMap[key]) {
-      abcMap[key] = { abc_class: r.final_class_1, profitability: r.profitability, chmd_clean: r.chmd_clean, tz: r.tz }
-    }
+    if (key && !abcMap[key]) abcMap[key] = rec
+    if (r.sku_wb != null && !abcByWbDirect[r.sku_wb]) abcByWbDirect[r.sku_wb] = rec
   }
 
   // ── dim_sku map (только для коэффициентов сезонности month_*) ────────
@@ -473,8 +476,11 @@ export async function GET(req: Request) {
       : 1
     const forecast_30d = Math.round(base_norm * next30TargetRel * 30)
 
-    // GMROI: ABC с fallback через sku_wb (Свод)
-    const abc = abcMap[skuMs] ?? (snap?.sku_wb != null ? abcByWb[snap.sku_wb] : null)
+    // ABC: 1) direct по sku_ms → 2) прямой fallback по sku_wb из fact_abc →
+    // 3) старый fallback через dim_sku (sku_ms ABC → dim_sku → sku_wb → snap.sku_wb)
+    const abc = abcMap[skuMs]
+      ?? (snap?.sku_wb != null ? abcByWbDirect[snap.sku_wb] : null)
+      ?? (snap?.sku_wb != null ? abcByWb[snap.sku_wb] : null)
     const gmroi = (abc?.chmd_clean != null && abc?.tz != null && abc.tz > 0)
       ? Math.round((abc.chmd_clean / abc.tz) * 100) / 100
       : null

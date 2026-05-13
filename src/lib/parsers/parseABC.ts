@@ -2,6 +2,7 @@ import { readWorkbook, sheetToRows, norm, toNum, toBool, parseDateVal, excelToIS
 
 export interface ABCRow {
   sku_ms: string
+  sku_wb: number | null   // Артикул WB — для fallback-матчинга с fact_sku_period когда sku_ms не совпадает
   period_month: string
   product_name: string | null
   niche: string | null
@@ -117,8 +118,13 @@ function normalizeAbcClass(raw: string): string | null {
 
 type ColKey = keyof ABCRow
 
+// ВАЖНО: для sku_ms используем ТОЛЬКО точные/конкретные запросы — generic 'артикул'
+// убран, потому что он подхватывал колонку «Артикул WB» (число) и сохранял её как sku_ms,
+// из-за чего матчинг с fact_sku_period проваливался (≈40% SKU теряли ABC).
+// Для sku_wb — отдельный запрос точно по «Артикул WB / Артикул ВБ».
 const TEXT_COL_QUERIES: Array<{ key: ColKey; queries: string[] }> = [
-  { key: 'sku_ms', queries: ['артикул склада', 'артикул мс', 'артикул mc', 'артикул'] },
+  { key: 'sku_ms', queries: ['артикул склада', 'артикул мс', 'артикул mc'] },
+  { key: 'sku_wb', queries: ['артикул wb', 'артикул вб'] },
   { key: 'product_name', queries: ['номенклатура'] },
   { key: 'niche', queries: ['ниша', 'предмет', 'subject'] },
   { key: 'qty_stock_rub', queries: ['количество'] },
@@ -178,11 +184,18 @@ export function parseABC(buffer: ArrayBuffer, filename = ''): ParseABCResult {
     detectPeriodMonthFromFilename(filename) ??
     currentMonth()
 
-  // Map text-based columns
+  // Map text-based columns. Для sku_wb и sku_ms используем ТОЧНОЕ совпадение,
+  // иначе 'артикул' (sku_ms) подхватит 'Артикул WB', а 'артикул wb' (sku_wb) — не сматчится
+  // на 'Артикул WB' если кейс/пробелы отличаются. norm() лоуэркейсит и трим'ит.
   const colIdx: Partial<Record<ColKey, number>> = {}
+  const STRICT_KEYS = new Set<ColKey>(['sku_ms', 'sku_wb'])
   for (const { key, queries } of TEXT_COL_QUERIES) {
+    const strict = STRICT_KEYS.has(key)
     for (const q of queries) {
-      const idx = headerRow.findIndex(h => norm(h).includes(q))
+      const idx = headerRow.findIndex(h => {
+        const n = norm(h)
+        return strict ? n === q : n.includes(q)
+      })
       if (idx !== -1) { colIdx[key] = idx; break }
     }
   }
@@ -228,6 +241,7 @@ export function parseABC(buffer: ArrayBuffer, filename = ''): ParseABCResult {
 
     result.push({
       sku_ms: skuMs,
+      sku_wb: toNum(get('sku_wb')),
       period_month: periodMonth,
       product_name: get('product_name') != null ? String(get('product_name')).trim() || null : null,
       niche: get('niche') != null ? String(get('niche')).trim() || null : null,
