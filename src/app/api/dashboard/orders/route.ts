@@ -619,8 +619,11 @@ export async function GET(req: Request) {
   const forecast_30d_total = rows.reduce((s, r) => s + r.forecast_30d, 0)
   // Прогноз 30д в рублях = Σ(forecast_30d × price) по всем SKU
   const forecast_30d_rub_total = rows.reduce((s, r) => s + r.forecast_30d * (r.price ?? 0), 0)
-  const period_revenue_total = rows.reduce((s, r) => s + r.period_revenue, 0)
-  const prev_period_revenue_total = rows.reduce((s, r) => s + r.prev_period_revenue, 0)
+  // ВАЖНО: period_revenue суммируем по ВСЕМ SKU из RPC orders_daily_agg, а не только по universe
+  // (= last fact_sku_period). Раньше rows[].period_revenue терял выручку SKU, которых нет в
+  // последнем weekly-снапе, и итог был занижен (например 288М вместо 1Б).
+  const period_revenue_total      = Object.values(periodRevenueMap).reduce((s, v) => s + v, 0)
+  const prev_period_revenue_total = Object.values(prevPeriodRevenueMap).reduce((s, v) => s + v, 0)
 
   const summary = {
     critical_count: criticalRows.length,

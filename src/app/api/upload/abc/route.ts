@@ -142,11 +142,14 @@ export async function POST(req: NextRequest) {
   if (uploadErr) return NextResponse.json({ error: uploadErr.message }, { status: 500 })
 
   const uploadId = upload.id
-  const rowsWithUpload = aggregated.map(r => ({
-    ...r,
-    upload_id: uploadId,
-    variant_name: r.product_name ?? '',
-  }))
+  // fact_abc НЕ содержит колонку niche — она пишется в dim_sku.subject_wb выше.
+  // Если оставить niche в upsert — PostgREST возвращает "Could not find the 'niche' column"
+  // и валит всю загрузку (включая sku_wb из миграции 019).
+  const rowsWithUpload = aggregated.map(r => {
+    const { niche: _niche, ...rest } = r
+    void _niche
+    return { ...rest, upload_id: uploadId, variant_name: r.product_name ?? '' }
+  })
   for (const batch of chunk(rowsWithUpload, 1000)) {
     const { error } = await supabase.from('fact_abc').upsert(batch, { onConflict: 'sku_ms,upload_id,variant_name' })
     if (error) {

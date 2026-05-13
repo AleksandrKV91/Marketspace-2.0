@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
 import { cached } from '@/lib/cache'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 function shiftRange(from: string, to: string) {
   const f = new Date(from), t = new Date(to)
@@ -113,93 +113,128 @@ export async function GET(req: Request) {
     ? shiftRange(fromDate, toDate)
     : { prevFrom: null as string | null, prevTo: null as string | null }
 
-  // ── 4. fact_sku_daily — текущий и предыдущий периоды ─────────────────────────
-  // Читаем напрямую через fetchAll (пагинированно, без лимита PostgREST).
-  // Это единственный источник истины — fact_daily_agg не трогаем совсем.
-  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; chmd_rub: number | null; margin_rub: number | null }
+  // ── 4. Серверная агрегация через RPC analytics_period_agg / analytics_daily_agg ─
+  // Раньше fetchAll тянул 300К+ строк fact_sku_daily в Node — timeout на 14+ днях.
+  // Теперь Postgres агрегирует по SKU/дням, возвращая ~N_skus + N_days строк.
+  // Migration: supabase/020_analytics_aggregate_rpcs.sql
+  type SkuAggRpc = {
+    sku_ms: string
+    curr_revenue: number; curr_ad_spend: number; curr_chmd_rub: number
+    curr_margin_rub: number; prev_revenue: number
+  }
+  type DailyAggRpc = {
+    metric_date: string; is_current: boolean
+    revenue: number; ad_spend: number; chmd_rub: number; margin_sum: number
+  }
 
-  const [currDailyRows, prevDailyRows] = await Promise.all([
-    fromDate && toDate
-      ? fetchAll<DailyRow>(
-          (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, metric_date, revenue, ad_spend, chmd_rub, margin_rub')
-            .gte('metric_date', fromDate!).lte('metric_date', toDate!)
-            .order('sku_ms').order('metric_date'),
-          supabase,
-        )
-      : Promise.resolve([]),
-    prevFrom && prevTo
-      ? fetchAll<DailyRow>(
-          (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, metric_date, revenue, ad_spend, chmd_rub, margin_rub')
-            .gte('metric_date', prevFrom!).lte('metric_date', prevTo!)
-            .order('sku_ms').order('metric_date'),
-          supabase,
-        )
-      : Promise.resolve([]),
-  ])
+  // last_snap_period нужен для margin_sum в analytics_daily_agg (Σ revenue × margin_pct).
+  // snapByMs уже построен из этого period_end — переиспользуем дату.
+  const lastSnapDate = (await supabase.from('fact_sku_period')
+    .select('period_end').order('period_end', { ascending: false }).limit(1)
+  ).data?.[0]?.period_end ?? '1970-01-01'
+
+  const haveDates = !!(fromDate && toDate && prevFrom && prevTo)
+  const [periodAggRes, dailyAggRes] = haveDates
+    ? await Promise.all([
+        supabase.rpc('analytics_period_agg', {
+          p_from: fromDate, p_to: toDate, p_prev_from: prevFrom, p_prev_to: prevTo,
+        }),
+        supabase.rpc('analytics_daily_agg', {
+          p_from: fromDate, p_to: toDate, p_prev_from: prevFrom, p_prev_to: prevTo,
+          p_snap_period: lastSnapDate,
+        }),
+      ])
+    : [{ data: null as SkuAggRpc[] | null, error: null }, { data: null as DailyAggRpc[] | null, error: null }]
+
+  // Если миграция ещё не применена — даём явный 503 с подсказкой
+  if (periodAggRes.error || dailyAggRes.error) {
+    const msg = (periodAggRes.error ?? dailyAggRes.error)?.message ?? 'unknown'
+    if (/function|analytics_period_agg|analytics_daily_agg/i.test(msg)) {
+      return NextResponse.json({
+        error: 'Миграция 020_analytics_aggregate_rpcs не применена. Запустите supabase/020_analytics_aggregate_rpcs.sql в Supabase Studio → SQL editor.',
+        details: msg,
+      }, { status: 503 })
+    }
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
+
+  const periodAggRows: SkuAggRpc[] = (periodAggRes.data as SkuAggRpc[] | null) ?? []
+  const dailyAggRows:  DailyAggRpc[] = (dailyAggRes.data  as DailyAggRpc[] | null) ?? []
 
   // ── 5. Агрегация текущего периода ────────────────────────────────────────────
-  let totalRevenue = 0
-  let totalAdSpend = 0
-  let totalMarginSum = 0   // Σ (revenue × margin_pct) — только для отображения margin_pct%
-  let totalChmdSum = 0     // Σ chmd_rub — готовые значения из файла
+  let totalRevenue   = 0
+  let totalAdSpend   = 0
+  let totalMarginSum = 0
+  let totalChmdSum   = 0
 
-  const dateAgg: Record<string, { revenue: number; ad_spend: number; marginSum: number; chmd: number }> = {}
+  // skuAgg: per-SKU суммы из RPC, плюс chmd-fallback rev×margin_pct когда chmd_rub=0
+  // (для категорий где парсер sku-report не заполнил chmd_rub).
   const skuAgg: Record<string, { revenue: number; ad_spend: number; chmd: number; marginRub: number }> = {}
+  const prevSkuRev: Record<string, number> = {}
 
-  for (const r of currDailyRows) {
-    const rev   = r.revenue   ?? 0
-    const spend = r.ad_spend  ?? 0
+  for (const r of periodAggRows) {
+    const rev   = Number(r.curr_revenue ?? 0)
+    const spend = Number(r.curr_ad_spend ?? 0)
     const mPct  = snapByMs[r.sku_ms]?.margin_pct ?? 0
-    // FALLBACK: для категорий, где парсер sku-report не заполнил chmd_rub
-    // (Посуда и инвентарь, Игрушки, Одежда), считаем chmd как rev × margin_pct.
-    // Это даёт корректную сумму при свёрнутой иерархии.
-    const chmdRub = r.chmd_rub != null ? r.chmd_rub : (rev * mPct)
+    const chmdFromRpc = Number(r.curr_chmd_rub ?? 0)
+    const chmd = chmdFromRpc !== 0 ? chmdFromRpc : (rev * mPct)
 
     totalRevenue   += rev
     totalAdSpend   += spend
     totalMarginSum += rev * mPct
-    totalChmdSum   += chmdRub
+    totalChmdSum   += chmd
 
-    if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0, marginSum: 0, chmd: 0 }
-    dateAgg[r.metric_date].revenue   += rev
-    dateAgg[r.metric_date].ad_spend  += spend
-    dateAgg[r.metric_date].marginSum += rev * mPct
-    dateAgg[r.metric_date].chmd      += chmdRub
-
-    if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0 }
-    skuAgg[r.sku_ms].revenue   += rev
-    skuAgg[r.sku_ms].ad_spend  += spend
-    skuAgg[r.sku_ms].chmd      += chmdRub
-    skuAgg[r.sku_ms].marginRub += r.margin_rub ?? 0
+    skuAgg[r.sku_ms] = {
+      revenue:   rev,
+      ad_spend:  spend,
+      chmd,
+      marginRub: Number(r.curr_margin_rub ?? 0),
+    }
+    if (r.prev_revenue && Number(r.prev_revenue) > 0) {
+      prevSkuRev[r.sku_ms] = Number(r.prev_revenue)
+    }
   }
 
-  const marginPct  = totalRevenue > 0 ? totalMarginSum / totalRevenue : 0
-  const totalChmd  = totalChmdSum
-  const drr              = totalRevenue > 0 ? totalAdSpend / totalRevenue : 0
+  // dateAgg: per-date суммы из analytics_daily_agg (только текущий период)
+  const dateAgg: Record<string, { revenue: number; ad_spend: number; marginSum: number; chmd: number }> = {}
+  const prevDateAgg: Record<string, number> = {}
+  for (const r of dailyAggRows) {
+    const rev      = Number(r.revenue ?? 0)
+    const spend    = Number(r.ad_spend ?? 0)
+    const chmdRow  = Number(r.chmd_rub ?? 0)
+    const margRow  = Number(r.margin_sum ?? 0)
+    if (r.is_current) {
+      dateAgg[r.metric_date] = {
+        revenue:   rev,
+        ad_spend:  spend,
+        marginSum: margRow,
+        chmd:      chmdRow !== 0 ? chmdRow : margRow,  // fallback для категорий без chmd_rub
+      }
+    } else {
+      prevDateAgg[r.metric_date] = rev
+    }
+  }
+
+  const marginPct          = totalRevenue > 0 ? totalMarginSum / totalRevenue : 0
+  const totalChmd          = totalChmdSum
+  const drr                = totalRevenue > 0 ? totalAdSpend / totalRevenue : 0
   const forecast30dRevenue = periodDays > 0 ? (totalRevenue / periodDays) * 30 : 0
 
-  // ── 6. Агрегация предыдущего периода ─────────────────────────────────────────
-  let prevRevenue = 0
-  let prevAdSpend = 0
+  // ── 6. Агрегация предыдущего периода (из того же RPC) ────────────────────────
+  let prevRevenue   = 0
+  let prevAdSpend   = 0   // RPC не возвращает прошлый ad_spend per-SKU — итог из dailyAgg
   let prevMarginSum = 0
-  let prevChmdSum = 0
-  const prevSkuRev: Record<string, number> = {}
-  const prevDateAgg: Record<string, number> = {}
-
-  for (const r of prevDailyRows) {
-    const rev   = r.revenue  ?? 0
-    const spend = r.ad_spend ?? 0
-    const mPct  = snapByMs[r.sku_ms]?.margin_pct ?? 0
-    const chmdRub = r.chmd_rub != null ? r.chmd_rub : (rev * mPct)
-
-    prevRevenue   += rev
-    prevAdSpend   += spend
-    prevMarginSum += rev * mPct
-    prevChmdSum   += chmdRub
-    prevSkuRev[r.sku_ms] = (prevSkuRev[r.sku_ms] ?? 0) + rev
-    prevDateAgg[r.metric_date] = (prevDateAgg[r.metric_date] ?? 0) + rev
+  let prevChmdSum   = 0
+  for (const r of periodAggRows) {
+    const prev   = Number(r.prev_revenue ?? 0)
+    if (prev <= 0) continue
+    const mPct   = snapByMs[r.sku_ms]?.margin_pct ?? 0
+    prevRevenue   += prev
+    prevMarginSum += prev * mPct
+    prevChmdSum   += prev * mPct  // chmd fallback для прошлого периода (rev × margin_pct)
+  }
+  for (const r of dailyAggRows) {
+    if (!r.is_current) prevAdSpend += Number(r.ad_spend ?? 0)
   }
 
   const prevChmd      = prevChmdSum
@@ -325,22 +360,35 @@ export async function GET(req: Request) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, revenue], i) => ({ day_index: i, date, revenue }))
 
-  // ── 12. daily_by_sku (для клиентской фильтрации) — только топ-200 SKU по выручке ───
-  const topSkuMs = new Set(
-    Object.entries(skuAgg)
-      .sort((a, b) => (b[1].revenue ?? 0) - (a[1].revenue ?? 0))
-      .slice(0, 200)
-      .map(([ms]) => ms)
-  )
-  const daily_by_sku = currDailyRows
-    .filter(r => topSkuMs.has(r.sku_ms))
-    .map(r => ({ sku_ms: r.sku_ms, date: r.metric_date, revenue: r.revenue ?? 0, ad_spend: r.ad_spend ?? 0 }))
+  // ── 12. daily_by_sku — только топ-200 SKU. После переезда на RPC daily-строк в
+  // памяти больше нет, поэтому запрашиваем только этот срез отдельным запросом.
+  const topSkuMs = Object.entries(skuAgg)
+    .sort((a, b) => (b[1].revenue ?? 0) - (a[1].revenue ?? 0))
+    .slice(0, 200)
+    .map(([ms]) => ms)
+
+  type DailyBySkuRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null }
+  let daily_by_sku: Array<{ sku_ms: string; date: string; revenue: number; ad_spend: number }> = []
+  if (topSkuMs.length > 0 && fromDate && toDate) {
+    // .in() с длиной 200 укладывается в URL-лимит PostgREST.
+    const { data: dailySliceRows } = await supabase
+      .from('fact_sku_daily')
+      .select('sku_ms, metric_date, revenue, ad_spend')
+      .in('sku_ms', topSkuMs)
+      .gte('metric_date', fromDate).lte('metric_date', toDate)
+    daily_by_sku = ((dailySliceRows ?? []) as DailyBySkuRow[]).map(r => ({
+      sku_ms: r.sku_ms,
+      date:   r.metric_date,
+      revenue:  r.revenue  ?? 0,
+      ad_spend: r.ad_spend ?? 0,
+    }))
+  }
 
   if (process.env.NODE_ENV !== 'production') {
     console.log(`[analytics] period: ${fromDate} – ${toDate}`)
     console.log(`[analytics] revenue: ${Math.round(totalRevenue).toLocaleString()} ₽`)
     console.log(`[analytics] SKUs with activity: ${Object.keys(skuAgg).length}`)
-    console.log(`[analytics] daily_rows fetched: ${currDailyRows.length}`)
+    console.log(`[analytics] period_agg rows: ${periodAggRows.length}, daily_agg rows: ${dailyAggRows.length}, daily_by_sku rows: ${daily_by_sku.length}`)
   }
 
   return NextResponse.json({
