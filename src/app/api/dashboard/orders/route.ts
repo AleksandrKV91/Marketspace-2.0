@@ -276,11 +276,16 @@ export async function GET(req: Request) {
     if (dim?.sku_wb != null) chinaByWb[dim.sku_wb] = chinaMap[skuMs]
   }
 
-  // ── Универсум SKU: ВСЕ из последнего fact_sku_period снапшоте.
-  // Глобальные фильтры (category/manager/novelty) на этой вкладке НЕ применяются.
-  // Month-фильтр ТОЖЕ не влияет на universe — он только меняет колонку «Выручка за период».
-  // SKU из sku-report которых нет в China → остаются с manager_order=0 (через chinaMap fallback).
-  const universe: string[] = Object.keys(snapMap)
+  // ── Универсум SKU: snap ∪ daily (та же логика что в analytics и sku-table).
+  // Раньше брали только Object.keys(snapMap) — это ~2993 SKU из последнего weekly-снапа.
+  // SKU с продажами в fact_sku_daily, но без записи в последнем fact_sku_period,
+  // выпадали — и их выручка не попадала в таблицу/итоги.
+  // Теперь добавляем все SKU из dailyAggMap (= те у кого есть активность в последние 90 дней).
+  const universeSet = new Set<string>([
+    ...Object.keys(snapMap),
+    ...Object.keys(dailyAggMap),
+  ])
+  const universe: string[] = [...universeSet]
 
   // ── 7. YoY fallback: для тех, у кого base_31d < 5 и target_coef > 1.3*avg
   // Запрос делаем ниже после первого прохода — собираем кандидатов
