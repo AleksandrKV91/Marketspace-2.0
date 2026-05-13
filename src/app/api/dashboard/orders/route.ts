@@ -142,7 +142,8 @@ export async function GET(req: Request) {
           p_period_to:   rpcPeriodTo,
           p_prev_from:   rpcPrevFrom,
           p_prev_to:     rpcPrevTo,
-        })
+        }).range(0, 199_999)  // PostgREST по умолчанию режет RPC на 1000 строк.
+                              // С 3K-10K SKU теряли 60-80% выручки. Лимит 200K — с большим запасом.
       : Promise.resolve({ data: null as DailyAggRpc[] | null, error: null }),
     chinaId
       ? supabase.from('fact_china_supply')
@@ -450,19 +451,20 @@ export async function GET(req: Request) {
     // Заказ менеджера из «Потребность Китай» (СВОД) — отдельно от расчёта
     const svod_order_qty = china?.order_qty ?? 0
 
-    // Прогноз 30д = base_norm × seasonal_coef_next_30d
-    const next30Months: number[] = []
+    // Прогноз 31д = base_norm × seasonal_coef_next_31d × 31.
+    // 31 дн — чтобы соответствовать колонке «Прод. 31д» (одинаковые окна = честное сравнение).
+    const next31Months: number[] = []
     {
       const start = new Date(today)
-      const end = new Date(today); end.setDate(end.getDate() + 30)
+      const end = new Date(today); end.setDate(end.getDate() + 31)
       const cur = new Date(start.getFullYear(), start.getMonth(), 1)
-      while (cur <= end) { next30Months.push(cur.getMonth()); cur.setMonth(cur.getMonth() + 1) }
+      while (cur <= end) { next31Months.push(cur.getMonth()); cur.setMonth(cur.getMonth() + 1) }
     }
-    const next30Coeffs = next30Months.map(m => sku[MONTH_KEYS[m]]).filter((v): v is number => v != null && v > 0)
-    const next30TargetRel = next30Coeffs.length > 0
-      ? (next30Coeffs.reduce((a, b) => a + b, 0) / next30Coeffs.length) / (avg_year || 1)
+    const next31Coeffs = next31Months.map(m => sku[MONTH_KEYS[m]]).filter((v): v is number => v != null && v > 0)
+    const next31TargetRel = next31Coeffs.length > 0
+      ? (next31Coeffs.reduce((a, b) => a + b, 0) / next31Coeffs.length) / (avg_year || 1)
       : 1
-    const forecast_30d = Math.round(base_norm * next30TargetRel * 30)
+    const forecast_30d = Math.round(base_norm * next31TargetRel * 31)
 
     // ABC: 1) direct по sku_ms → 2) прямой fallback по sku_wb из fact_abc →
     // 3) старый fallback через dim_sku (sku_ms ABC → dim_sku → sku_wb → snap.sku_wb)

@@ -93,7 +93,9 @@ async function handle() {
   // (без catch Promise.all отверг бы весь запрос). Если ошибка про функцию — даём 503-подсказку.
   const monthlyRevPromise: Promise<{ data: MonthlyRev[] | null; error: { message?: string } | null }> = (async () => {
     try {
-      const res = await supabase.rpc('forecast_monthly_revenue', { p_from: factFromISO, p_to: maxDate })
+      // forecast_monthly_revenue возвращает строку на месяц (8 макс), но всё равно
+      // ставлю range на всякий случай (если когда-то добавим разрез по другой оси).
+      const res = await supabase.rpc('forecast_monthly_revenue', { p_from: factFromISO, p_to: maxDate }).range(0, 999)
       return { data: res.data as MonthlyRev[] | null, error: res.error }
     } catch (e: unknown) {
       return { data: null, error: { message: e instanceof Error ? e.message : String(e) } }

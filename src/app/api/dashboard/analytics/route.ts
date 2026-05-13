@@ -136,13 +136,15 @@ export async function GET(req: Request) {
   const haveDates = !!(fromDate && toDate && prevFrom && prevTo)
   const [periodAggRes, dailyAggRes] = haveDates
     ? await Promise.all([
+        // .range(0, N) — PostgREST по умолчанию режет RPC TABLE на 1000 строк.
+        // С 3K-10K SKU без этого теряем 60-80% выручки в итогах.
         supabase.rpc('analytics_period_agg', {
           p_from: fromDate, p_to: toDate, p_prev_from: prevFrom, p_prev_to: prevTo,
-        }),
+        }).range(0, 199_999),
         supabase.rpc('analytics_daily_agg', {
           p_from: fromDate, p_to: toDate, p_prev_from: prevFrom, p_prev_to: prevTo,
           p_snap_period: lastSnapDate,
-        }),
+        }).range(0, 9_999),
       ])
     : [{ data: null as SkuAggRpc[] | null, error: null }, { data: null as DailyAggRpc[] | null, error: null }]
 
