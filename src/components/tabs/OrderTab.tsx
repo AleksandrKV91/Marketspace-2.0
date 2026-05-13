@@ -95,10 +95,11 @@ function fmtFullQty(n: number | null | undefined) {
   return Math.round(n).toLocaleString('ru-RU') + ' шт'
 }
 
-function SortTh({ label, sk, align = 'right', sortKey, sortDir, onSort, stickyTop }: {
+function SortTh({ label, sk, align = 'right', sortKey, sortDir, onSort, stickyTop, hint }: {
   label: string; sk: string; align?: 'left' | 'right' | 'center'
   sortKey: string; sortDir: 'asc' | 'desc'; onSort: (k: string) => void
   stickyTop?: number
+  hint?: string  // text tooltip — что означает колонка
 }) {
   const active = sortKey === sk
   return (
@@ -113,6 +114,7 @@ function SortTh({ label, sk, align = 'right', sortKey, sortDir, onSort, stickyTo
           WebkitBackdropFilter: 'blur(12px)',
           borderBottom: '1px solid var(--border)',
         }}
+        title={hint}
         onClick={() => onSort(sk)}>
       <span className={`inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : ''}`}>
         {label}
@@ -249,34 +251,45 @@ export default function OrderTab() {
     || orderFilter.only_oos_demand !== 'all'
     || activeKpi !== null
 
-  const filteredRows = (data.rows ?? []).filter(row => {
-    if (search) {
-      const q = search.toLowerCase()
-      if (!row.name.toLowerCase().includes(q) && !String(row.sku_wb).includes(search) && !row.sku_ms.toLowerCase().includes(q)) return false
-    }
-    if (orderFilter.status !== 'all' && row.status !== orderFilter.status) return false
-    if (orderFilter.abc !== 'all' && (row.abc_class ?? '').charAt(0) !== orderFilter.abc) return false
-    if (orderFilter.only_to_order === 'with' && row.calc_order <= 0 && row.svod_order_qty <= 0) return false
-    if (orderFilter.only_oos_demand === 'with' && !(row.total_stock === 0 && row.sales_qty_31d > 0)) return false
-    return true
-  }).sort((a, b) => {
-    const av = a[sortKey as keyof OrderRow] as number | string | null | undefined
-    const bv = b[sortKey as keyof OrderRow] as number | string | null | undefined
-    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * (sortDir === 'asc' ? 1 : -1)
-    return String(av ?? '').localeCompare(String(bv ?? '')) * (sortDir === 'asc' ? 1 : -1)
-  })
+  // useMemo: фильтрация+сортировка не пересчитываются на каждый render, только при изменении входов.
+  // Для 5000+ SKU это критично — без мемо при каждом setState (page, expanded, hover) делали бы
+  // полный проход по массиву.
+  const filteredRows = useMemo(() => {
+    const rows = (data?.rows ?? [])
+    const q = search.trim().toLowerCase()
+    const filtered = rows.filter(row => {
+      if (q) {
+        if (!row.name.toLowerCase().includes(q) && !String(row.sku_wb).includes(search) && !row.sku_ms.toLowerCase().includes(q)) return false
+      }
+      if (orderFilter.status !== 'all' && row.status !== orderFilter.status) return false
+      if (orderFilter.abc !== 'all' && (row.abc_class ?? '').charAt(0) !== orderFilter.abc) return false
+      if (orderFilter.only_to_order === 'with' && row.calc_order <= 0 && row.svod_order_qty <= 0) return false
+      if (orderFilter.only_oos_demand === 'with' && !(row.total_stock === 0 && row.sales_qty_31d > 0)) return false
+      return true
+    })
+    return filtered.sort((a, b) => {
+      const av = a[sortKey as keyof OrderRow] as number | string | null | undefined
+      const bv = b[sortKey as keyof OrderRow] as number | string | null | undefined
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * (sortDir === 'asc' ? 1 : -1)
+      return String(av ?? '').localeCompare(String(bv ?? '')) * (sortDir === 'asc' ? 1 : -1)
+    })
+  }, [data?.rows, search, orderFilter.status, orderFilter.abc, orderFilter.only_to_order, orderFilter.only_oos_demand, sortKey, sortDir])
 
-  const pagedRows = pageSize === 0
-    ? filteredRows
-    : filteredRows.slice(page * pageSize, (page + 1) * pageSize)
+  const pagedRows = useMemo(
+    () => pageSize === 0 ? filteredRows : filteredRows.slice(page * pageSize, (page + 1) * pageSize),
+    [filteredRows, pageSize, page],
+  )
   const totalPages = pageSize === 0 ? 1 : Math.ceil(filteredRows.length / pageSize)
 
-  // Сумма выручки видимых строк
-  const visibleRevenue = filteredRows.reduce((sum, r) => sum + r.period_revenue, 0)
-  const visiblePrevRevenue = filteredRows.reduce((sum, r) => sum + r.prev_period_revenue, 0)
-  const visibleRevenueDelta = visiblePrevRevenue > 0
-    ? (visibleRevenue - visiblePrevRevenue) / visiblePrevRevenue * 100
-    : null
+  // Сумма выручки видимых строк — тоже мемо, иначе O(N) на каждый render.
+  const { visibleRevenue, visibleRevenueDelta } = useMemo(() => {
+    let curr = 0, prev = 0
+    for (const r of filteredRows) { curr += r.period_revenue; prev += r.prev_period_revenue }
+    return {
+      visibleRevenue: curr,
+      visibleRevenueDelta: prev > 0 ? (curr - prev) / prev * 100 : null,
+    }
+  }, [filteredRows])
 
   function exportOrders() {
     exportToExcel(filteredRows.map(r => ({
@@ -300,7 +313,7 @@ export default function OrderTab() {
       'Расч. заказ (шт)': r.calc_order,
       'Заказ менеджера (шт)': r.svod_order_qty,
       'Δ заказа': r.delta_order,
-      'Прогноз 30д (шт)': r.forecast_30d,
+      'Прогноз 31д (шт)': r.forecast_30d,
       'Выручка за период, ₽': r.period_revenue,
       'Δ выручки, %': r.delta_revenue_pct != null ? (r.delta_revenue_pct * 100).toFixed(1) : '',
       'Маржа %': r.margin_pct != null ? (r.margin_pct * 100).toFixed(1) : '',
@@ -344,7 +357,7 @@ export default function OrderTab() {
           hint: 'Σ остаток / Σ скорость',
         },
         {
-          label: 'Прогноз 30д',
+          label: 'Прогноз 31д',
           value: fmtRub(s.forecast_30d_rub_total ?? 0),
           hint: fmtFullQty(s.forecast_30d_total),           // шт — без сокращений
         },
@@ -525,24 +538,24 @@ export default function OrderTab() {
           <table className="w-full text-[11px]" style={{ minWidth: 1200 }}>
             <thead>
               <tr className="text-xs">
-                <SortTh stickyTop={stickyTop.thead} label="SKU WB" sk="sku_wb" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Название" sk="name" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Статус" sk="status" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="К1" sk="abc_class" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="К2" sk="abc_class_2" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Прод. 31д" sk="sales_qty_31d" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="OOS дн" sk="oos_days_31" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Наличие" sk="total_stock" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Дни" sk="stock_days" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Лог.пл." sk="lead_time_days" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Расч. заказ" sk="calc_order" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Заказ менедж." sk="svod_order_qty" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Δ заказа" sk="delta_order" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Прогн. 30д" sk="forecast_30d" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Выручка" sk="period_revenue" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Δ Выручка" sk="delta_revenue_pct" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="Маржа" sk="margin_pct" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortTh stickyTop={stickyTop.thead} label="GMROI" sk="gmroi" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh stickyTop={stickyTop.thead} label="SKU WB" sk="sku_wb" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Артикул WB (из dim_sku / fact_sku_period)" />
+                <SortTh stickyTop={stickyTop.thead} label="Название" sk="name" align="left" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Наименование товара" />
+                <SortTh stickyTop={stickyTop.thead} label="Статус" sk="status" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Крит. = запас < 50% лог. плеча · Внимание = запас < лог. плеча · Норма = запас ≥ лог. плеча" />
+                <SortTh stickyTop={stickyTop.thead} label="К1" sk="abc_class" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="ABC-класс 1: Итоговый класс ЧМД/Выручка (из fact_abc.final_class_1)" />
+                <SortTh stickyTop={stickyTop.thead} label="К2" sk="abc_class_2" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="ABC-класс 2: Итоговый класс Рент./Об. (из fact_abc.final_class_2)" />
+                <SortTh stickyTop={stickyTop.thead} label="Прод. 31д" sk="sales_qty_31d" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Продажи за последние 31 день (шт). Σ sales_qty из fact_sku_daily." />
+                <SortTh stickyTop={stickyTop.thead} label="OOS дн" sk="oos_days_31" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Дни без продаж за последние 31 день (out-of-stock indicator)" />
+                <SortTh stickyTop={stickyTop.thead} label="Наличие" sk="total_stock" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Сумма остатков (шт): FBO WB + FBS Пушкино + FBS Смоленск + комплекты" />
+                <SortTh stickyTop={stickyTop.thead} label="Дни" sk="stock_days" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="На сколько дней хватит запасов при текущей velocity = Наличие ÷ Прод/день" />
+                <SortTh stickyTop={stickyTop.thead} label="Лог.пл." sk="lead_time_days" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Лог. плечо (дни) — из листа «Зеленка» в файле «Потребность Китай», либо DEFAULT 45 дн" />
+                <SortTh stickyTop={stickyTop.thead} label="Расч. заказ" sk="calc_order" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Расчётный заказ (шт) = max(0, потребность_на_горизонт + страховой_запас − наличие − в_пути − в_производстве)" />
+                <SortTh stickyTop={stickyTop.thead} label="Заказ менедж." sk="svod_order_qty" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Заказ менеджера (шт) — колонка «Кол-во к заказу» из СВОД-листа «Потребность Китай»" />
+                <SortTh stickyTop={stickyTop.thead} label="Δ заказа" sk="delta_order" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Разница (шт) = Расчётный заказ − Заказ менеджера. + значит расчёт больше, − значит менеджер заказал больше" />
+                <SortTh stickyTop={stickyTop.thead} label="Прогн. 31д" sk="forecast_30d" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Прогноз продаж на следующие 31 день (шт) = velocity × сезонный_коэф_следующего_месяца × 31" />
+                <SortTh stickyTop={stickyTop.thead} label="Выручка" sk="period_revenue" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Выручка за последние 31 день (₽). Σ revenue из fact_sku_daily." />
+                <SortTh stickyTop={stickyTop.thead} label="Δ Выручка" sk="delta_revenue_pct" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Изменение выручки vs предыдущие 31 день (%)" />
+                <SortTh stickyTop={stickyTop.thead} label="Маржа" sk="margin_pct" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Маржинальность периода (%) — из fact_sku_period.period_marginality_wgt" />
+                <SortTh stickyTop={stickyTop.thead} label="GMROI" sk="gmroi" align="center" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} hint="Gross Margin Return on Investment = ЧМД чистый ÷ ТЗ (из fact_abc). Чем выше — тем эффективнее запас." />
               </tr>
             </thead>
             <tbody>
