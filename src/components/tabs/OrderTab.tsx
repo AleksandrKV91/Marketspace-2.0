@@ -235,25 +235,8 @@ export default function OrderTab() {
 
   const heatmapRows: HeatmapRow[] = useMemo(() => data?.heatmap_rows ?? [], [data?.heatmap_rows])
 
-  if (loading && !data) return (
-    <div className="px-6 py-6 space-y-6">
-      <KPIBar loading items={Array(4).fill({ label: '', value: '' })} />
-    </div>
-  )
-  if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
-  if (!data) return null
-
-  const s = data.summary
-  const hasFilter = search.trim() !== ''
-    || orderFilter.status !== 'all'
-    || orderFilter.abc !== 'all'
-    || orderFilter.only_to_order !== 'all'
-    || orderFilter.only_oos_demand !== 'all'
-    || activeKpi !== null
-
-  // useMemo: фильтрация+сортировка не пересчитываются на каждый render, только при изменении входов.
-  // Для 5000+ SKU это критично — без мемо при каждом setState (page, expanded, hover) делали бы
-  // полный проход по массиву.
+  // ВАЖНО: все useMemo вызываются ДО любых early-return (Rules of Hooks).
+  // Иначе при первом render data=null хуков 3 шт, при следующем data=set хуков 6 — React error #310.
   const filteredRows = useMemo(() => {
     const rows = (data?.rows ?? [])
     const q = search.trim().toLowerCase()
@@ -279,9 +262,7 @@ export default function OrderTab() {
     () => pageSize === 0 ? filteredRows : filteredRows.slice(page * pageSize, (page + 1) * pageSize),
     [filteredRows, pageSize, page],
   )
-  const totalPages = pageSize === 0 ? 1 : Math.ceil(filteredRows.length / pageSize)
 
-  // Сумма выручки видимых строк — тоже мемо, иначе O(N) на каждый render.
   const { visibleRevenue, visibleRevenueDelta } = useMemo(() => {
     let curr = 0, prev = 0
     for (const r of filteredRows) { curr += r.period_revenue; prev += r.prev_period_revenue }
@@ -290,6 +271,24 @@ export default function OrderTab() {
       visibleRevenueDelta: prev > 0 ? (curr - prev) / prev * 100 : null,
     }
   }, [filteredRows])
+
+  if (loading && !data) return (
+    <div className="px-6 py-6 space-y-6">
+      <KPIBar loading items={Array(4).fill({ label: '', value: '' })} />
+    </div>
+  )
+  if (error) return <div className="px-6 py-16 text-center" style={{ color: 'var(--danger)' }}>{error}</div>
+  if (!data) return null
+
+  const s = data.summary
+  const hasFilter = search.trim() !== ''
+    || orderFilter.status !== 'all'
+    || orderFilter.abc !== 'all'
+    || orderFilter.only_to_order !== 'all'
+    || orderFilter.only_oos_demand !== 'all'
+    || activeKpi !== null
+
+  const totalPages = pageSize === 0 ? 1 : Math.ceil(filteredRows.length / pageSize)
 
   function exportOrders() {
     exportToExcel(filteredRows.map(r => ({
