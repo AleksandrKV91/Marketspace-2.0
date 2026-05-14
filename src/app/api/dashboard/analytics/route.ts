@@ -33,6 +33,7 @@ function rollup(items: Array<{ revenue: number; prev_revenue: number; chmd: numb
 }
 
 export async function GET(req: Request) {
+  const t0 = Date.now()
   try {
   const supabase = createServiceClient()
   const url = new URL(req.url)
@@ -364,28 +365,49 @@ export async function GET(req: Request) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, revenue], i) => ({ day_index: i, date, revenue }))
 
-  // ── 12. daily_by_sku — только топ-200 SKU. После переезда на RPC daily-строк в
-  // памяти больше нет, поэтому запрашиваем только этот срез отдельным запросом.
+  // ── 12. daily_by_sku — топ-50 SKU × max 14 дней (защита от timeout на длинных периодах).
+  // ОБЪЁМ: 50 SKU × 14д = до 700 строк; URL .in() ~50 × ~40 chars = ~2KB < лимит PostgREST.
+  // На периодах > 14 дней использовался только для:
+  //   1) Excel-экспорта (sheet2) — не критично, можно опустить
+  //   2) Пересчёт daily_chart при SKU-фильтре — фильтрация всё равно работает по hierarchy
+  // Поэтому ограничиваем выборку только последними 14 днями (внутри выбранного периода).
+  // Если запрос фейлит — возвращаем пустой массив, не валим весь response.
   const topSkuMs = Object.entries(skuAgg)
     .sort((a, b) => (b[1].revenue ?? 0) - (a[1].revenue ?? 0))
-    .slice(0, 200)
+    .slice(0, 50)
     .map(([ms]) => ms)
 
   type DailyBySkuRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null }
   let daily_by_sku: Array<{ sku_ms: string; date: string; revenue: number; ad_spend: number }> = []
   if (topSkuMs.length > 0 && fromDate && toDate) {
-    // .in() с длиной 200 укладывается в URL-лимит PostgREST.
-    const { data: dailySliceRows } = await supabase
-      .from('fact_sku_daily')
-      .select('sku_ms, metric_date, revenue, ad_spend')
-      .in('sku_ms', topSkuMs)
-      .gte('metric_date', fromDate).lte('metric_date', toDate)
-    daily_by_sku = ((dailySliceRows ?? []) as DailyBySkuRow[]).map(r => ({
-      sku_ms: r.sku_ms,
-      date:   r.metric_date,
-      revenue:  r.revenue  ?? 0,
-      ad_spend: r.ad_spend ?? 0,
-    }))
+    // Берём только последние 14 дней из выбранного периода — для длинных периодов
+    // (>14д) даём только хвост, иначе 200 SKU × 30+ дней = 6000+ строк и timeout.
+    const sliceFrom = (() => {
+      const t = new Date(toDate)
+      const s = new Date(t); s.setDate(s.getDate() - 13)
+      const sIso = s.toISOString().split('T')[0]
+      return sIso < fromDate ? fromDate : sIso
+    })()
+    try {
+      const { data: dailySliceRows, error: sliceErr } = await supabase
+        .from('fact_sku_daily')
+        .select('sku_ms, metric_date, revenue, ad_spend')
+        .in('sku_ms', topSkuMs)
+        .gte('metric_date', sliceFrom).lte('metric_date', toDate)
+        .range(0, 9_999)
+      if (sliceErr) {
+        console.warn('[analytics] daily_by_sku slice error (non-fatal):', sliceErr.message)
+      } else {
+        daily_by_sku = ((dailySliceRows ?? []) as DailyBySkuRow[]).map(r => ({
+          sku_ms: r.sku_ms,
+          date:   r.metric_date,
+          revenue:  r.revenue  ?? 0,
+          ad_spend: r.ad_spend ?? 0,
+        }))
+      }
+    } catch (e: unknown) {
+      console.warn('[analytics] daily_by_sku threw (non-fatal):', e instanceof Error ? e.message : String(e))
+    }
   }
 
   if (process.env.NODE_ENV !== 'production') {
@@ -393,6 +415,18 @@ export async function GET(req: Request) {
     console.log(`[analytics] revenue: ${Math.round(totalRevenue).toLocaleString()} ₽`)
     console.log(`[analytics] SKUs with activity: ${Object.keys(skuAgg).length}`)
     console.log(`[analytics] period_agg rows: ${periodAggRows.length}, daily_agg rows: ${dailyAggRows.length}, daily_by_sku rows: ${daily_by_sku.length}`)
+  }
+
+  const _diag = {
+    duration_ms: Date.now() - t0,
+    period_days: periodDays,
+    from: fromDate, to: toDate,
+    prev_from: prevFrom, prev_to: prevTo,
+    period_agg_rows: periodAggRows.length,
+    daily_agg_rows: dailyAggRows.length,
+    daily_by_sku_rows: daily_by_sku.length,
+    top_skus_used: topSkuMs.length,
+    sku_total: allSkuMs.size,
   }
 
   return NextResponse.json({
@@ -406,10 +440,11 @@ export async function GET(req: Request) {
       managers:   [...metaMgrs].sort(),
       max_date:   toDate ?? null,
     },
-  } satisfies AnalyticsResponse)
+    _diag,
+  } as AnalyticsResponse & { _diag: typeof _diag })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
-    console.error('[analytics] ERROR:', msg)
-    return NextResponse.json({ error: msg }, { status: 500 })
+    console.error('[analytics] ERROR after', Date.now() - t0, 'ms:', msg)
+    return NextResponse.json({ error: msg, _diag: { duration_ms: Date.now() - t0 } }, { status: 500 })
   }
 }

@@ -477,7 +477,21 @@ export default function OrderTab() {
               { label: 'Горизонт', key: 'horizon', options: [
                 { value: '60', label: '60 дней' },
                 { value: '90', label: '90 дней' },
-              ]},
+              ],
+                // Кастомный горизонт от 1 до 365 дней — для случаев когда нужно заказать
+                // на больший срок чем лог. плечо (например выгодно зафиксировать цену поставщика).
+                // При Apply значение пишется в orderFilter.horizon и запускается перезагрузка
+                // данных — расчёт учитывает сезонность тех же месяцев в новом окне.
+                customInput: {
+                  placeholder: 'Свой',
+                  min: 1,
+                  max: 365,
+                  suffix: 'дн',
+                  // Активно если orderFilter.horizon не равен пресетам
+                  value: (orderFilter.horizon !== '60' && orderFilter.horizon !== '90') ? orderFilter.horizon : '',
+                  onApply: (v) => setOrderFilter(f => ({ ...f, horizon: v || '60' })),
+                },
+              },
               { label: 'Статус', key: 'status', options: [
                 { value: 'all', label: 'Все' },
                 { value: 'critical', label: 'Крит.' },

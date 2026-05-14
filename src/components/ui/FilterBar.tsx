@@ -1,14 +1,24 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Filter, X, Search, Download } from 'lucide-react'
+import { Filter, X, Search, Download, Check } from 'lucide-react'
 
 export interface FilterGroup {
   label: string
   key: string
   options: { value: string; label: string }[]
   color?: string /* var(--danger), var(--warning) etc */
+  /** Опциональный числовой инпут — рендерится после options. Применяется по кнопке (или Enter). */
+  customInput?: {
+    placeholder?: string
+    min?: number
+    max?: number
+    /** Текущее значение (контролируемый компонент). Пустая строка = инпут не активен. */
+    value: string
+    onApply: (v: string) => void
+    suffix?: string  /* "дн" / "%" / etc */
+  }
 }
 
 interface FilterBarProps {
@@ -113,7 +123,7 @@ export function FilterBar({
                 <p className="text-[10px] uppercase tracking-widest font-semibold" style={{ color: 'var(--text-subtle)' }}>
                   {group.label}
                 </p>
-                <div className="flex gap-1 flex-wrap">
+                <div className="flex gap-1 flex-wrap items-center">
                   {group.options.map(opt => {
                     const active = values[group.key] === opt.value
                     return (
@@ -133,12 +143,58 @@ export function FilterBar({
                       </button>
                     )
                   })}
+                  {group.customInput && (
+                    <CustomNumInput {...group.customInput} />
+                  )}
                 </div>
               </div>
             ))}
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  )
+}
+
+function CustomNumInput({ value, onApply, placeholder, min, max, suffix }: NonNullable<FilterGroup['customInput']>) {
+  const [draft, setDraft] = useState(value)
+  // Синхронизируем draft когда внешнее value меняется (например через Reset).
+  useEffect(() => { setDraft(value) }, [value])
+  const apply = () => {
+    const n = parseInt(draft, 10)
+    if (isNaN(n)) { onApply(''); return }
+    const clamped = Math.max(min ?? 1, Math.min(max ?? 9999, n))
+    onApply(String(clamped))
+  }
+  const active = value !== '' && value !== '0'
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        value={draft}
+        placeholder={placeholder ?? '?'}
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') apply() }}
+        className="w-14 px-2 py-1 text-xs rounded-lg outline-none text-center"
+        style={{
+          background: active ? 'var(--accent-glow)' : 'var(--surface-solid)',
+          color: active ? 'var(--accent)' : 'var(--text)',
+          border: '1px solid ' + (active ? 'var(--accent)' : 'var(--border)'),
+        }}
+      />
+      {suffix && <span className="text-[10px]" style={{ color: 'var(--text-subtle)' }}>{suffix}</span>}
+      <button
+        type="button"
+        onClick={apply}
+        title="Применить"
+        className="flex items-center justify-center w-6 h-6 rounded-lg"
+        style={{ background: 'var(--accent)', color: '#fff' }}
+      >
+        <Check size={11} />
+      </button>
     </div>
   )
 }
