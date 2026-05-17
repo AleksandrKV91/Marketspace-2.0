@@ -41,6 +41,17 @@ interface CachedOrdersResponse {
 }
 
 export async function GET(req: Request) {
+  try {
+    return await handle(req)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    const stack = e instanceof Error ? e.stack : undefined
+    console.error('[orders] FATAL:', msg, stack)
+    return NextResponse.json({ error: msg, stack: stack?.split('\n').slice(0, 5).join('\n') }, { status: 500 })
+  }
+}
+
+async function handle(req: Request) {
   const supabase = createServiceClient()
   const url = new URL(req.url)
   const horizon = Math.max(1, Math.min(365, parseInt(url.searchParams.get('horizon') ?? '60', 10) || 60))
@@ -326,18 +337,25 @@ export async function GET(req: Request) {
   const today = maxDate ? new Date(maxDate) : new Date()
   const nowMonth = today.getMonth()  // 0-based
 
-  // Месяцы горизонта: [today + lt, today + lt + horizon]
-  // lt = china.lead_time_days ?? DEFAULT_LEAD_TIME (per-SKU)
+  // Месяцы горизонта по НОВОЙ модели (по запросу пользователя):
+  //   • точка прихода товара = today + lt → берём СЛЕДУЮЩИЙ полный месяц как старт
+  //   • кол-во месяцев = round(horizon / 30) (для 60д = 2 мес, 90д = 3 мес, 120д = 4 мес)
+  //   • месяц прихода НЕ включаем т.к. товар прибудет только в конце lt и реальные продажи
+  //     стартанут с начала следующего месяца.
+  //
+  // Пример: today=13.05, lt=45 → товар придёт ~27.06 → старт = июль; horizon=90 → июль, авг, сен.
   function horizonMonths(lt: number, horizonDays: number): number[] {
-    const start = new Date(today); start.setDate(start.getDate() + lt)
-    const end = new Date(today);   end.setDate(end.getDate() + lt + horizonDays)
+    const arrival = new Date(today); arrival.setDate(arrival.getDate() + lt)
+    // Старт = первое число месяца ПОСЛЕ прихода
+    const start = new Date(arrival.getFullYear(), arrival.getMonth() + 1, 1)
+    const nMonths = Math.max(1, Math.round(horizonDays / 30))
     const months: number[] = []
-    const cur = new Date(start.getFullYear(), start.getMonth(), 1)
-    while (cur <= end) {
+    const cur = new Date(start)
+    for (let i = 0; i < nMonths; i++) {
       months.push(cur.getMonth())
       cur.setMonth(cur.getMonth() + 1)
     }
-    return months.length > 0 ? months : [(nowMonth + 1) % 12]
+    return months
   }
 
   // ── 9. Первый проход: считаем base_31d, cur_coef, target_coef ──────────
@@ -421,25 +439,35 @@ export async function GET(req: Request) {
     const { sku, agg, sales_qty_7d, sales_qty_14d, sales_qty_31d, sales_qty_90d,
             base_31d, base_90d, avg_year, cur_coef, target_coef, horizon_months: hm, lt } = p1
 
-    // ШАГ 2: base_norm — берём 31д или 90д в зависимости от velocityBase
-    const base_active = velocityBase === 90 ? base_90d : base_31d
-    let base_norm = base_active / (cur_coef || 1)
+    // ШАГ 2: base_norm — ДЕ-СЕЗОННЫЕ МЕСЯЧНЫЕ ПРОДАЖИ при коэф=1.
+    // Логика: если за текущий месяц продали sales_qty_31d при коэф=cur_coef, то
+    //         базовая «нормальная» месячная скорость (если бы коэф был 1) = sales/cur_coef.
+    // Источник sales: 31д (быстрая реакция) или 90д_среднее = sales_90d × 31/90 (сглаж).
+    const sales_for_base = velocityBase === 90 ? (sales_qty_90d * 31 / 90) : sales_qty_31d
+    let base_norm = sales_for_base / (cur_coef || 1)
+    const base_active = sales_for_base                // для отображения «использовано sales за окно»
     let used_yoy_fallback = false
     let yoy_base_norm: number | null = null
     if (base_31d < 5 && target_coef > 1.3 && yoyMap[skuMs] != null) {
+      // yoyMap[skuMs] = sales за окно year-1, ±15 дней (31 день). Используем как замену sales_31d.
       const yoy_qty = yoyMap[skuMs]
-      const yoy_base = yoy_qty / 31
-      yoy_base_norm = yoy_base / (cur_coef || 1)
-      if (yoy_base > base_31d) {
+      yoy_base_norm = yoy_qty / (cur_coef || 1)
+      if (yoy_qty > sales_qty_31d) {
         base_norm = yoy_base_norm
         used_yoy_fallback = true
       }
     }
 
-    // ШАГ 3: потребность
-    const demand_qty = base_norm * target_coef * horizon
+    // ШАГ 3: потребность — Σ base_norm × coef_month по каждому полному месяцу горизонта.
+    // Если коэф месяца отсутствует — fallback на avg_year (нейтрально).
+    const horizon_month_coefs = hm.map(m => sku[MONTH_KEYS[m]] ?? avg_year)
+    const demand_qty = horizon_month_coefs.reduce((sum, c) => sum + base_norm * c, 0)
 
-    // ШАГ 4: страховой запас (sigma уже посчитан в Postgres)
+    // ШАГ 4: страховой запас.
+    // Логика: страховой запас покрывает variance во время прихода товара (lead time).
+    //   1) Дневная скорость месяца прихода = base_norm × coef_arrival / 30
+    //   2) safety_days = √lt × CV (Brown's формула — растёт с корнем времени)
+    //   3) safety_qty = daily_velocity_arrival × safety_days
     const sigma_31d = Number(agg?.sigma_31d ?? 0)
     let cv = base_31d > 0.1 ? sigma_31d / base_31d : 1.0
     if (sigma_31d === 0) cv = Math.max(cv, 0.3)
@@ -447,7 +475,12 @@ export async function GET(req: Request) {
     const low_data = non_zero_days < 10
     if (low_data) cv = Math.max(cv, 1.0)
     const safety_days = Math.sqrt(lt) * cv
-    const safety_qty = base_norm * target_coef * safety_days
+    // Месяц прихода: today + lt → его коэф. Для скорости дня в момент прихода.
+    const arrivalDate = new Date(today); arrivalDate.setDate(arrivalDate.getDate() + lt)
+    const arrivalMonth = arrivalDate.getMonth()
+    const arrival_coef = sku[MONTH_KEYS[arrivalMonth]] ?? avg_year
+    const daily_velocity_arrival = (base_norm * arrival_coef) / 30
+    const safety_qty = daily_velocity_arrival * safety_days
 
     // ШАГ 5: что уже есть
     const snap = snapMap[skuMs]
@@ -480,20 +513,12 @@ export async function GET(req: Request) {
     // Заказ менеджера из «Потребность Китай» (СВОД) — отдельно от расчёта
     const svod_order_qty = china?.order_qty ?? 0
 
-    // Прогноз 31д = base_norm × seasonal_coef_next_31d × 31.
-    // 31 дн — чтобы соответствовать колонке «Прод. 31д» (одинаковые окна = честное сравнение).
-    const next31Months: number[] = []
-    {
-      const start = new Date(today)
-      const end = new Date(today); end.setDate(end.getDate() + 31)
-      const cur = new Date(start.getFullYear(), start.getMonth(), 1)
-      while (cur <= end) { next31Months.push(cur.getMonth()); cur.setMonth(cur.getMonth() + 1) }
-    }
-    const next31Coeffs = next31Months.map(m => sku[MONTH_KEYS[m]]).filter((v): v is number => v != null && v > 0)
-    const next31TargetRel = next31Coeffs.length > 0
-      ? (next31Coeffs.reduce((a, b) => a + b, 0) / next31Coeffs.length) / (avg_year || 1)
-      : 1
-    const forecast_30d = Math.round(base_norm * next31TargetRel * 31)
+    // Прогноз 31д = месячные продажи следующего месяца = base_norm × coef_следующего_месяца.
+    // Для текущего месяца forecast будет ~ sales_qty_31d (т.к. base_norm × cur_coef ≈ sales_31d).
+    // Для следующего — base_norm × coef_next_month, что точнее чем «среднее по двум месяцам × 31».
+    const nextMonthIdx = (nowMonth + 1) % 12
+    const nextMonthCoef = sku[MONTH_KEYS[nextMonthIdx]] ?? avg_year
+    const forecast_30d = Math.round(base_norm * nextMonthCoef)
 
     // ABC: 1) direct по sku_ms → 2) прямой fallback по sku_wb из fact_abc →
     // 3) старый fallback через dim_sku (sku_ms ABC → dim_sku → sku_wb → snap.sku_wb)
@@ -545,18 +570,18 @@ export async function GET(req: Request) {
         const v = sku[k]
         return v != null ? Math.round(v * 100) / 100 : null
       }),
-      // Прогноз продаж шт на 6 ближайших месяцев (m..m+5) с учётом сезонности и days_in_month
+      // Прогноз продаж шт на 6 ближайших месяцев (m..m+5).
+      // ФОРМУЛА: month_qty = base_norm × coef_month, где base_norm уже в шт/месяц при коэф=1.
+      // Это совпадает с фактом: cur_month_forecast = base_norm × cur_coef ≈ sales_qty_31d.
       forecast_by_month: Array.from({ length: 6 }, (_, i) => {
         const dt = new Date(today.getFullYear(), today.getMonth() + i, 1)
         const m = dt.getMonth()
         const y = dt.getFullYear()
-        const days = new Date(y, m + 1, 0).getDate()
-        const coef = sku[MONTH_KEYS[m]] ?? null
-        const adj = (coef != null && coef > 0 && avg_year > 0) ? (coef / avg_year) : 1
+        const coef = sku[MONTH_KEYS[m]] ?? avg_year
         return {
           month: m,
           year:  y,
-          qty:   Math.round(base_norm * adj * days),
+          qty:   Math.round(base_norm * coef),
         }
       }),
 

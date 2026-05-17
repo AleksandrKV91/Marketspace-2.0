@@ -72,20 +72,35 @@ function Section({ step, title, color, children }: { step: number | string; titl
   )
 }
 
-/** Миниграфик сезонности — 12 баров (один на месяц). Текущий месяц подсвечен. */
+/** Миниграфик сезонности — 12 баров (один на месяц). Текущий месяц подсвечен.
+ * Высота нормирована к диапазону [min, max] чтобы даже близкие значения (9.7-11.0)
+ * были визуально различимы. Числа коэффициентов показываются над барами. */
 function SeasonalityMini({ coeffs, currentMonth }: { coeffs: Array<number | null>; currentMonth: number }) {
   const valid = coeffs.filter((v): v is number => v != null && v > 0)
   if (valid.length === 0) return (
     <div className="text-[10px]" style={{ color: 'var(--text-subtle)' }}>Сезонность не задана</div>
   )
+  const min = Math.min(...valid)
   const max = Math.max(...valid)
+  const range = max - min || max  // если все одинаковые — высота 100%
   return (
-    <div className="flex items-end gap-[3px] h-12">
+    <div className="flex items-end gap-[3px] h-16">
       {coeffs.map((v, i) => {
-        const h = v != null && v > 0 ? (v / max) * 100 : 4
+        // Нормируем к [20%, 100%] чтобы даже минимум был виден
+        const h = v != null && v > 0
+          ? 20 + ((v - min) / range) * 80
+          : 4
         const isCurrent = i === currentMonth
         return (
-          <div key={i} className="flex flex-col items-center" style={{ flex: '1 1 0' }} title={`${MONTH_RU_FULL[i]}: ${v != null ? v.toFixed(2) : '—'}`}>
+          <div key={i} className="flex flex-col items-center justify-end" style={{ flex: '1 1 0', height: '100%' }} title={`${MONTH_RU_FULL[i]}: ${v != null ? v.toFixed(2) : '—'}`}>
+            {/* Число коэф над баром */}
+            <span className="text-[8px] mb-0.5 font-mono" style={{
+              color: isCurrent ? 'var(--accent)' : 'var(--text-muted)',
+              fontWeight: isCurrent ? 700 : 500,
+              lineHeight: 1,
+            }}>
+              {v != null ? v.toFixed(v >= 10 ? 0 : 1) : '·'}
+            </span>
             <div
               style={{
                 width: '100%', height: `${h}%`, minHeight: 2,
@@ -93,7 +108,7 @@ function SeasonalityMini({ coeffs, currentMonth }: { coeffs: Array<number | null
                 borderRadius: '2px 2px 0 0',
               }}
             />
-            <span className="text-[8px] mt-0.5" style={{ color: isCurrent ? 'var(--accent)' : 'var(--text-subtle)', fontWeight: isCurrent ? 700 : 400 }}>
+            <span className="text-[8px] mt-0.5" style={{ color: isCurrent ? 'var(--accent)' : 'var(--text-subtle)', fontWeight: isCurrent ? 700 : 400, lineHeight: 1 }}>
               {MONTH_RU_SHORT[i]}
             </span>
           </div>
@@ -209,46 +224,50 @@ export function OrderCalcDetails({ row }: { row: OrderRowDetails }) {
           {row.base_90d != null && (
             <Row label="velocity 90д (шт/день)" value={fmt(row.base_90d, 2)} muted />
           )}
-          <Row label={`Используется ${baseLabel} (шт/день)`} value={fmt(baseUsed, 2)} accent />
+          <Row label={`Используется ${baseLabel} (шт за окно)`} value={fmtInt(baseUsed)} accent />
         </Section>
 
         <Section step={2} title="Очистка от сезонности" color="var(--info)">
           <Row label="Коэф. текущего месяца" value={fmt(row.cur_coef, 2)} />
           <Row label="Средн. коэф. по году"  value={fmt(row.avg_year_coef, 2)} />
-          <Row label={`base_norm = velocity ${baseLabel} / коэф = ${fmt(baseUsed, 2)} / ${fmt(row.cur_coef, 2)}`} value={fmt(row.base_norm, 2)} accent />
+          <Row label={`base_norm = продажи 31д / коэф = ${fmtInt(baseUsed)} / ${fmt(row.cur_coef, 2)}`} value={fmtInt(row.base_norm) + ' шт/мес'} accent />
+          <p className="text-[10px] mt-1" style={{ color: 'var(--text-subtle)' }}>
+            base_norm — месячные продажи при коэф сезонности = 1.
+          </p>
           {row.used_yoy_fallback && row.yoy_base_norm != null && (
-            <Row label="YoY base_norm" value={fmt(row.yoy_base_norm, 2)} muted />
+            <Row label="YoY base_norm" value={fmtInt(row.yoy_base_norm)} muted />
           )}
         </Section>
 
         <Section step={3} title="Потребность на горизонт" color="var(--success)">
           <Row label="Горизонт (дней)" value={String(row.horizon_days)} />
-          {row.horizon_months.length > 0 && row.horizon_months.some(h => h.coef != null) ? (
+          {row.horizon_months.length > 0 ? (
             <div className="py-0.5 text-[10px]" style={{ color: 'var(--text-subtle)' }}>
               <table className="w-full">
                 <thead>
                   <tr style={{ color: 'var(--text-muted)' }}>
                     <th className="text-left font-normal">Месяц</th>
                     <th className="text-right font-normal">Коэф</th>
+                    <th className="text-right font-normal">шт</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {row.horizon_months.map((h, i) => (
-                    <tr key={`${h.month}-${i}`}>
-                      <td style={{ color: 'var(--text-muted)' }}>{h.month}</td>
-                      <td className="text-right font-mono">{h.coef != null ? fmt(h.coef, 2) : '—'}</td>
-                    </tr>
-                  ))}
+                  {row.horizon_months.map((h, i) => {
+                    const c = h.coef ?? row.avg_year_coef
+                    const qty = Math.round(row.base_norm * c)
+                    return (
+                      <tr key={`${h.month}-${i}`}>
+                        <td style={{ color: 'var(--text-muted)' }}>{h.month}</td>
+                        <td className="text-right font-mono">{h.coef != null ? fmt(h.coef, 2) : '—'}</td>
+                        <td className="text-right font-mono" style={{ color: 'var(--text)' }}>{fmtInt(qty)}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
-          ) : (
-            <p className="text-[10px] py-1" style={{ color: 'var(--text-subtle)' }}>
-              Коэф. месяцев горизонта отсутствуют — берём avg по году ({fmt(row.avg_year_coef, 2)}).
-            </p>
-          )}
-          <Row label="target_coef (отн.)" value={fmt(row.target_coef, 3)} />
-          <Row label={`Потребность = ${fmt(row.base_norm, 2)} × ${fmt(row.target_coef, 3)} × ${row.horizon_days}`} value={fmtInt(row.demand_qty)} accent />
+          ) : null}
+          <Row label={`Потребность = Σ base_norm × коэф_месяца`} value={fmtInt(row.demand_qty) + ' шт'} accent />
         </Section>
 
         <Section step={4} title="Страховой запас" color="var(--warning)">
@@ -256,7 +275,7 @@ export function OrderCalcDetails({ row }: { row: OrderRowDetails }) {
           <Row label="CV = σ / velocity (вариация спроса)" value={fmt(row.cv, 3)} />
           <Row label={`Лог. плечо (${row.lead_time_days === 45 ? 'фоллбэк 45д' : 'из Зеленка'})`} value={String(row.lead_time_days) + ' дн'} />
           <Row label={`Страх. дни = √${row.lead_time_days} × ${fmt(row.cv, 2)}`} value={fmt(row.safety_days, 1) + ' дн'} />
-          <Row label={`Страх. запас = base_norm × coef × страх.дни`} value={fmtInt(row.safety_qty) + ' шт'} accent />
+          <Row label="Страх. запас = (base_norm × coef_прихода / 30) × страх.дни" value={fmtInt(row.safety_qty) + ' шт'} accent />
         </Section>
 
         <Section step={5} title="Что уже есть" color="var(--text-subtle)">
