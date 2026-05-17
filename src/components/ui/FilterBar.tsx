@@ -160,7 +160,9 @@ function CustomNumInput({ value, onApply, placeholder, min, max, suffix }: NonNu
   const [draft, setDraft] = useState(value)
   // Синхронизируем draft когда внешнее value меняется (например через Reset).
   useEffect(() => { setDraft(value) }, [value])
+  const dirty = draft !== value
   const apply = () => {
+    if (draft === '' || draft === '0') { onApply(''); return }
     const n = parseInt(draft, 10)
     if (isNaN(n)) { onApply(''); return }
     const clamped = Math.max(min ?? 1, Math.min(max ?? 9999, n))
@@ -180,8 +182,8 @@ function CustomNumInput({ value, onApply, placeholder, min, max, suffix }: NonNu
         onKeyDown={e => { if (e.key === 'Enter') apply() }}
         className="w-14 px-2 py-1 text-xs rounded-lg outline-none text-center"
         style={{
-          background: active ? 'var(--accent-glow)' : 'var(--surface-solid)',
-          color: active ? 'var(--accent)' : 'var(--text)',
+          background: 'var(--surface-solid)',
+          color: 'var(--text)',
           border: '1px solid ' + (active ? 'var(--accent)' : 'var(--border)'),
         }}
       />
@@ -189,11 +191,18 @@ function CustomNumInput({ value, onApply, placeholder, min, max, suffix }: NonNu
       <button
         type="button"
         onClick={apply}
-        title="Применить"
-        className="flex items-center justify-center w-6 h-6 rounded-lg"
-        style={{ background: 'var(--accent)', color: '#fff' }}
+        title="Применить значение"
+        disabled={!dirty && !draft}
+        className="flex items-center gap-1 px-2 h-6 rounded-lg text-[10px] font-semibold transition-opacity"
+        style={{
+          background: dirty ? 'var(--success)' : 'var(--surface-solid)',
+          color: dirty ? '#fff' : 'var(--text-muted)',
+          border: '1px solid ' + (dirty ? 'var(--success)' : 'var(--border)'),
+          opacity: !dirty && !draft ? 0.5 : 1,
+          cursor: !dirty && !draft ? 'not-allowed' : 'pointer',
+        }}
       >
-        <Check size={11} />
+        <Check size={10} /> {dirty ? 'Применить' : 'OK'}
       </button>
     </div>
   )

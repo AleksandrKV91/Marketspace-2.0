@@ -507,8 +507,29 @@ export async function GET(req: Request) {
       cur_coef:      Math.round(cur_coef * 100) / 100,
       avg_year_coef: Math.round(avg_year * 100) / 100,
       base_norm:     Math.round(base_norm * 100) / 100,
+      base_active:   Math.round(base_active * 100) / 100,   // используемая velocity (31д или 90д)
+      velocity_base_used: velocityBase,                      // 31 или 90 — для лейбла в UI
       used_yoy_fallback,
       yoy_base_norm: yoy_base_norm != null ? Math.round(yoy_base_norm * 100) / 100 : null,
+      // Полный годовой профиль сезонности (12 значений или null) — для миниграфика в карточке
+      month_coeffs: MONTH_KEYS.map(k => {
+        const v = sku[k]
+        return v != null ? Math.round(v * 100) / 100 : null
+      }),
+      // Прогноз продаж шт на 6 ближайших месяцев (m..m+5) с учётом сезонности и days_in_month
+      forecast_by_month: Array.from({ length: 6 }, (_, i) => {
+        const dt = new Date(today.getFullYear(), today.getMonth() + i, 1)
+        const m = dt.getMonth()
+        const y = dt.getFullYear()
+        const days = new Date(y, m + 1, 0).getDate()
+        const coef = sku[MONTH_KEYS[m]] ?? null
+        const adj = (coef != null && coef > 0 && avg_year > 0) ? (coef / avg_year) : 1
+        return {
+          month: m,
+          year:  y,
+          qty:   Math.round(base_norm * adj * days),
+        }
+      }),
 
       // ШАГ 3
       horizon_months: hm.map(m => ({

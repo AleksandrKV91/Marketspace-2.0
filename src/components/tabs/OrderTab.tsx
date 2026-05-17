@@ -469,29 +469,11 @@ export default function OrderTab() {
             onSearch={setSearch}
             searchPlaceholder="Поиск по SKU или названию..."
             filters={[
-              { label: 'Период', key: 'period', options: [
+              { label: 'Период (выручка)', key: 'period', options: [
                 { value: '7',  label: '7д'  },
                 { value: '14', label: '14д' },
                 { value: '31', label: '31д' },
               ]},
-              { label: 'Горизонт', key: 'horizon', options: [
-                { value: '60', label: '60 дней' },
-                { value: '90', label: '90 дней' },
-              ],
-                // Кастомный горизонт от 1 до 365 дней — для случаев когда нужно заказать
-                // на больший срок чем лог. плечо (например выгодно зафиксировать цену поставщика).
-                // При Apply значение пишется в orderFilter.horizon и запускается перезагрузка
-                // данных — расчёт учитывает сезонность тех же месяцев в новом окне.
-                customInput: {
-                  placeholder: 'Свой',
-                  min: 1,
-                  max: 365,
-                  suffix: 'дн',
-                  // Активно если orderFilter.horizon не равен пресетам
-                  value: (orderFilter.horizon !== '60' && orderFilter.horizon !== '90') ? orderFilter.horizon : '',
-                  onApply: (v) => setOrderFilter(f => ({ ...f, horizon: v || '60' })),
-                },
-              },
               { label: 'Статус', key: 'status', options: [
                 { value: 'all', label: 'Все' },
                 { value: 'critical', label: 'Крит.' },
@@ -512,10 +494,31 @@ export default function OrderTab() {
                 { value: 'all',  label: 'Все' },
                 { value: 'with', label: 'Только OOS+спрос' },
               ]},
-              { label: 'База velocity', key: 'velocity_base', options: [
+              // База velocity (скорость продаж) — 31д реактивно, 90д сглажено.
+              // Стоит рядом с Горизонтом — оба влияют на расчёт заказа.
+              { label: 'База velocity (продаж/день)', key: 'velocity_base', options: [
                 { value: '31', label: '31 дн' },
                 { value: '90', label: '90 дн' },
               ]},
+              // Горизонт заказа: на сколько дней наперёд считаем потребность.
+              // Customs от 1 до 180 дней — для случаев когда нужно зафиксировать цену
+              // поставщика или закупить вперёд с запасом большим чем лог. плечо.
+              {
+                label: 'Горизонт заказа (дней)',
+                key: 'horizon',
+                options: [
+                  { value: '60', label: '60 дн' },
+                  { value: '90', label: '90 дн' },
+                ],
+                customInput: {
+                  placeholder: 'Свой',
+                  min: 1,
+                  max: 180,
+                  suffix: 'дн',
+                  value: (orderFilter.horizon !== '60' && orderFilter.horizon !== '90') ? orderFilter.horizon : '',
+                  onApply: (v) => setOrderFilter(f => ({ ...f, horizon: v || '60' })),
+                },
+              },
             ]}
             values={orderFilter}
             onChange={(k, v) => setOrderFilter(f => ({ ...f, [k]: v }))}
