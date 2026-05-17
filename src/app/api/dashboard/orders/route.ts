@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
 import { rpcFetchAll } from '@/lib/supabase/rpcFetchAll'
-import { cached } from '@/lib/cache'
+import { cached, cacheGet, cacheSet } from '@/lib/cache'
 
 export const maxDuration = 300
 
@@ -28,15 +28,44 @@ function addDaysISO(iso: string, days: number): string {
   return d.toISOString().split('T')[0]
 }
 
+// Server-side кэш всего ответа. Ключ = параметры запроса (horizon|period|velocity_base).
+// Это устраняет повторную работу для одних и тех же параметров — для тяжёлых горизонтов
+// (>120 дней) первый запрос строит ответ ~5-15с, дальнейшие из кэша моментально.
+// TTL 5 минут — успевает покрыть навигацию пользователя по таблице, но не устаревает
+// дольше чем 1 апдейт sku-report (обычно раз в день).
+const ORDERS_RESPONSE_TTL_MS = 5 * 60_000
+
+interface CachedOrdersResponse {
+  body: unknown
+  built_at: number
+}
+
 export async function GET(req: Request) {
   const supabase = createServiceClient()
   const url = new URL(req.url)
-  const horizon = parseInt(url.searchParams.get('horizon') ?? '60', 10)
+  const horizon = Math.max(1, Math.min(365, parseInt(url.searchParams.get('horizon') ?? '60', 10) || 60))
   const period = parseInt(url.searchParams.get('period') ?? '31', 10)  // 7|14|31
   const velocityBase = parseInt(url.searchParams.get('velocity_base') ?? '90', 10) // 31|90
   // Month-фильтр убран по запросу пользователя — таблица всегда показывает выручку
   // за скользящие последние 31 день, дельта vs предыдущие 31 день.
   // Глобальные фильтры (category/manager/novelty) на этой вкладке НЕ применяются.
+
+  // ── Server-cache: проверка ДО любых тяжёлых запросов ─────────────────────
+  const cacheKey = `orders_response:h${horizon}:p${period}:v${velocityBase}`
+  const hit = cacheGet<CachedOrdersResponse>(cacheKey, ORDERS_RESPONSE_TTL_MS)
+  if (hit) {
+    const age = Math.floor((Date.now() - hit.built_at) / 1000)
+    return new NextResponse(JSON.stringify(hit.body), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'x-cache': 'HIT',
+        'x-cache-age-sec': String(age),
+        // Vercel/CDN тоже кэширует на 5 минут (s-maxage), stale-while-revalidate на минуту
+        'cache-control': `public, s-maxage=${Math.max(1, 300 - age)}, stale-while-revalidate=60`,
+      },
+    })
+  }
 
   // ── 1-2. Параллельно: uploads + dim_sku + max dates ─────────────────────
   type DimRow = {
@@ -710,7 +739,7 @@ export async function GET(req: Request) {
     skus_with_revenue_in_window:  skusWithRevenue,
   }
 
-  return NextResponse.json({
+  const body = {
     summary,
     rows,
     heatmap_rows,
@@ -721,5 +750,19 @@ export async function GET(req: Request) {
     period_from: fromDaily,
     period_to:   toDaily,
     _diag,
+  }
+
+  // Сохраняем построенный ответ в server-cache — следующий тот же запрос отдаст моментально.
+  cacheSet<CachedOrdersResponse>(cacheKey, { body, built_at: Date.now() })
+
+  return new NextResponse(JSON.stringify(body), {
+    status: 200,
+    headers: {
+      'content-type': 'application/json',
+      'x-cache': 'MISS',
+      // Vercel Edge CDN кэширует на 5 мин + 1 мин SWR. При том же URL клиенту приходит
+      // ответ с CDN, минуя нашу функцию вообще.
+      'cache-control': 'public, s-maxage=300, stale-while-revalidate=60',
+    },
   })
 }

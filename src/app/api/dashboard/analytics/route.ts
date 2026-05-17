@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
 import { rpcFetchAll } from '@/lib/supabase/rpcFetchAll'
-import { cached } from '@/lib/cache'
+import { cached, cacheGet, cacheSet } from '@/lib/cache'
 
 export const maxDuration = 300
 
@@ -32,6 +32,15 @@ function rollup(items: Array<{ revenue: number; prev_revenue: number; chmd: numb
   return { revenue, prev_revenue, delta_pct, chmd, margin_pct, drr }
 }
 
+// Server-side кэш ответа analytics. Ключ = from|to|category|manager|novelty.
+// Для длинных периодов (30+ дней) первый запрос строит ответ медленно — последующие моментально.
+const ANALYTICS_RESPONSE_TTL_MS = 5 * 60_000
+
+interface CachedAnalyticsResponse {
+  body: unknown
+  built_at: number
+}
+
 export async function GET(req: Request) {
   const t0 = Date.now()
   try {
@@ -42,6 +51,22 @@ export async function GET(req: Request) {
   const catFilter  = url.searchParams.get('category') ?? ''
   const mgrFilter  = url.searchParams.get('manager') ?? ''
   const novFilter  = url.searchParams.get('novelty') ?? ''
+
+  // ── Server-cache: проверка ДО любых тяжёлых запросов ─────────────────────
+  const cacheKey = `analytics_response:${fromParam ?? '-'}:${toParam ?? '-'}:${catFilter}:${mgrFilter}:${novFilter}`
+  const hit = cacheGet<CachedAnalyticsResponse>(cacheKey, ANALYTICS_RESPONSE_TTL_MS)
+  if (hit) {
+    const age = Math.floor((Date.now() - hit.built_at) / 1000)
+    return new NextResponse(JSON.stringify(hit.body), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'x-cache': 'HIT',
+        'x-cache-age-sec': String(age),
+        'cache-control': `public, s-maxage=${Math.max(1, 300 - age)}, stale-while-revalidate=60`,
+      },
+    })
+  }
 
   // ── 1. dim_sku (TTL 10min) ───────────────────────────────────────────────────
   type DimRow = { sku_ms: string; sku_wb: number | null; name: string | null; category_wb: string | null; subject_wb: string | null }
@@ -429,7 +454,7 @@ export async function GET(req: Request) {
     sku_total: allSkuMs.size,
   }
 
-  return NextResponse.json({
+  const body = {
     kpi,
     hierarchy,
     daily_chart,
@@ -441,7 +466,18 @@ export async function GET(req: Request) {
       max_date:   toDate ?? null,
     },
     _diag,
-  } as AnalyticsResponse & { _diag: typeof _diag })
+  } as AnalyticsResponse & { _diag: typeof _diag }
+
+  cacheSet<CachedAnalyticsResponse>(cacheKey, { body, built_at: Date.now() })
+
+  return new NextResponse(JSON.stringify(body), {
+    status: 200,
+    headers: {
+      'content-type': 'application/json',
+      'x-cache': 'MISS',
+      'cache-control': 'public, s-maxage=300, stale-while-revalidate=60',
+    },
+  })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('[analytics] ERROR after', Date.now() - t0, 'ms:', msg)

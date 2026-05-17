@@ -501,8 +501,9 @@ export default function OrderTab() {
                 { value: '90', label: '90 дн' },
               ]},
               // Горизонт заказа: на сколько дней наперёд считаем потребность.
-              // Customs от 1 до 180 дней — для случаев когда нужно зафиксировать цену
+              // Customs от 1 до 365 дней — для случаев когда нужно зафиксировать цену
               // поставщика или закупить вперёд с запасом большим чем лог. плечо.
+              // Бэкенд кэширует ответ на 5 минут + Vercel CDN — повторные клики моментально.
               {
                 label: 'Горизонт заказа (дней)',
                 key: 'horizon',
@@ -513,7 +514,7 @@ export default function OrderTab() {
                 customInput: {
                   placeholder: 'Свой',
                   min: 1,
-                  max: 180,
+                  max: 365,
                   suffix: 'дн',
                   value: (orderFilter.horizon !== '60' && orderFilter.horizon !== '90') ? orderFilter.horizon : '',
                   onApply: (v) => setOrderFilter(f => ({ ...f, horizon: v || '60' })),
