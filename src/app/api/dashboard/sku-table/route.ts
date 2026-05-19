@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
+import { rpcFetchAll } from '@/lib/supabase/rpcFetchAll'
 import { computeScore } from '@/lib/scoring'
+import { isNovelty, matchesNoveltyFilter } from '@/lib/novelty'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 export async function GET(req: NextRequest) {
   try {
@@ -103,55 +105,61 @@ async function handler(req: NextRequest) {
     prevFrom = pFrom.toISOString().split('T')[0]
   }
 
-  // ── 5. fact_sku_daily — daily metrics ────────────────────────────────────
-  type DailyRow = {
-    sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null
-    drr_total: number | null; ctr: number | null; cr_cart: number | null
-    cr_order: number | null; cpm: number | null; chmd_rub: number | null
+  // ── 5. Серверная агрегация per-SKU через RPC ─────────────────────────────
+  // Раньше fetchAll<fact_sku_daily> тянул сотни тысяч строк — на 30+ днях таймаут.
+  // Migration: supabase/022_overview_sku_rpcs.sql
+  type SkuPeriodAggRpc = {
+    sku_ms: string
+    curr_revenue: number; curr_ad_spend: number
+    curr_chmd_rub: number; curr_margin_rub: number
+    curr_ctr_avg: number | null; curr_cr_cart_avg: number | null
+    curr_cr_order_avg: number | null
+    curr_cpm_avg: number | null; curr_cpc_avg: number | null
+    curr_days: number
+    prev_revenue: number; prev_ad_spend: number
+    prev_chmd_rub: number; prev_margin_rub: number
   }
-  const [dailyRows, prevDailyRows] = await Promise.all([
-    effectiveFrom && effectiveTo
-      ? fetchAll<DailyRow>(
-          (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, metric_date, revenue, ad_spend, drr_total, ctr, cr_cart, cr_order, cpm, chmd_rub')
-            .gte('metric_date', effectiveFrom!).lte('metric_date', effectiveTo!),
-          supabase,
-        )
-      : Promise.resolve([]),
-    prevFrom && prevTo
-      ? fetchAll<Pick<DailyRow, 'sku_ms' | 'revenue'>>(
-          (sb) => sb.from('fact_sku_daily')
-            .select('sku_ms, revenue')
-            .gte('metric_date', prevFrom!).lte('metric_date', prevTo!),
-          supabase,
-        )
-      : Promise.resolve([]),
-  ])
+  const haveDates = !!(effectiveFrom && effectiveTo && prevFrom && prevTo)
+  const aggRes = haveDates
+    ? await rpcFetchAll<SkuPeriodAggRpc>(() => supabase.rpc('sku_period_full_agg', {
+        p_from: effectiveFrom, p_to: effectiveTo, p_prev_from: prevFrom, p_prev_to: prevTo,
+      }))
+    : { data: [] as SkuPeriodAggRpc[], error: null }
 
-  // ── 6. Aggregate daily ────────────────────────────────────────────────────
+  if (aggRes.error) {
+    const msg = aggRes.error.message ?? 'unknown'
+    if (/function|sku_period_full_agg/i.test(msg)) {
+      return NextResponse.json({
+        error: 'Миграция 022_overview_sku_rpcs не применена. Запустите supabase/022_overview_sku_rpcs.sql в Supabase Studio → SQL editor.',
+        details: msg,
+      }, { status: 503 })
+    }
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
+
   type DailyAgg = {
     revenue: number; ad_spend: number; chmd: number
-    drr: number[]; ctr: number[]; cr_cart: number[]; cr_order: number[]; cpm: number[]
+    drr: number | null; ctr: number | null
+    cr_cart: number | null; cr_order: number | null; cpm: number | null
     days: number
   }
   const dailyByMs: Record<string, DailyAgg> = {}
-  for (const r of dailyRows) {
-    if (!dailyByMs[r.sku_ms]) dailyByMs[r.sku_ms] = { revenue: 0, ad_spend: 0, chmd: 0, drr: [], ctr: [], cr_cart: [], cr_order: [], cpm: [], days: 0 }
-    const d = dailyByMs[r.sku_ms]
-    d.revenue  += r.revenue   ?? 0
-    d.ad_spend += r.ad_spend  ?? 0
-    d.chmd     += r.chmd_rub  ?? 0
-    if (r.drr_total != null) d.drr.push(r.drr_total)
-    if (r.ctr      != null) d.ctr.push(r.ctr)
-    if (r.cr_cart  != null) d.cr_cart.push(r.cr_cart)
-    if (r.cr_order != null) d.cr_order.push(r.cr_order)
-    if (r.cpm      != null) d.cpm.push(r.cpm)
-    d.days++
-  }
-
   const prevRevByMs: Record<string, number> = {}
-  for (const r of prevDailyRows) {
-    prevRevByMs[r.sku_ms] = (prevRevByMs[r.sku_ms] ?? 0) + (r.revenue ?? 0)
+  for (const r of aggRes.data) {
+    const revenue = Number(r.curr_revenue ?? 0)
+    const adSpend = Number(r.curr_ad_spend ?? 0)
+    dailyByMs[r.sku_ms] = {
+      revenue, ad_spend: adSpend,
+      chmd: Number(r.curr_chmd_rub ?? 0),
+      drr: revenue > 0 ? adSpend / revenue : null,
+      ctr:      r.curr_ctr_avg      != null ? Number(r.curr_ctr_avg)      : null,
+      cr_cart:  r.curr_cr_cart_avg  != null ? Number(r.curr_cr_cart_avg)  : null,
+      cr_order: r.curr_cr_order_avg != null ? Number(r.curr_cr_order_avg) : null,
+      cpm:      r.curr_cpm_avg      != null ? Number(r.curr_cpm_avg)      : null,
+      days: Number(r.curr_days ?? 0),
+    }
+    const prev = Number(r.prev_revenue ?? 0)
+    if (prev > 0) prevRevByMs[r.sku_ms] = prev
   }
 
   // Universe: all SKUs with snap data; supplement with those that only have daily data
@@ -159,8 +167,6 @@ async function handler(req: NextRequest) {
     ...Object.keys(snapByMs),
     ...Object.keys(dailyByMs),
   ])
-
-  const avg = (arr: number[]) => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null
 
   // ── 7. Build rows ─────────────────────────────────────────────────────────
   const rows = Array.from(allSkuMs).map(skuMs => {
@@ -180,9 +186,9 @@ async function handler(req: NextRequest) {
     const revenue  = daily?.revenue  ?? 0
     const adSpend  = daily?.ad_spend ?? 0
     const drr      = revenue > 0 ? adSpend / revenue : null
-    const ctr      = avg(daily?.ctr      ?? [])
-    const cr_basket = avg(daily?.cr_cart ?? [])
-    const cr_order = avg(daily?.cr_order ?? [])
+    const ctr      = daily?.ctr      ?? null
+    const cr_basket = daily?.cr_cart ?? null
+    const cr_order = daily?.cr_order ?? null
     const cpo      = daily && daily.days > 0 && adSpend > 0 ? adSpend / daily.days : null
     const forecast30d = daily && daily.days > 0
       ? Math.round((revenue / daily.days) * 30)
@@ -239,7 +245,7 @@ async function handler(req: NextRequest) {
       abc_class:     null,
       oos_status,
       margin_status,
-      novelty: snap?.novelty_status === 'Новинки' || snap?.novelty_status === 'new',
+      novelty: isNovelty(snap?.novelty_status),
     }
   })
 
@@ -255,8 +261,7 @@ async function handler(req: NextRequest) {
 
   const filteredRows = searchFiltered.filter(r => {
     if (categoryFilter && r.category !== categoryFilter) return false
-    if (noveltyFilter === 'Новинки'    && !r.novelty) return false
-    if (noveltyFilter === 'Не новинки' && r.novelty)  return false
+    if (noveltyFilter && !matchesNoveltyFilter(r.novelty ? 'Новинка' : null, noveltyFilter)) return false
     return true
   })
 

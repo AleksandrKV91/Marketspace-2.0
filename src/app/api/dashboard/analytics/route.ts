@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
 import { rpcFetchAll } from '@/lib/supabase/rpcFetchAll'
 import { cached, cacheGet, cacheSet } from '@/lib/cache'
+import { matchesNoveltyFilter } from '@/lib/novelty'
 
 export const maxDuration = 300
 
@@ -291,8 +292,7 @@ export async function GET(req: Request) {
       const snap = snapByMs[ms]
       if (catFilter && (dim?.category_wb ?? '') !== catFilter) { allSkuMs.delete(ms); continue }
       if (mgrFilter && (snap?.manager ?? '') !== mgrFilter)    { allSkuMs.delete(ms); continue }
-      if (novFilter === 'Новинки'    && snap?.novelty_status !== 'Новинки')    { allSkuMs.delete(ms); continue }
-      if (novFilter === 'Не новинки' && snap?.novelty_status === 'Новинки')    { allSkuMs.delete(ms); continue }
+      if (novFilter && !matchesNoveltyFilter(snap?.novelty_status, novFilter)) { allSkuMs.delete(ms); continue }
     }
   }
 

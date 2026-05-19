@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
+import { rpcFetchAll } from '@/lib/supabase/rpcFetchAll'
 import { cached } from '@/lib/cache'
+import { matchesNoveltyFilter } from '@/lib/novelty'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 function shiftDate(iso: string, days: number): string {
   const d = new Date(iso)
@@ -151,29 +153,7 @@ export async function GET(req: NextRequest) {
     price: number | null
   }
 
-  // Основной запрос — расширенный диапазон
-  const dailyRows = extFrom && extTo
-    ? await fetchAll<DailyRow>(
-        (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share, price')
-          .gte('metric_date', extFrom!).lte('metric_date', extTo!)
-          .order('sku_ms').order('metric_date'),
-        supabase,
-      )
-    : []
-
-  // Предыдущий период — отдельный запрос
-  const prevDailyRows = prevFrom && prevTo
-    ? await fetchAll<DailyRow>(
-        (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share, price')
-          .gte('metric_date', prevFrom!).lte('metric_date', prevTo!)
-          .order('sku_ms').order('metric_date'),
-        supabase,
-      )
-    : []
-
-  // Build allowed sku_ms set when global filters are active
+  // Allowed-SKU set (для глобальных фильтров)
   let allowedSkuMs: Set<string> | null = null
   if (categoryFilter || managerFilter || noveltyFilter) {
     allowedSkuMs = new Set<string>()
@@ -181,24 +161,153 @@ export async function GET(req: NextRequest) {
     for (const ms of allSkuMs) {
       const meetsManager  = !managerFilter  || (managerMap[ms] ?? '') === managerFilter
       const meetsCategory = !categoryFilter || (nameMap[ms]?.category_wb ?? '') === categoryFilter
-      const ns = noveltyMap[ms] ?? ''
-      const meetsNovelty  = !noveltyFilter  ||
-        (noveltyFilter === 'Новинки' && ns === 'Новинки') ||
-        (noveltyFilter === 'Не новинки' && ns !== 'Новинки')
+      const meetsNovelty  = matchesNoveltyFilter(noveltyMap[ms], noveltyFilter)
       if (meetsManager && meetsCategory && meetsNovelty) allowedSkuMs.add(ms)
     }
   }
 
-  // Строки только за текущий период (для агрегации KPI и графиков)
-  const currDailyRows = fromDaily && toDaily
-    ? dailyRows.filter(r =>
-        r.metric_date >= fromDaily! && r.metric_date <= toDaily! &&
-        (!allowedSkuMs || allowedSkuMs.has(r.sku_ms))
-      )
-    : []
+  // ── KPI воронки и дневной график через RPC (миграция 022) ──────────────────
+  type FunnelPeriodRpc = {
+    is_current: boolean
+    total_revenue: number; total_ad_spend: number
+    ctr_avg: number | null; cr_cart_avg: number | null; cr_order_avg: number | null
+    cpm_avg: number | null; cpc_avg: number | null; ad_order_share_avg: number | null
+  }
+  type DailyFunnelRpc = {
+    metric_date: string
+    revenue: number; ad_spend: number
+    ctr_avg: number | null; cr_cart_avg: number | null; cr_order_avg: number | null
+    cpm_avg: number | null; cpc_avg: number | null; ad_order_share_avg: number | null
+    price_wgt: number; price_weight: number
+  }
+  // Если глобальные фильтры активны — fallback к лёгкому fetchAll по нужным SKU.
+  // Если фильтров нет (типичный случай) — используем RPC, агрегирующую в Postgres.
+  let funnelRows: FunnelPeriodRpc[] = []
+  let dailyRpcRows: DailyFunnelRpc[] = []
+  // Per-SKU агрегаты (для manager_table) — нужны всегда.
+  type SkuPeriodAggRpc = {
+    sku_ms: string
+    curr_revenue: number; curr_ad_spend: number
+    curr_ctr_avg: number | null; curr_cr_order_avg: number | null
+    curr_cpm_avg: number | null; curr_cpc_avg: number | null
+    curr_cr_cart_avg: number | null
+  }
+  let perSkuAgg: SkuPeriodAggRpc[] = []
+  if (fromDaily && toDaily && prevFrom && prevTo) {
+    const perSkuPromise = rpcFetchAll<SkuPeriodAggRpc>(() => supabase.rpc('sku_period_full_agg', {
+      p_from: fromDaily, p_to: toDaily, p_prev_from: prevFrom, p_prev_to: prevTo,
+    }))
+    if (!allowedSkuMs) {
+      const [funnelRes, dailyRes, perSkuRes] = await Promise.all([
+        rpcFetchAll<FunnelPeriodRpc>(() => supabase.rpc('prices_funnel_period_agg', {
+          p_from: fromDaily, p_to: toDaily, p_prev_from: prevFrom, p_prev_to: prevTo,
+        })),
+        rpcFetchAll<DailyFunnelRpc>(() => supabase.rpc('prices_daily_funnel_agg', {
+          p_from: fromDaily, p_to: toDaily,
+        })),
+        perSkuPromise,
+      ])
+      const firstErr = funnelRes.error ?? dailyRes.error ?? perSkuRes.error
+      if (firstErr) {
+        const msg = firstErr.message ?? 'unknown'
+        if (/function|prices_funnel_period_agg|prices_daily_funnel_agg|sku_period_full_agg/i.test(msg)) {
+          return NextResponse.json({
+            error: 'Миграция 022_overview_sku_rpcs не применена. Запустите supabase/022_overview_sku_rpcs.sql в Supabase Studio → SQL editor.',
+            details: msg,
+          }, { status: 503 })
+        }
+        return NextResponse.json({ error: msg }, { status: 500 })
+      }
+      funnelRows = funnelRes.data
+      dailyRpcRows = dailyRes.data
+      perSkuAgg = perSkuRes.data
+    } else {
+      const perSkuRes = await perSkuPromise
+      if (perSkuRes.error) {
+        const msg = perSkuRes.error.message ?? 'unknown'
+        if (/function|sku_period_full_agg/i.test(msg)) {
+          return NextResponse.json({
+            error: 'Миграция 022_overview_sku_rpcs не применена. Запустите supabase/022_overview_sku_rpcs.sql в Supabase Studio → SQL editor.',
+            details: msg,
+          }, { status: 503 })
+        }
+        return NextResponse.json({ error: msg }, { status: 500 })
+      }
+      perSkuAgg = perSkuRes.data
+    }
+  }
 
-  // Индекс daily по (sku_ms, metric_date) для быстрого поиска при расчёте дельт цен
-  type DayKey = string // `${sku_ms}|${metric_date}`
+  // Для расчёта дельт цен — daily ТОЛЬКО для SKU с реальными изменениями цен в периоде.
+  // Окно ±7 дней вокруг каждой даты изменения.
+  const WINDOW = 7
+  const skusWithChange = new Set<string>()
+  {
+    const tmpBySkuWb: Record<number, Array<{ date: string; price: number | null; sku_ms: string | null }>> = {}
+    for (const r of priceRows) {
+      if (!r.sku_wb) continue
+      if (!tmpBySkuWb[r.sku_wb]) tmpBySkuWb[r.sku_wb] = []
+      tmpBySkuWb[r.sku_wb].push({ date: r.price_date, price: r.price, sku_ms: r.sku_ms })
+    }
+    for (const entries of Object.values(tmpBySkuWb)) {
+      entries.sort((a, b) => a.date.localeCompare(b.date))
+      for (let i = 1; i < entries.length; i++) {
+        const cur = entries[i]; const prev = entries[i - 1]
+        if (cur.price !== prev.price && cur.date >= (fromParam ?? '') && cur.date <= (toParam ?? '9999')) {
+          if (cur.sku_ms) skusWithChange.add(cur.sku_ms)
+        }
+      }
+    }
+  }
+
+  // Подсчёт диапазона дат, нужных для дельт цен (минимизация выборки).
+  const dailyRows: DailyRow[] = []
+  if (extFrom && extTo && skusWithChange.size > 0) {
+    const skuList = [...skusWithChange]
+    // Chunk по 200 SKU чтобы PostgREST URL не разрастался.
+    for (let i = 0; i < skuList.length; i += 200) {
+      const chunk = skuList.slice(i, i + 200)
+      const rows = await fetchAll<DailyRow>(
+        (sb) => sb.from('fact_sku_daily')
+          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share, price')
+          .in('sku_ms', chunk)
+          .gte('metric_date', extFrom!).lte('metric_date', extTo!),
+        supabase,
+      )
+      dailyRows.push(...rows)
+    }
+  }
+
+  // Fallback при активных фильтрах: тянуть полный daily, но только за период (без расширения),
+  // для KPI и daily-графика — иначе RPC игнорирует фильтр SKU.
+  let currDailyRows: DailyRow[] = []
+  let prevDailyRows: DailyRow[] = []
+  if (allowedSkuMs && fromDaily && toDaily) {
+    const skuList = [...allowedSkuMs]
+    for (let i = 0; i < skuList.length; i += 200) {
+      const chunk = skuList.slice(i, i + 200)
+      const [currR, prevR] = await Promise.all([
+        fetchAll<DailyRow>(
+          (sb) => sb.from('fact_sku_daily')
+            .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share, price')
+            .in('sku_ms', chunk)
+            .gte('metric_date', fromDaily!).lte('metric_date', toDaily!),
+          supabase,
+        ),
+        prevFrom && prevTo ? fetchAll<DailyRow>(
+          (sb) => sb.from('fact_sku_daily')
+            .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_cart, cr_order, cpm, cpc, ad_order_share, price')
+            .in('sku_ms', chunk)
+            .gte('metric_date', prevFrom).lte('metric_date', prevTo),
+          supabase,
+        ) : Promise.resolve([]),
+      ])
+      currDailyRows.push(...currR)
+      prevDailyRows.push(...prevR)
+    }
+  }
+
+  // Индекс daily по (sku_ms, metric_date) для расчёта дельт цен
+  type DayKey = string
   const dailyIndex: Record<DayKey, DailyRow> = {}
   for (const r of dailyRows) {
     dailyIndex[`${r.sku_ms}|${r.metric_date}`] = r
@@ -206,7 +315,6 @@ export async function GET(req: NextRequest) {
 
   function avgWindow(sku_ms: string, fromDate: string, toDate: string, field: keyof DailyRow): number | null {
     const vals: number[] = []
-    // iterate days
     const start = new Date(fromDate)
     const end = new Date(toDate)
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
@@ -218,67 +326,70 @@ export async function GET(req: NextRequest) {
     return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null
   }
 
+  const avg = (arr: number[]) => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0
   function avgRows(rows: DailyRow[], field: keyof DailyRow): number {
     const vals = rows.map(r => r[field] as number | null).filter((v): v is number => v != null)
     return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : 0
   }
 
-  // Агрегация KPI текущего периода
+  // ── Воронка: KPI period и daily-chart ─────────────────────────────────────
   let totalRevenue = 0
   let totalAdSpend = 0
+  let avgDayCtr = 0, avgDayCrCart = 0, avgDayCrOrder = 0
+  let avgDayCpm = 0, avgDayCpc = 0, avgDayAdShare = 0
+  let prevTotalRevenue = 0, prevTotalAdSpend = 0
+  let prevAvgCpc = 0, prevAvgCrOrder = 0
+  let prevAvgCtr = 0, prevAvgCrCart = 0, prevAvgCpm = 0, prevAvgAdShare = 0
 
-  type DayAgg = {
-    ctrSum: number; ctrN: number
-    crCartSum: number; crCartN: number
-    crOrderSum: number; crOrderN: number
-    cpmSum: number; cpmN: number
-    cpcSum: number; cpcN: number
-    adShareSum: number; adShareN: number
-    revenue: number
-    priceWeightedSum: number; priceWeightTotal: number
-  }
-  const dateMap: Record<string, DayAgg> = {}
-
-  for (const r of currDailyRows) {
-    totalRevenue += r.revenue ?? 0
-    totalAdSpend += r.ad_spend ?? 0
-
-    const d = r.metric_date
-    if (!dateMap[d]) dateMap[d] = {
-      ctrSum: 0, ctrN: 0, crCartSum: 0, crCartN: 0, crOrderSum: 0, crOrderN: 0,
-      cpmSum: 0, cpmN: 0, cpcSum: 0, cpcN: 0,
-      adShareSum: 0, adShareN: 0, revenue: 0,
-      priceWeightedSum: 0, priceWeightTotal: 0,
+  if (allowedSkuMs) {
+    // ── Фильтры активны — считаем по урезанной выборке currDailyRows / prevDailyRows ──
+    for (const r of currDailyRows) {
+      totalRevenue += r.revenue ?? 0
+      totalAdSpend += r.ad_spend ?? 0
     }
-    const day = dateMap[d]
-    const rev = r.revenue ?? 0
-    day.revenue += rev
-    if (r.ctr != null) { day.ctrSum += r.ctr; day.ctrN++ }
-    if (r.cr_cart != null) { day.crCartSum += r.cr_cart; day.crCartN++ }
-    if (r.cr_order != null) { day.crOrderSum += r.cr_order; day.crOrderN++ }
-    if (r.cpm != null) { day.cpmSum += r.cpm; day.cpmN++ }
-    if (r.cpc != null) { day.cpcSum += r.cpc; day.cpcN++ }
-    if (r.ad_order_share != null) { day.adShareSum += r.ad_order_share; day.adShareN++ }
-    // Средневзвешенная цена по выручке
-    if (r.price != null && rev > 0) { day.priceWeightedSum += r.price * rev; day.priceWeightTotal += rev }
+    avgDayCtr     = avgRows(currDailyRows, 'ctr')
+    avgDayCrCart  = avgRows(currDailyRows, 'cr_cart')
+    avgDayCrOrder = avgRows(currDailyRows, 'cr_order')
+    avgDayCpm     = avgRows(currDailyRows, 'cpm')
+    avgDayCpc     = avgRows(currDailyRows, 'cpc')
+    avgDayAdShare = avgRows(currDailyRows, 'ad_order_share')
+    for (const r of prevDailyRows) {
+      prevTotalRevenue += r.revenue ?? 0
+      prevTotalAdSpend += r.ad_spend ?? 0
+    }
+    prevAvgCpc     = avgRows(prevDailyRows, 'cpc')
+    prevAvgCrOrder = avgRows(prevDailyRows, 'cr_order')
+    prevAvgCtr     = avgRows(prevDailyRows, 'ctr')
+    prevAvgCrCart  = avgRows(prevDailyRows, 'cr_cart')
+    prevAvgCpm     = avgRows(prevDailyRows, 'cpm')
+    prevAvgAdShare = avgRows(prevDailyRows, 'ad_order_share')
+  } else {
+    // ── Фильтров нет — KPI из RPC ──
+    for (const r of funnelRows) {
+      if (r.is_current) {
+        totalRevenue   = Number(r.total_revenue  ?? 0)
+        totalAdSpend   = Number(r.total_ad_spend ?? 0)
+        avgDayCtr      = Number(r.ctr_avg          ?? 0)
+        avgDayCrCart   = Number(r.cr_cart_avg      ?? 0)
+        avgDayCrOrder  = Number(r.cr_order_avg     ?? 0)
+        avgDayCpm      = Number(r.cpm_avg          ?? 0)
+        avgDayCpc      = Number(r.cpc_avg          ?? 0)
+        avgDayAdShare  = Number(r.ad_order_share_avg ?? 0)
+      } else {
+        prevTotalRevenue  = Number(r.total_revenue  ?? 0)
+        prevTotalAdSpend  = Number(r.total_ad_spend ?? 0)
+        prevAvgCpc        = Number(r.cpc_avg          ?? 0)
+        prevAvgCrOrder    = Number(r.cr_order_avg     ?? 0)
+        prevAvgCtr        = Number(r.ctr_avg          ?? 0)
+        prevAvgCrCart     = Number(r.cr_cart_avg      ?? 0)
+        prevAvgCpm        = Number(r.cpm_avg          ?? 0)
+        prevAvgAdShare    = Number(r.ad_order_share_avg ?? 0)
+      }
+    }
   }
-
-  const avg = (arr: number[]) => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0
 
   const drr = totalRevenue > 0 ? totalAdSpend / totalRevenue : 0
-
-  // CTR/CR/CPM/CPC — среднее по дням (совпадает с логикой Excel-строки Total)
-  const dayValues = Object.values(dateMap)
-  const avgDayCtr     = avg(dayValues.filter(d => d.ctrN > 0).map(d => d.ctrSum / d.ctrN))
-  const avgDayCrCart  = avg(dayValues.filter(d => d.crCartN > 0).map(d => d.crCartSum / d.crCartN))
-  const avgDayCrOrder = avg(dayValues.filter(d => d.crOrderN > 0).map(d => d.crOrderSum / d.crOrderN))
-  const avgDayCpm     = avg(dayValues.filter(d => d.cpmN > 0).map(d => d.cpmSum / d.cpmN))
-  const avgDayCpc     = avg(dayValues.filter(d => d.cpcN > 0).map(d => d.cpcSum / d.cpcN))
-  const avgDayAdShare = avg(dayValues.filter(d => d.adShareN > 0).map(d => d.adShareSum / d.adShareN))
-
-  const avgCpc = avgDayCpc
-  const avgCrOrder = avgDayCrOrder
-  const cpo = avgCrOrder > 0 ? avgCpc / avgCrOrder : 0
+  const cpo = avgDayCrOrder > 0 ? avgDayCpc / avgDayCrOrder : 0
 
   const funnel = {
     ctr: avgDayCtr,
@@ -291,37 +402,43 @@ export async function GET(req: NextRequest) {
     cpo,
   }
 
-  // Агрегация предыдущего периода
-  const prevCpcArr: number[] = []
-  const prevCrOrderArr: number[] = []
-  let prevTotalRevenue = 0
-  let prevTotalAdSpend = 0
-  for (const r of prevDailyRows) {
-    prevTotalRevenue += r.revenue ?? 0
-    prevTotalAdSpend += r.ad_spend ?? 0
-    if (r.cpc != null) prevCpcArr.push(r.cpc)
-    if (r.cr_order != null) prevCrOrderArr.push(r.cr_order)
-  }
-  const prevAvgCpc = avg(prevCpcArr)
-  const prevAvgCrOrder = avg(prevCrOrderArr)
   const prevDrr = prevTotalRevenue > 0 ? prevTotalAdSpend / prevTotalRevenue : 0
   const prevCpo = prevAvgCrOrder > 0 ? prevAvgCpc / prevAvgCrOrder : 0
 
   const prev_funnel = {
-    ctr: avgRows(prevDailyRows, 'ctr'),
-    cr_basket: avgRows(prevDailyRows, 'cr_cart'),
+    ctr: prevAvgCtr,
+    cr_basket: prevAvgCrCart,
     cr_order: prevAvgCrOrder,
     cpc: prevAvgCpc,
-    cpm: avgRows(prevDailyRows, 'cpm'),
-    ad_order_share: avgRows(prevDailyRows, 'ad_order_share'),
+    cpm: prevAvgCpm,
+    ad_order_share: prevAvgAdShare,
     drr: prevDrr,
     cpo: prevCpo,
   }
 
-  // daily chart — CTR/CR по дням + ad_revenue/organic split + средневзв. цена из fact_sku_daily
-  const daily = Object.entries(dateMap)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, d]) => {
+  // ── Daily chart ────────────────────────────────────────────────────────────
+  type DayChart = { date: string; ctr: number; cr_basket: number; cr_order: number; ad_revenue: number; organic_revenue: number; avg_price: number | null }
+  let daily: DayChart[] = []
+  if (allowedSkuMs) {
+    type DayAgg = {
+      ctrSum: number; ctrN: number; crCartSum: number; crCartN: number; crOrderSum: number; crOrderN: number
+      adShareSum: number; adShareN: number; revenue: number
+      priceWeightedSum: number; priceWeightTotal: number
+    }
+    const dateMap: Record<string, DayAgg> = {}
+    for (const r of currDailyRows) {
+      const d = r.metric_date
+      if (!dateMap[d]) dateMap[d] = { ctrSum: 0, ctrN: 0, crCartSum: 0, crCartN: 0, crOrderSum: 0, crOrderN: 0, adShareSum: 0, adShareN: 0, revenue: 0, priceWeightedSum: 0, priceWeightTotal: 0 }
+      const day = dateMap[d]
+      const rev = r.revenue ?? 0
+      day.revenue += rev
+      if (r.ctr != null) { day.ctrSum += r.ctr; day.ctrN++ }
+      if (r.cr_cart != null) { day.crCartSum += r.cr_cart; day.crCartN++ }
+      if (r.cr_order != null) { day.crOrderSum += r.cr_order; day.crOrderN++ }
+      if (r.ad_order_share != null) { day.adShareSum += r.ad_order_share; day.adShareN++ }
+      if (r.price != null && rev > 0) { day.priceWeightedSum += r.price * rev; day.priceWeightTotal += rev }
+    }
+    daily = Object.entries(dateMap).sort(([a], [b]) => a.localeCompare(b)).map(([date, d]) => {
       const adShare = d.adShareN > 0 ? d.adShareSum / d.adShareN : 0
       const avg_price = d.priceWeightTotal > 0 ? Math.round(d.priceWeightedSum / d.priceWeightTotal) : null
       return {
@@ -334,6 +451,22 @@ export async function GET(req: NextRequest) {
         avg_price,
       }
     })
+  } else {
+    daily = dailyRpcRows.map(r => {
+      const adShare = Number(r.ad_order_share_avg ?? 0)
+      const rev = Number(r.revenue ?? 0)
+      const avg_price = Number(r.price_weight ?? 0) > 0 ? Math.round(Number(r.price_wgt) / Number(r.price_weight)) : null
+      return {
+        date: r.metric_date,
+        ctr:       Number(r.ctr_avg      ?? 0),
+        cr_basket: Number(r.cr_cart_avg  ?? 0),
+        cr_order:  Number(r.cr_order_avg ?? 0),
+        ad_revenue:     Math.round(rev * adShare),
+        organic_revenue: Math.round(rev * (1 - adShare)),
+        avg_price,
+      }
+    }).sort((a, b) => a.date.localeCompare(b.date))
+  }
 
   // Построить историю цен по sku_wb: Map<sku_wb → sorted entries asc>
   const bySkuWb: Record<number, Array<{ date: string; price: number | null; sku_ms: string | null }>> = {}
@@ -346,8 +479,6 @@ export async function GET(req: NextRequest) {
   for (const entries of Object.values(bySkuWb)) {
     entries.sort((a, b) => a.date.localeCompare(b.date))
   }
-
-  const WINDOW = 7 // дней до/после изменения цены
 
   // Для каждого sku_wb найти изменения цен, которые попали в выбранный период
   // "Изменение" = entry[i].price !== entry[i-1].price
@@ -515,9 +646,9 @@ export async function GET(req: NextRequest) {
     return b.date.localeCompare(a.date)
   })
 
-  // Manager table — агрегация по менеджерам из currDailyRows
-  // managerMap уже полностью заполнен из полного снапшота выше
-
+  // Manager table — агрегация per-SKU средних из sku_period_full_agg по managerMap.
+  // ad_order_share берём из дневной агрегации (RPC даёт период_avg в funnelRows),
+  // но per-manager мы его не считаем — оставляем revenue-долю как пропорцию выручки.
   type MgrAgg = {
     ctrSum: number; ctrN: number
     crOrderSum: number; crOrderN: number
@@ -526,16 +657,15 @@ export async function GET(req: NextRequest) {
     skus: Set<string>
   }
   const mgrAgg: Record<string, MgrAgg> = {}
-
-  for (const r of currDailyRows) {
+  for (const r of perSkuAgg) {
+    if (allowedSkuMs && !allowedSkuMs.has(r.sku_ms)) continue
     const mgr = managerMap[r.sku_ms] || 'Без менеджера'
     if (!mgrAgg[mgr]) mgrAgg[mgr] = { ctrSum: 0, ctrN: 0, crOrderSum: 0, crOrderN: 0, adShareSum: 0, adShareN: 0, revenue: 0, skus: new Set() }
     const m = mgrAgg[mgr]
-    m.revenue += r.revenue ?? 0
+    m.revenue += Number(r.curr_revenue ?? 0)
     m.skus.add(r.sku_ms)
-    if (r.ctr != null) { m.ctrSum += r.ctr; m.ctrN++ }
-    if (r.cr_order != null) { m.crOrderSum += r.cr_order; m.crOrderN++ }
-    if (r.ad_order_share != null) { m.adShareSum += r.ad_order_share; m.adShareN++ }
+    if (r.curr_ctr_avg != null)      { m.ctrSum    += Number(r.curr_ctr_avg);      m.ctrN++ }
+    if (r.curr_cr_order_avg != null) { m.crOrderSum += Number(r.curr_cr_order_avg); m.crOrderN++ }
   }
 
   const manager_table = Object.entries(mgrAgg)

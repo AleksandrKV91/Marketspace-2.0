@@ -22,6 +22,7 @@ import { exportToExcel } from '@/lib/exportExcel'
 import { useDateRange } from '@/components/ui/DateRangePicker'
 import { overviewTabCache } from '@/lib/tabCache'
 import { fmtAxis } from '@/lib/formatters'
+import { isNovelty } from '@/lib/novelty'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -794,7 +795,7 @@ export default function OverviewTab() {
                         {row.is_oos && (
                           <span className="text-[10px] font-bold" style={{ color: 'var(--danger)' }}>OOS</span>
                         )}
-                        {row.novelty_status === 'Новинки' && (
+                        {isNovelty(row.novelty_status) && (
                           <span className="text-[10px] px-1 rounded" style={{ background: 'rgba(34,211,238,0.12)', color: '#22d3ee' }}>new</span>
                         )}
                       </div>

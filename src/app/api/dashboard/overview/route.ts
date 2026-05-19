@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAll } from '@/lib/supabase/fetchAll'
+import { rpcFetchAll } from '@/lib/supabase/rpcFetchAll'
 import { computeScore } from '@/lib/scoring'
 import { cacheGet, cacheSet } from '@/lib/cache'
+import { isNovelty, matchesNoveltyFilter } from '@/lib/novelty'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 // ── Lead-time по стране ──────────────────────────────────────────────────────
 
@@ -182,74 +184,101 @@ export async function GET(req: Request) {
     }
   }
 
-  // ── 8. fact_sku_daily — текущий период ──────────────────────────────────
-  // margin_pct нужен для per-day ЧМД в трендовом графике
-  type DailyRow = { sku_ms: string; metric_date: string; revenue: number | null; ad_spend: number | null; ctr: number | null; cr_order: number | null; chmd_rub: number | null; margin_rub: number | null }
-  const dailyRows = fromDate && toDate
-    ? await fetchAll<DailyRow>(
-        (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, chmd_rub, margin_rub')
-          .gte('metric_date', fromDate!).lte('metric_date', toDate!)
-          .order('sku_ms').order('metric_date'),
-        supabase,
-      )
-    : []
-
-  // ── 9. fact_sku_daily — предыдущий период ───────────────────────────────
+  // ── 8. Серверная агрегация через RPC sku_period_full_agg + sku_daily_full_agg ─
+  // Раньше fetchAll тянул сотни тысяч строк fact_sku_daily — таймаут на 30+ днях.
+  // Теперь Postgres агрегирует per-SKU и per-date, возвращая ~N_skus + N_days строк.
+  // Migration: supabase/022_overview_sku_rpcs.sql
   const { prevFrom, prevTo } = fromDate && toDate
     ? shiftRange(fromDate, toDate)
     : { prevFrom: null as null | string, prevTo: null as null | string }
 
-  const prevDailyRows = prevFrom && prevTo
-    ? await fetchAll<DailyRow>(
-        (sb) => sb.from('fact_sku_daily')
-          .select('sku_ms, metric_date, revenue, ad_spend, ctr, cr_order, chmd_rub, margin_rub')
-          .gte('metric_date', prevFrom).lte('metric_date', prevTo)
-          .order('sku_ms').order('metric_date'),
-        supabase,
-      )
-    : []
-
-  // ── 11. Агрегация по SKU — текущий период ────────────────────────────────
-  type SkuAgg = { revenue: number; ad_spend: number; chmd: number; marginRub: number; ctr: number[]; cr_order: number[]; days: Set<string> }
-  const skuAgg: Record<string, SkuAgg> = {}
-  const dateAgg: Record<string, { revenue: number; ad_spend: number; chmd: number }> = {}
-
-  for (const r of dailyRows) {
-    if (!skuAgg[r.sku_ms]) skuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0, ctr: [], cr_order: [], days: new Set() }
-    const s = skuAgg[r.sku_ms]
-    s.revenue   += r.revenue   ?? 0
-    s.ad_spend  += r.ad_spend  ?? 0
-    s.chmd      += r.chmd_rub  ?? 0
-    s.marginRub += r.margin_rub ?? 0
-    if (r.ctr != null) s.ctr.push(r.ctr)
-    if (r.cr_order != null) s.cr_order.push(r.cr_order)
-    s.days.add(r.metric_date)
-
-    if (!dateAgg[r.metric_date]) dateAgg[r.metric_date] = { revenue: 0, ad_spend: 0, chmd: 0 }
-    dateAgg[r.metric_date].revenue   += r.revenue   ?? 0
-    dateAgg[r.metric_date].ad_spend  += r.ad_spend  ?? 0
-    dateAgg[r.metric_date].chmd      += r.chmd_rub  ?? 0
+  type SkuPeriodAggRpc = {
+    sku_ms: string
+    curr_revenue: number; curr_ad_spend: number
+    curr_chmd_rub: number; curr_margin_rub: number
+    curr_ctr_avg: number | null; curr_cr_cart_avg: number | null
+    curr_cr_order_avg: number | null
+    curr_cpm_avg: number | null; curr_cpc_avg: number | null
+    curr_days: number
+    prev_revenue: number; prev_ad_spend: number
+    prev_chmd_rub: number; prev_margin_rub: number
+  }
+  type SkuDailyAggRpc = {
+    metric_date: string
+    revenue: number; ad_spend: number; chmd_rub: number; margin_rub: number
+    ctr_avg: number | null; cr_order_avg: number | null
   }
 
-  // ── 12. Агрегация по SKU — предыдущий период ─────────────────────────────
+  const haveDates = !!(fromDate && toDate && prevFrom && prevTo)
+  const [periodAggRes, dailyAggRes] = haveDates
+    ? await Promise.all([
+        rpcFetchAll<SkuPeriodAggRpc>(() => supabase.rpc('sku_period_full_agg', {
+          p_from: fromDate, p_to: toDate, p_prev_from: prevFrom, p_prev_to: prevTo,
+        })),
+        rpcFetchAll<SkuDailyAggRpc>(() => supabase.rpc('sku_daily_full_agg', {
+          p_from: fromDate, p_to: toDate,
+        })),
+      ])
+    : [{ data: [] as SkuPeriodAggRpc[], error: null }, { data: [] as SkuDailyAggRpc[], error: null }]
+
+  if (periodAggRes.error || dailyAggRes.error) {
+    const msg = (periodAggRes.error ?? dailyAggRes.error)?.message ?? 'unknown'
+    if (/function|sku_period_full_agg|sku_daily_full_agg/i.test(msg)) {
+      return NextResponse.json({
+        error: 'Миграция 022_overview_sku_rpcs не применена. Запустите supabase/022_overview_sku_rpcs.sql в Supabase Studio → SQL editor.',
+        details: msg,
+      }, { status: 503 })
+    }
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
+
+  const periodAggRows: SkuPeriodAggRpc[] = periodAggRes.data ?? []
+  const dailyAggRows:  SkuDailyAggRpc[]  = dailyAggRes.data ?? []
+
+  // ── 11. Агрегация по SKU — текущий + предыдущий период ────────────────────
+  type SkuAgg = { revenue: number; ad_spend: number; chmd: number; marginRub: number; ctr_avg: number | null; cr_order_avg: number | null; days: number }
+  const skuAgg: Record<string, SkuAgg> = {}
   const prevSkuAgg: Record<string, { revenue: number; ad_spend: number; chmd: number }> = {}
-  for (const r of prevDailyRows) {
-    if (!prevSkuAgg[r.sku_ms]) prevSkuAgg[r.sku_ms] = { revenue: 0, ad_spend: 0, chmd: 0 }
-    prevSkuAgg[r.sku_ms].revenue  += r.revenue  ?? 0
-    prevSkuAgg[r.sku_ms].ad_spend += r.ad_spend ?? 0
-    prevSkuAgg[r.sku_ms].chmd     += r.chmd_rub ?? 0
+
+  for (const r of periodAggRows) {
+    skuAgg[r.sku_ms] = {
+      revenue:   Number(r.curr_revenue   ?? 0),
+      ad_spend:  Number(r.curr_ad_spend  ?? 0),
+      chmd:      Number(r.curr_chmd_rub  ?? 0),
+      marginRub: Number(r.curr_margin_rub ?? 0),
+      ctr_avg:    r.curr_ctr_avg      != null ? Number(r.curr_ctr_avg)      : null,
+      cr_order_avg: r.curr_cr_order_avg != null ? Number(r.curr_cr_order_avg) : null,
+      days: Number(r.curr_days ?? 0),
+    }
+    const prev = Number(r.prev_revenue ?? 0)
+    if (prev > 0 || Number(r.prev_ad_spend ?? 0) > 0 || Number(r.prev_chmd_rub ?? 0) !== 0) {
+      prevSkuAgg[r.sku_ms] = {
+        revenue:  prev,
+        ad_spend: Number(r.prev_ad_spend ?? 0),
+        chmd:     Number(r.prev_chmd_rub ?? 0),
+      }
+    }
+  }
+
+  // ── per-date агрегаты для trend графика ──
+  const dateAgg: Record<string, { revenue: number; ad_spend: number; chmd: number }> = {}
+  for (const r of dailyAggRows) {
+    dateAgg[r.metric_date] = {
+      revenue:  Number(r.revenue  ?? 0),
+      ad_spend: Number(r.ad_spend ?? 0),
+      chmd:     Number(r.chmd_rub ?? 0),
+    }
   }
 
   const periodDays = fromDate && toDate
     ? Math.max(1, Math.round((new Date(toDate).getTime() - new Date(fromDate).getTime()) / 86400000) + 1)
     : 30
 
-  // ── 14. Медианные CTR и CR ────────────────────────────────────────────────
-  const allCtrs = dailyRows.filter(r => r.ctr != null).map(r => r.ctr!)
-  const allCrs  = dailyRows.filter(r => r.cr_order != null).map(r => r.cr_order!)
-  const medianCtr = median(allCtrs)
-  const medianCr  = median(allCrs)
+  // ── 14. Медианные CTR и CR — по per-SKU средним из RPC ───────────────────
+  const allSkuCtrs = periodAggRows.map(r => r.curr_ctr_avg).filter((v): v is number => v != null)
+  const allSkuCrs  = periodAggRows.map(r => r.curr_cr_order_avg).filter((v): v is number => v != null)
+  const medianCtr = median(allSkuCtrs)
+  const medianCr  = median(allSkuCrs)
 
   // ── 15. Набор SKU после фильтрации ───────────────────────────────────────
   // Набор SKU: из fact_sku_daily (все SKU) + снапшот
@@ -260,8 +289,7 @@ export async function GET(req: Request) {
       const snap = snapByMs[ms]
       if (catFilter && (dim?.category_wb ?? '') !== catFilter) { filteredSkuMs.delete(ms); continue }
       if (mgrFilter && (snap?.manager ?? '') !== mgrFilter) { filteredSkuMs.delete(ms); continue }
-      if (novFilter === 'Новинки' && snap?.novelty_status !== 'Новинки') { filteredSkuMs.delete(ms); continue }
-      if (novFilter === 'Не новинки' && snap?.novelty_status === 'Новинки') { filteredSkuMs.delete(ms); continue }
+      if (novFilter && !matchesNoveltyFilter(snap?.novelty_status, novFilter)) { filteredSkuMs.delete(ms); continue }
     }
   }
 
@@ -306,7 +334,7 @@ export async function GET(req: Request) {
   const focusCanScale: Array<{ sku_ms: string; name: string; revenue: number; drr: number; sku_wb: number | null }> = []
 
   for (const ms of filteredSkuMs) {
-    const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0, ctr: [], cr_order: [], days: new Set<string>() }
+    const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0, ctr_avg: null, cr_order_avg: null, days: 0 }
     const snap = snapByMs[ms]
     const dim  = dimByMs[ms]
     const skuWb = dim?.sku_wb ?? null
@@ -319,8 +347,8 @@ export async function GET(req: Request) {
     const stockDays  = snap?.stock_days ?? (totalStock > 0 ? null : 0)
 
     const drr    = s.revenue > 0 ? s.ad_spend / s.revenue : 0
-    const avgCtr = s.ctr.length ? s.ctr.reduce((a, b) => a + b, 0) / s.ctr.length : 0
-    const avgCr  = s.cr_order.length ? s.cr_order.reduce((a, b) => a + b, 0) / s.cr_order.length : 0
+    const avgCtr = s.ctr_avg ?? 0
+    const avgCr  = s.cr_order_avg ?? 0
 
     // KPI totals
     totalRevenue += s.revenue
@@ -399,7 +427,7 @@ export async function GET(req: Request) {
     }
 
     // Новинка в зоне риска: новинка + выручка < 10 000 за период
-    if (snap?.novelty_status === 'Новинки' && s.revenue < 10000) {
+    if (isNovelty(snap?.novelty_status) && s.revenue < 10000) {
       noveltyRiskCount++
       if (focusNovelty.length < 5) focusNovelty.push({
         sku_ms: ms, name: dim?.name ?? ms, revenue: s.revenue, sku_wb: skuWb,
@@ -414,8 +442,7 @@ export async function GET(req: Request) {
   for (const [ms, snap] of Object.entries(snapByMs)) {
     if (catFilter && (dimByMs[ms]?.category_wb ?? '') !== catFilter) continue
     if (mgrFilter && (snap.manager ?? '') !== mgrFilter) continue
-    if (novFilter === 'Новинки' && snap.novelty_status !== 'Новинки') continue
-    if (novFilter === 'Не новинки' && snap.novelty_status === 'Новинки') continue
+    if (novFilter && !matchesNoveltyFilter(snap.novelty_status, novFilter)) continue
     const mp = snap.margin_pct
     if (mp == null) continue
     if (mp < 0) marginBuckets.neg++
@@ -428,7 +455,7 @@ export async function GET(req: Request) {
   // ── 18. Средневзвешенная маржа (для unitEcon графика) ────────────────────
   let wMarginNum = 0, wMarginDen = 0
   for (const ms of filteredSkuMs) {
-    const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0, ctr: [], cr_order: [], days: new Set<string>() }
+    const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0, ctr_avg: null, cr_order_avg: null, days: 0 }
     const snap = snapByMs[ms]
     const mp   = snap?.margin_pct ?? null
     if (mp != null && s.revenue > 0) {
@@ -492,7 +519,7 @@ export async function GET(req: Request) {
   // ── 21. Top-15 SKU по Score ───────────────────────────────────────────────
   const top15 = [...filteredSkuMs]
     .map(ms => {
-      const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0, ctr: [], cr_order: [], days: new Set<string>() }
+      const s    = skuAgg[ms] ?? { revenue: 0, ad_spend: 0, chmd: 0, marginRub: 0, ctr_avg: null, cr_order_avg: null, days: 0 }
       const snap = snapByMs[ms]
       const dim  = dimByMs[ms]
       const skuWb = dim?.sku_wb ?? null
@@ -504,7 +531,7 @@ export async function GET(req: Request) {
       const stockDays  = snap?.stock_days ?? (totalStock > 0 ? null : 0)
 
       const drr   = s.revenue > 0 ? s.ad_spend / s.revenue : 0
-      const avgCr = s.cr_order.length ? s.cr_order.reduce((a, b) => a + b, 0) / s.cr_order.length : 0
+      const avgCr = s.cr_order_avg ?? 0
       const prev  = prevSkuAgg[ms]
       const revenueGrowth = prev && prev.revenue > 0 ? (s.revenue - prev.revenue) / prev.revenue : 0
 
@@ -518,7 +545,7 @@ export async function GET(req: Request) {
         lead_time_days: leadTime,
         is_oos: totalStock === 0,
         drr_over_margin: marginPct > 0 && drr > marginPct,
-        is_novelty_low: snap?.novelty_status === 'Новинки' && s.revenue < 10000,
+        is_novelty_low: isNovelty(snap?.novelty_status) && s.revenue < 10000,
       })
 
       const chmd = s.chmd
@@ -609,7 +636,7 @@ export async function GET(req: Request) {
     },
     lost_detail: lostDetail,
     debug: {
-      daily_rows_count: dailyRows.length,
+      daily_rows_count: dailyAggRows.length,
       sku_with_revenue: Object.values(skuAgg).filter(s => s.revenue > 0).length,
       sku_no_revenue:   Object.values(skuAgg).filter(s => s.revenue === 0).length,
     },
